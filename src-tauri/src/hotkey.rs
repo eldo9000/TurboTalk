@@ -32,6 +32,18 @@ pub fn spawn(recorder: Arc<Recorder>, app: AppHandle) {
                             Ok(Some(path)) => {
                                 let _ =
                                     app.emit("recording-saved", path.display().to_string());
+                                let app2 = app.clone();
+                                std::thread::spawn(move || {
+                                    match crate::transcribe::run(&path) {
+                                        Ok(text) => {
+                                            tracing::info!("[transcribe] {:?}", text);
+                                            let _ = app2.emit("transcript", text);
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("[transcribe] {:?}", e);
+                                        }
+                                    }
+                                });
                             }
                             Ok(None) => {}
                             Err(e) => tracing::error!("[hotkey] stop failed: {:?}", e),

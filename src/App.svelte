@@ -4,13 +4,14 @@
   import { WindowFrame, Titlebar } from '@libre/ui';
 
   let recording = $state(false);
-  let lastWav = $state(null);
+  let transcribing = $state(false);
+  let transcript = $state('');
 
   onMount(() => {
     const unlisteners = [];
     listen('ptt-down', () => { recording = true; }).then(u => unlisteners.push(u));
-    listen('ptt-up', () => { recording = false; }).then(u => unlisteners.push(u));
-    listen('recording-saved', (e) => { lastWav = e.payload; }).then(u => unlisteners.push(u));
+    listen('ptt-up', () => { recording = false; transcribing = true; }).then(u => unlisteners.push(u));
+    listen('transcript', (e) => { transcript = e.payload; transcribing = false; }).then(u => unlisteners.push(u));
     return () => unlisteners.forEach(u => u());
   });
 </script>
@@ -23,14 +24,16 @@
     <div class="flex items-center gap-2">
       <span class={recording
         ? 'w-3 h-3 rounded-full bg-red-500 animate-pulse'
-        : 'w-3 h-3 rounded-full bg-gray-500'}></span>
+        : transcribing
+          ? 'w-3 h-3 rounded-full bg-yellow-500 animate-pulse'
+          : 'w-3 h-3 rounded-full bg-gray-500'}></span>
       <p class="text-[var(--text-primary)] text-sm">
-        {recording ? 'Recording…' : 'Hold Right Alt to record'}
+        {recording ? 'Recording…' : transcribing ? 'Transcribing…' : 'Hold Right Alt to record'}
       </p>
     </div>
-    {#if lastWav}
-      <p class="text-[var(--text-secondary)] text-[11px] break-all text-center font-mono">
-        {lastWav}
+    {#if transcript}
+      <p class="text-[var(--text-primary)] text-sm text-center max-w-xs">
+        {transcript}
       </p>
     {/if}
   </main>
