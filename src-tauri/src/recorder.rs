@@ -45,10 +45,10 @@ impl Recorder {
             *s = State::Transcribing;
             drop(s);
             tracing::info!("[recorder] Recording → Transcribing");
-            let path = self.capture.stop()?;
+            let path_opt = self.capture.stop()?;
             *self.state.lock() = State::Ready;
             tracing::info!("[recorder] Transcribing → Ready");
-            Ok(Some(path))
+            Ok(path_opt)
         } else {
             Ok(None)
         }
