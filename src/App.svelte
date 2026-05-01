@@ -7,6 +7,24 @@
   import { open } from '@tauri-apps/plugin-shell';
   import { initTheme } from '@libre/ui/src/theme.js';
 
+  // Theme — override OS setting with user preference
+  let cfgTheme = $state('auto');
+  let _themeCleanup = null;
+
+  async function applyTheme(mode) {
+    _themeCleanup?.();
+    _themeCleanup = null;
+    if (mode === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else if (mode === 'light') {
+      document.documentElement.classList.remove('dark');
+    } else {
+      _themeCleanup = await initTheme(invoke);
+    }
+  }
+
+  $effect(() => { applyTheme(cfgTheme); });
+
   let recording    = $state(false);
   let transcribing = $state(false);
   let activeTab    = $state('history');
@@ -37,6 +55,10 @@
   const HISTORY_H = 280;
   const WINDOW_W  = 380;
 
+  function contentH() {
+    return Math.min(Math.ceil(outerEl.scrollHeight * (ZOOM_LEVELS[zoomIdx] / 100)), 700);
+  }
+
   $effect(() => {
     if (activeTab === 'history') {
       getCurrentWindow().setSize(new LogicalSize(WINDOW_W, HISTORY_H));
@@ -44,8 +66,7 @@
     }
     if (!outerEl) return;
     const ro = new ResizeObserver(() => {
-      const h = Math.min(outerEl.scrollHeight, 700);
-      getCurrentWindow().setSize(new LogicalSize(WINDOW_W, h));
+      getCurrentWindow().setSize(new LogicalSize(WINDOW_W, contentH()));
     });
     ro.observe(outerEl);
     return () => ro.disconnect();
@@ -59,6 +80,8 @@
   $effect(() => {
     document.documentElement.style.zoom = `${ZOOM_LEVELS[zoomIdx]}%`;
     localStorage.setItem('tt-zoom', String(zoomIdx));
+    // CSS zoom scales visuals but not layout metrics — re-fit the window
+    if (activeTab !== 'history') forceResize();
   });
 
   function zoomIn()  { if (zoomIdx < ZOOM_LEVELS.length - 1) zoomIdx++; }
@@ -148,6 +171,7 @@
     cfgOllamaUrl   = cfg.cleanup.ollama_url;
     cfgLlmModel    = cfg.cleanup.classifier_model;
     cfgDevice      = cfg.audio.device;
+    cfgTheme       = cfg.theme ?? 'auto';
     cfgLaunchLogin = launch;
     audioDevices   = devs;
     settingsSaveMsg = '';
@@ -160,6 +184,7 @@
     cfg.cleanup.ollama_url       = cfgOllamaUrl;
     cfg.cleanup.classifier_model = cfgLlmModel;
     cfg.audio.device             = cfgDevice;
+    cfg.theme                    = cfgTheme;
     try {
       await invoke('save_config', { cfg });
       await invoke('set_launch_at_login', { enabled: cfgLaunchLogin });
@@ -173,8 +198,7 @@
     await tick();
     await new Promise(r => requestAnimationFrame(r));
     if (!outerEl || activeTab === 'history') return;
-    const h = Math.min(outerEl.scrollHeight, 700);
-    getCurrentWindow().setSize(new LogicalSize(WINDOW_W, h));
+    getCurrentWindow().setSize(new LogicalSize(WINDOW_W, contentH()));
   }
 
   function switchTab(tab) {
@@ -183,8 +207,10 @@
     if (tab === 'settings') openSettings().then(forceResize);
   }
 
-  onMount(() => {
-    initTheme(invoke);
+  onMount(async () => {
+    // Load saved theme before anything renders
+    const initialCfg = await invoke('get_config');
+    cfgTheme = initialCfg.theme ?? 'auto';
 
     function handleKeydown(e) {
       if (e.metaKey || e.ctrlKey) {
@@ -412,6 +438,20 @@
           {/each}
         </select>
         <span class="text-[var(--text-tertiary,#666)] text-[10px]">Restart required to apply.</span>
+      </label>
+
+      <label class="flex flex-col gap-1">
+        <span class="text-[var(--text-secondary)] text-xs">Theme</span>
+        <select
+          bind:value={cfgTheme}
+          class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
+                 rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
+                 focus:border-[var(--accent)]"
+        >
+          <option value="auto">Automatic (follow system)</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
       </label>
 
       <label class="flex flex-col gap-1">
