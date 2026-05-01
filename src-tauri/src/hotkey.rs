@@ -61,11 +61,12 @@ fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
     }
 }
 
-pub fn spawn(recorder: Arc<Recorder>, tray_icon: TrayIcon, app: AppHandle) {
-    let cfg = crate::settings::load();
-    let (target_keycode, target_flag) = key_for_name(&cfg.hotkey.key);
-    let toggle_mode = cfg.hotkey.mode == "toggle";
-
+pub fn spawn(
+    recorder: Arc<Recorder>,
+    tray_icon: TrayIcon,
+    app: AppHandle,
+    hotkey_state: Arc<parking_lot::RwLock<crate::settings::HotkeyConfig>>,
+) {
     std::thread::spawn(move || {
         let tap = match CGEventTap::new(
             CGEventTapLocation::HID,
@@ -74,10 +75,17 @@ pub fn spawn(recorder: Arc<Recorder>, tray_icon: TrayIcon, app: AppHandle) {
             vec![CGEventType::FlagsChanged],
             move |_proxy, _etype, event| {
                 let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
-                if keycode == target_keycode {
-                    let flags  = event.get_flags();
-                    let is_key_down = flags.contains(target_flag);
+                let flags   = event.get_flags();
 
+                // Read current config (RwLock read — nanoseconds, uncontended)
+                let (target_keycode, target_flag, toggle_mode) = {
+                    let hk = hotkey_state.read();
+                    let (kc, f) = key_for_name(&hk.key);
+                    (kc, f, hk.mode == "toggle")
+                };
+
+                if keycode == target_keycode {
+                    let is_key_down = flags.contains(target_flag);
                     if toggle_mode {
                         if is_key_down {
                             if recorder.is_recording() {

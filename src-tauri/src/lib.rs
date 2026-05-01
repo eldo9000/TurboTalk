@@ -27,8 +27,13 @@ fn get_config() -> settings::Config {
 }
 
 #[tauri::command]
-fn save_config(cfg: settings::Config) -> Result<(), String> {
-    settings::save(&cfg).map_err(|e| e.to_string())
+fn save_config(
+    cfg: settings::Config,
+    hotkey_state: tauri::State<'_, HotkeyState>,
+) -> Result<(), String> {
+    settings::save(&cfg).map_err(|e| e.to_string())?;
+    *hotkey_state.write() = cfg.hotkey.clone();
+    Ok(())
 }
 
 #[tauri::command]
@@ -61,6 +66,12 @@ fn list_audio_devices() -> Vec<String> {
 }
 
 use std::sync::Arc;
+use parking_lot::RwLock;
+
+// Shared hotkey config — hotkey thread reads this on every event so
+// settings changes take effect without restarting the app.
+type HotkeyState = Arc<RwLock<settings::HotkeyConfig>>;
+
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
@@ -119,6 +130,10 @@ pub fn run() {
                 tracing::warn!("[settings] could not write config: {:?}", e);
             }
 
+            // ── Shared hotkey state — updated live when settings are saved ──
+            let hotkey_state: HotkeyState = Arc::new(RwLock::new(cfg.hotkey.clone()));
+            app.manage(hotkey_state.clone());
+
             // ── Overlay — cursor-transparent so clicks always pass through ──
             if let Some(overlay) = app.get_webview_window("overlay") {
                 let _ = overlay.set_ignore_cursor_events(true);
@@ -128,7 +143,7 @@ pub fn run() {
             // Recorder::new() pre-warms the CoreAudio stream so first keypress
             // has zero hardware-init latency.
             let recorder = Arc::new(recorder::Recorder::new()?);
-            hotkey::spawn(recorder, tray_icon, app.handle().clone());
+            hotkey::spawn(recorder, tray_icon, app.handle().clone(), hotkey_state);
 
             Ok(())
         })
