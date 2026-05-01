@@ -143,6 +143,17 @@ pub fn run() {
             // Recorder::new() pre-warms the CoreAudio stream so first keypress
             // has zero hardware-init latency.
             let recorder = Arc::new(recorder::Recorder::new()?);
+
+            // Emit live audio level to the overlay at 20 Hz while recording.
+            let level_rec = recorder.clone();
+            let level_app = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                if level_rec.is_recording() {
+                    let _ = level_app.emit("audio-level", level_rec.level());
+                }
+            });
+
             hotkey::spawn(recorder, tray_icon, app.handle().clone(), hotkey_state);
 
             Ok(())

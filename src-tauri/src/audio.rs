@@ -4,7 +4,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use parking_lot::Mutex;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -12,6 +12,7 @@ pub struct AudioCapture {
     _stream: cpal::Stream,
     is_recording: Arc<AtomicBool>,
     samples: Arc<Mutex<Vec<f32>>>,
+    level: Arc<AtomicU32>, // current RMS stored as f32 bits
     sample_rate: u32,
     channels: u16,
 }
@@ -42,44 +43,73 @@ impl AudioCapture {
 
         let is_recording = Arc::new(AtomicBool::new(false));
         let samples = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let level = Arc::new(AtomicU32::new(0));
 
-        let rec_flag = is_recording.clone();
-        let samples_cb = samples.clone();
         let err_fn = |e| tracing::error!("[audio] stream error: {:?}", e);
 
+        fn rms(data: &[f32]) -> f32 {
+            if data.is_empty() { return 0.0; }
+            let sum: f32 = data.iter().map(|&s| s * s).sum();
+            (sum / data.len() as f32).sqrt()
+        }
+
         let stream = match sample_format {
-            cpal::SampleFormat::F32 => device.build_input_stream(
-                &config.into(),
-                move |data: &[f32], _: &_| {
-                    if rec_flag.load(Ordering::Relaxed) {
-                        samples_cb.lock().extend_from_slice(data);
-                    }
-                },
-                err_fn,
-                None,
-            )?,
-            cpal::SampleFormat::I16 => device.build_input_stream(
-                &config.into(),
-                move |data: &[i16], _: &_| {
-                    if rec_flag.load(Ordering::Relaxed) {
-                        let mut buf = samples_cb.lock();
-                        buf.extend(data.iter().map(|&s| s as f32 / i16::MAX as f32));
-                    }
-                },
-                err_fn,
-                None,
-            )?,
-            cpal::SampleFormat::U16 => device.build_input_stream(
-                &config.into(),
-                move |data: &[u16], _: &_| {
-                    if rec_flag.load(Ordering::Relaxed) {
-                        let mut buf = samples_cb.lock();
-                        buf.extend(data.iter().map(|&s| (s as f32 - 32768.0) / 32768.0));
-                    }
-                },
-                err_fn,
-                None,
-            )?,
+            cpal::SampleFormat::F32 => {
+                let rec = is_recording.clone();
+                let smp = samples.clone();
+                let lvl = level.clone();
+                device.build_input_stream(
+                    &config.into(),
+                    move |data: &[f32], _: &_| {
+                        if rec.load(Ordering::Relaxed) {
+                            smp.lock().extend_from_slice(data);
+                            lvl.store(rms(data).to_bits(), Ordering::Relaxed);
+                        } else {
+                            lvl.store(0_f32.to_bits(), Ordering::Relaxed);
+                        }
+                    },
+                    err_fn,
+                    None,
+                )?
+            }
+            cpal::SampleFormat::I16 => {
+                let rec = is_recording.clone();
+                let smp = samples.clone();
+                let lvl = level.clone();
+                device.build_input_stream(
+                    &config.into(),
+                    move |data: &[i16], _: &_| {
+                        let floats: Vec<f32> = data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
+                        if rec.load(Ordering::Relaxed) {
+                            smp.lock().extend_from_slice(&floats);
+                            lvl.store(rms(&floats).to_bits(), Ordering::Relaxed);
+                        } else {
+                            lvl.store(0_f32.to_bits(), Ordering::Relaxed);
+                        }
+                    },
+                    err_fn,
+                    None,
+                )?
+            }
+            cpal::SampleFormat::U16 => {
+                let rec = is_recording.clone();
+                let smp = samples.clone();
+                let lvl = level.clone();
+                device.build_input_stream(
+                    &config.into(),
+                    move |data: &[u16], _: &_| {
+                        let floats: Vec<f32> = data.iter().map(|&s| (s as f32 - 32768.0) / 32768.0).collect();
+                        if rec.load(Ordering::Relaxed) {
+                            smp.lock().extend_from_slice(&floats);
+                            lvl.store(rms(&floats).to_bits(), Ordering::Relaxed);
+                        } else {
+                            lvl.store(0_f32.to_bits(), Ordering::Relaxed);
+                        }
+                    },
+                    err_fn,
+                    None,
+                )?
+            }
             other => anyhow::bail!("unsupported sample format: {:?}", other),
         };
 
@@ -89,7 +119,11 @@ impl AudioCapture {
             sample_rate, channels, sample_format
         );
 
-        Ok(Self { _stream: stream, is_recording, samples, sample_rate, channels })
+        Ok(Self { _stream: stream, is_recording, samples, level, sample_rate, channels })
+    }
+
+    pub fn level(&self) -> f32 {
+        f32::from_bits(self.level.load(Ordering::Relaxed))
     }
 
     pub fn start(&self) {

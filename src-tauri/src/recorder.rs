@@ -35,6 +35,10 @@ impl Recorder {
         matches!(*self.state.lock(), State::Recording)
     }
 
+    pub fn level(&self) -> f32 {
+        self.capture.level()
+    }
+
     pub fn stop(&self) -> anyhow::Result<Option<PathBuf>> {
         let mut s = self.state.lock();
         if matches!(*s, State::Recording) {
