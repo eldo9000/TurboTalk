@@ -32,17 +32,26 @@ Proved 2026-05-01. Spoken text lands in focused app in under 3 seconds.
 
 Proved 2026-05-01. Config persists across launches. Tray icon hides/shows window.
 
-## M3 — Chaperone Layer
+## M3 — Chaperone Layer ✅
 
-- [ ] Local LLM postprocessor wired (Ollama integration)
-- [ ] Mode classifier (prose / code / command / raw)
-- [ ] Per-mode deterministic handlers
-- [ ] Voice commands ("scratch that", "new paragraph")
+- [x] Local LLM postprocessor wired (Ollama integration, blocking reqwest)
+- [x] Mode classifier (prose / code / command / raw) via Ollama
+- [x] Per-mode deterministic handlers
+- [x] Voice commands ("scratch that", "new paragraph")
+
+Proved 2026-05-01. Chaperone routes transcripts through local LLM; falls back to prose on error.
 
 ## M4 — Polish
 
+- [x] Launch-on-login (tauri-plugin-autostart, LaunchAgent)
+- [x] Mic selector (list_audio_devices command, settings UI)
+- [x] Dynamic tray icon — TT glyph idle / red dot recording / amber dot transcribing
+- [x] Zoom controls — 9 levels (100–180%), keyboard shortcuts (⌘+/⌘-/⌘0), persistent
+- [x] Three-tab UI — History / Models / Settings with auto-fit window sizing
+- [x] Recording overlay — always-on-top transparent WhisperFlow-style waveform
+- [x] Models tab — active model selector, installed list, HuggingFace download catalog
+- [ ] Whisper bundled as Tauri sidecar (remove Homebrew dependency)
 - [ ] Codesigning + notarization (use Libre signing infra)
-- [ ] Launch-on-login option
 - [ ] Cross-platform paste (Windows + Linux)
 - [ ] Streaming transcription (optional — big lift)
 - [ ] Custom vocabulary / hotwords

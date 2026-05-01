@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
   import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -22,33 +22,47 @@
   let modelsSaveMsg  = $state('');
 
   // Settings tab
-  let cfgBin         = $state('');
-  let cfgCleanupMode = $state('regex');
-  let cfgOllamaUrl   = $state('');
-  let cfgLlmModel    = $state('');
+  let cfgBin          = $state('');
+  let cfgCleanupMode  = $state('regex');
+  let cfgOllamaUrl    = $state('');
+  let cfgLlmModel     = $state('');
+  let cfgLaunchLogin  = $state(false);
+  let cfgDevice       = $state('default');
+  let audioDevices    = $state([]);
   let settingsSaveMsg = $state('');
 
-  // Single ref for the auto-fit container (whichever tab is active)
-  let autofitEl = $state(null);
+  // Ref to the outermost div — used to measure total natural content height.
+  let outerEl = $state(null);
 
-  const HISTORY_H  = 280;
-  const WINDOW_W   = 380;
-  const TITLEBAR_H = 40;
+  const HISTORY_H = 280;
+  const WINDOW_W  = 380;
 
   $effect(() => {
-    if (activeTab === 'history' || !autofitEl) {
-      if (activeTab === 'history') {
-        getCurrentWindow().setSize(new LogicalSize(WINDOW_W, HISTORY_H));
-      }
+    if (activeTab === 'history') {
+      getCurrentWindow().setSize(new LogicalSize(WINDOW_W, HISTORY_H));
       return;
     }
+    if (!outerEl) return;
     const ro = new ResizeObserver(() => {
-      const h = Math.min(TITLEBAR_H + autofitEl.offsetHeight, 700);
+      const h = Math.min(outerEl.scrollHeight, 700);
       getCurrentWindow().setSize(new LogicalSize(WINDOW_W, h));
     });
-    ro.observe(autofitEl);
+    ro.observe(outerEl);
     return () => ro.disconnect();
   });
+
+  // ── Zoom ──────────────────────────────────────────────────────────────────
+
+  const ZOOM_LEVELS = [100, 110, 120, 130, 140, 150, 160, 170, 180];
+  let zoomIdx = $state(parseInt(localStorage.getItem('tt-zoom') ?? '0'));
+
+  $effect(() => {
+    document.documentElement.style.zoom = `${ZOOM_LEVELS[zoomIdx]}%`;
+    localStorage.setItem('tt-zoom', String(zoomIdx));
+  });
+
+  function zoomIn()  { if (zoomIdx < ZOOM_LEVELS.length - 1) zoomIdx++; }
+  function zoomOut() { if (zoomIdx > 0) zoomIdx--; }
 
   // ── History ───────────────────────────────────────────────────────────────
 
@@ -124,11 +138,18 @@
   // ── Settings ──────────────────────────────────────────────────────────────
 
   async function openSettings() {
-    const cfg = await invoke('get_config');
+    const [cfg, devs, launch] = await Promise.all([
+      invoke('get_config'),
+      invoke('list_audio_devices'),
+      invoke('get_launch_at_login'),
+    ]);
     cfgBin         = cfg.whisper.bin;
     cfgCleanupMode = cfg.cleanup.mode;
     cfgOllamaUrl   = cfg.cleanup.ollama_url;
     cfgLlmModel    = cfg.cleanup.classifier_model;
+    cfgDevice      = cfg.audio.device;
+    cfgLaunchLogin = launch;
+    audioDevices   = devs;
     settingsSaveMsg = '';
   }
 
@@ -138,34 +159,60 @@
     cfg.cleanup.mode             = cfgCleanupMode;
     cfg.cleanup.ollama_url       = cfgOllamaUrl;
     cfg.cleanup.classifier_model = cfgLlmModel;
+    cfg.audio.device             = cfgDevice;
     try {
       await invoke('save_config', { cfg });
-      settingsSaveMsg = 'Saved.';
+      await invoke('set_launch_at_login', { enabled: cfgLaunchLogin });
+      settingsSaveMsg = 'Saved. Restart to apply mic change.';
     } catch (e) {
       settingsSaveMsg = 'Error: ' + e;
     }
   }
 
+  async function forceResize() {
+    await tick();
+    await new Promise(r => requestAnimationFrame(r));
+    if (!outerEl || activeTab === 'history') return;
+    const h = Math.min(outerEl.scrollHeight, 700);
+    getCurrentWindow().setSize(new LogicalSize(WINDOW_W, h));
+  }
+
   function switchTab(tab) {
     activeTab = tab;
-    if (tab === 'models')   openModels();
-    if (tab === 'settings') openSettings();
+    if (tab === 'models')   openModels().then(forceResize);
+    if (tab === 'settings') openSettings().then(forceResize);
   }
 
   onMount(() => {
     initTheme(invoke);
+
+    function handleKeydown(e) {
+      if (e.metaKey || e.ctrlKey) {
+        if (e.key === '=' || e.key === '+') { e.preventDefault(); zoomIn(); }
+        else if (e.key === '-')             { e.preventDefault(); zoomOut(); }
+        else if (e.key === '0')             { e.preventDefault(); zoomIdx = 0; }
+      }
+    }
+    window.addEventListener('keydown', handleKeydown);
+
     const unlisteners = [];
-    listen('ptt-down', () => { recording = true; }).then(u => unlisteners.push(u));
-    listen('ptt-up',   () => { recording = false; }).then(u => unlisteners.push(u));
-    listen('transcript', (e) => {
+    listen('ptt-down',    () => { recording = true; }).then(u => unlisteners.push(u));
+    listen('ptt-up',      () => { recording = false; }).then(u => unlisteners.push(u));
+    listen('transcript',  (e) => {
       const text = e.payload;
       if (text) history = [{ text, ts: Date.now() }, ...history].slice(0, 50);
     }).then(u => unlisteners.push(u));
-    return () => unlisteners.forEach(u => u());
+    listen('open-history', () => switchTab('history')).then(u => unlisteners.push(u));
+
+    return () => {
+      window.removeEventListener('keydown', handleKeydown);
+      unlisteners.forEach(u => u());
+    };
   });
 </script>
 
-<div class="flex flex-col h-full bg-[var(--surface)] overflow-hidden">
+<div bind:this={outerEl} class="flex flex-col bg-[var(--surface)] {activeTab === 'history' ? 'h-full overflow-hidden' : ''}"
+>
 
   <!-- Titlebar -->
   <div data-tauri-drag-region class="h-10 shrink-0 flex items-end select-none border-b border-[var(--border,#2a2a2a)]">
@@ -229,7 +276,7 @@
 
   <!-- Models tab -->
   {#if activeTab === 'models'}
-    <div bind:this={autofitEl} class="flex flex-col gap-3 px-4 py-4">
+    <div class="flex flex-col gap-3 px-4 py-4">
 
       <!-- Active model selector -->
       <label class="flex flex-col gap-1">
@@ -349,7 +396,23 @@
 
   <!-- Settings tab -->
   {#if activeTab === 'settings'}
-    <div bind:this={autofitEl} class="flex flex-col gap-3 px-4 py-4">
+    <div class="flex flex-col gap-3 px-4 py-4">
+
+      <label class="flex flex-col gap-1">
+        <span class="text-[var(--text-secondary)] text-xs">Microphone</span>
+        <select
+          bind:value={cfgDevice}
+          class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
+                 rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
+                 focus:border-[var(--accent)]"
+        >
+          <option value="default">System default</option>
+          {#each audioDevices as d}
+            <option value={d}>{d}</option>
+          {/each}
+        </select>
+        <span class="text-[var(--text-tertiary,#666)] text-[10px]">Restart required to apply.</span>
+      </label>
 
       <label class="flex flex-col gap-1">
         <span class="text-[var(--text-secondary)] text-xs">Whisper binary</span>
@@ -404,6 +467,22 @@
         </label>
       {/if}
 
+      <!-- Launch at login -->
+      <label class="flex items-center justify-between gap-3 cursor-pointer">
+        <span class="text-[var(--text-secondary)] text-xs">Launch at login</span>
+        <button
+          role="switch"
+          aria-checked={cfgLaunchLogin}
+          aria-label="Launch at login"
+          onclick={() => { cfgLaunchLogin = !cfgLaunchLogin; }}
+          class="relative w-8 h-4 rounded-full transition-colors
+                 {cfgLaunchLogin ? 'bg-[var(--accent)]' : 'bg-[var(--surface-raised)] border border-[var(--border)]'}"
+        >
+          <span class="absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-all
+                       {cfgLaunchLogin ? 'left-[18px]' : 'left-0.5'}"></span>
+        </button>
+      </label>
+
       <div class="flex items-center gap-3 pt-1 pb-1">
         <button
           onclick={saveSettings}
@@ -416,5 +495,30 @@
       </div>
     </div>
   {/if}
+
+  <!-- Zoom controls — always visible, bottom right -->
+  <div class="shrink-0 h-7 flex items-center justify-end gap-1 px-2
+              border-t border-[var(--border,#2a2a2a)] select-none">
+    <button
+      onclick={zoomOut}
+      disabled={zoomIdx === 0}
+      class="w-5 h-5 flex items-center justify-center rounded text-xs
+             text-[var(--text-tertiary,#666)] hover:text-[var(--text-secondary)]
+             disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+    >−</button>
+    <button
+      onclick={() => { zoomIdx = 0; }}
+      title="Reset zoom"
+      class="text-[10px] w-8 text-center text-[var(--text-tertiary,#666)] tabular-nums
+             hover:text-[var(--text-secondary)] transition-colors"
+    >{ZOOM_LEVELS[zoomIdx]}%</button>
+    <button
+      onclick={zoomIn}
+      disabled={zoomIdx === ZOOM_LEVELS.length - 1}
+      class="w-5 h-5 flex items-center justify-center rounded text-xs
+             text-[var(--text-tertiary,#666)] hover:text-[var(--text-secondary)]
+             disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+    >+</button>
+  </div>
 
 </div>

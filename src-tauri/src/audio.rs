@@ -23,10 +23,18 @@ unsafe impl Sync for AudioCapture {}
 
 impl AudioCapture {
     pub fn new() -> anyhow::Result<Self> {
+        let cfg = crate::settings::load();
+        let want = cfg.audio.device.as_str();
         let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .ok_or_else(|| anyhow::anyhow!("no default input device"))?;
+        let device = if want == "default" || want.is_empty() {
+            host.default_input_device()
+                .ok_or_else(|| anyhow::anyhow!("no default input device"))?
+        } else {
+            host.input_devices()?
+                .find(|d| d.name().ok().as_deref() == Some(want))
+                .or_else(|| host.default_input_device())
+                .ok_or_else(|| anyhow::anyhow!("no input device found"))?
+        };
         let config = device.default_input_config()?;
         let sample_rate = config.sample_rate().0;
         let channels = config.channels();

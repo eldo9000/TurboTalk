@@ -17,6 +17,7 @@ pub mod recorder;
 pub mod settings;
 pub mod theme;
 pub mod transcribe;
+pub mod tray;
 
 pub use theme::{get_accent, get_theme};
 
@@ -35,11 +36,35 @@ fn scan_models_dir() -> Vec<String> {
     settings::scan_models_dir()
 }
 
+#[tauri::command]
+fn get_launch_at_login(app: tauri::AppHandle) -> bool {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+fn set_launch_at_login(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let al = app.autolaunch();
+    if enabled { al.enable() } else { al.disable() }
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_audio_devices() -> Vec<String> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    let host = cpal::default_host();
+    match host.input_devices() {
+        Ok(devs) => devs.filter_map(|d| d.name().ok()).collect(),
+        Err(_)   => vec![],
+    }
+}
+
 use std::sync::Arc;
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WindowEvent,
+    tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
+    Emitter, Manager, WindowEvent,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -47,16 +72,17 @@ pub fn run() {
     tracing_subscriber::fmt::init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![get_theme, get_accent, get_config, save_config, scan_models_dir])
+        .invoke_handler(tauri::generate_handler![get_theme, get_accent, get_config, save_config, scan_models_dir, get_launch_at_login, set_launch_at_login, list_audio_devices])
         .setup(|app| {
             // ── Tray icon ──────────────────────────────────────────────────
             let show_item = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
-            TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+            let tray_icon: TrayIcon = TrayIconBuilder::new()
+                .icon(tray::make_icon(tray::TrayState::Idle))
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .tooltip("TurboTalk")
@@ -69,13 +95,10 @@ pub fn run() {
                     {
                         let app = tray.app_handle();
                         if let Some(win) = app.get_webview_window("main") {
-                            if win.is_visible().unwrap_or(false) {
-                                let _ = win.hide();
-                            } else {
-                                let _ = win.show();
-                                let _ = win.set_focus();
-                            }
+                            let _ = win.show();
+                            let _ = win.set_focus();
                         }
+                        let _ = app.emit("open-history", ());
                     }
                 })
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -105,7 +128,7 @@ pub fn run() {
             // Recorder::new() pre-warms the CoreAudio stream so first keypress
             // has zero hardware-init latency.
             let recorder = Arc::new(recorder::Recorder::new()?);
-            hotkey::spawn(recorder, app.handle().clone());
+            hotkey::spawn(recorder, tray_icon, app.handle().clone());
 
             Ok(())
         })

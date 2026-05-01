@@ -1,16 +1,17 @@
 use crate::recorder::Recorder;
+use crate::tray::{self, TrayState};
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_graphics::event::{
     CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
     CGEventType, EventField,
 };
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::{tray::TrayIcon, AppHandle, Emitter};
 
 // kVK_RightOption = 0x3D
 const RIGHT_OPTION_KEYCODE: i64 = 0x3D;
 
-pub fn spawn(recorder: Arc<Recorder>, app: AppHandle) {
+pub fn spawn(recorder: Arc<Recorder>, tray_icon: TrayIcon, app: AppHandle) {
     std::thread::spawn(move || {
         let tap = match CGEventTap::new(
             CGEventTapLocation::HID,
@@ -26,13 +27,15 @@ pub fn spawn(recorder: Arc<Recorder>, app: AppHandle) {
                         if let Err(e) = recorder.start() {
                             tracing::error!("[hotkey] start failed: {:?}", e);
                         }
+                        let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Recording)));
                         let _ = app.emit("ptt-down", ());
                     } else {
+                        let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Transcribing)));
+                        let _ = app.emit("ptt-up", ());
                         match recorder.stop() {
                             Ok(Some(path)) => {
-                                let _ =
-                                    app.emit("recording-saved", path.display().to_string());
                                 let app2 = app.clone();
+                                let tray2 = tray_icon.clone();
                                 std::thread::spawn(move || {
                                     match crate::transcribe::run(&path) {
                                         Ok(text) => {
@@ -44,16 +47,20 @@ pub fn spawn(recorder: Arc<Recorder>, app: AppHandle) {
                                         }
                                         Err(e) => {
                                             tracing::error!("[transcribe] {:?}", e);
-                                            // Always emit so the frontend resets transcribing state
                                             let _ = app2.emit("transcript", "");
                                         }
                                     }
+                                    let _ = tray2.set_icon(Some(tray::make_icon(TrayState::Idle)));
                                 });
                             }
-                            Ok(None) => {}
-                            Err(e) => tracing::error!("[hotkey] stop failed: {:?}", e),
+                            Ok(None) => {
+                                let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                            }
+                            Err(e) => {
+                                tracing::error!("[hotkey] stop failed: {:?}", e);
+                                let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                            }
                         }
-                        let _ = app.emit("ptt-up", ());
                     }
                 }
                 None

@@ -27,17 +27,26 @@ Proof: `[audio] wrote 42240 samples` (1.76s voice), transcript landed in Notes.a
 - History tab: last 50 transcripts shown, most recent first
 - Whisper model hint: HuggingFace link opens in browser; brew command shown
 
+## M3 + M4 (partial) also working — confirmed 2026-05-01
+
+- Chaperone Layer: Ollama classifier routes to prose/code/command/raw handlers; voice commands ("scratch that", "new paragraph") bypass LLM
+- Launch at login: toggle in Settings tab (tauri-plugin-autostart, LaunchAgent)
+- Mic selector: dropdown in Settings tab; restart required to apply
+- Dynamic tray icon: TT glyph (idle) / red dot (recording) / amber dot (transcribing)
+- Zoom controls: 9 levels 100–180%, ⌘+/⌘-/⌘0, persistent in localStorage
+- Models tab: active model selector, installed model list with add/remove, HuggingFace catalog with download links
+- Recording overlay: always-on-top transparent window, 7-bar waveform animation, never steals focus
+
 ## What is hardcoded / not yet configurable
 
 - Hotkey: Right Alt (Right Option) — not rebindable
-- Mic device: always system default
-- Cleanup: capitalize first word only (no LLM, no voice commands)
+- Cleanup mode defaults to regex; Chaperone requires Ollama running locally
 
 ## What is explicitly not working
 
-- Chaperone Layer / LLM cleanup (M3 — next)
-- Launch on login (M4)
+- Whisper ships as Homebrew dependency — not bundled as Tauri sidecar yet
 - Codesigning / notarization (M4)
+- Cross-platform paste (Windows / Linux)
 
 ## Key technical decisions
 
