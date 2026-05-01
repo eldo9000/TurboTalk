@@ -201,7 +201,7 @@ Text: {text}`;
     cfgOllamaUrl        = cfg.cleanup.ollama_url;
     cfgLlmModel         = cfg.cleanup.classifier_model;
     cfgVocabulary       = (cfg.cleanup.vocabulary ?? []).join('\n');
-    cfgClassifierPrompt = cfg.cleanup.classifier_prompt ?? '';
+    cfgClassifierPrompt = cfg.cleanup.classifier_prompt || DEFAULT_CLASSIFIER_PROMPT;
     modesSaveMsg = '';
   }
 
@@ -279,11 +279,15 @@ Text: {text}`;
   }
 
   onMount(async () => {
-    // Load saved theme before anything renders
-    const initialCfg = await invoke('get_config');
+    // Load saved theme + history before anything renders
+    const [initialCfg, savedHistory] = await Promise.all([
+      invoke('get_config'),
+      invoke('load_history'),
+    ]);
     cfgTheme      = initialCfg.theme        ?? 'auto';
     cfgHotkeyKey  = initialCfg.hotkey?.key  ?? 'right_option';
     cfgHotkeyMode = initialCfg.hotkey?.mode ?? 'hold';
+    if (savedHistory.length) history = savedHistory;
 
     function handleKeydown(e) {
       if (e.metaKey || e.ctrlKey) {
@@ -299,7 +303,10 @@ Text: {text}`;
     listen('ptt-up',      () => { recording = false; }).then(u => unlisteners.push(u));
     listen('transcript',  (e) => {
       const text = e.payload;
-      if (text) history = [{ text, ts: Date.now() }, ...history].slice(0, 50);
+      if (text) {
+        history = [{ text, ts: Date.now() }, ...history].slice(0, 50);
+        invoke('save_history', { entries: history });
+      }
     }).then(u => unlisteners.push(u));
     listen('open-history', () => switchTab('history')).then(u => unlisteners.push(u));
 
@@ -677,7 +684,6 @@ Text: {text}`;
           <option value="hold">Press and hold</option>
           <option value="toggle">Toggle (press once to start, again to stop)</option>
         </select>
-        <span class="text-[var(--text-tertiary,#666)] text-[10px]">Restart required to apply.</span>
       </label>
 
       <label class="flex flex-col gap-1">
@@ -693,7 +699,6 @@ Text: {text}`;
             <option value={d}>{d}</option>
           {/each}
         </select>
-        <span class="text-[var(--text-tertiary,#666)] text-[10px]">Restart required to apply.</span>
       </label>
 
       <label class="flex flex-col gap-1">

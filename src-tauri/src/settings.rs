@@ -121,6 +121,35 @@ fn config_path() -> PathBuf {
     p
 }
 
+fn history_path() -> PathBuf {
+    let mut p = dirs::home_dir().unwrap_or_default();
+    p.push(".config/librewin/turbotalk/history.json");
+    p
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub text: String,
+    pub ts: u64,
+}
+
+pub fn load_history() -> Vec<HistoryEntry> {
+    let path = history_path();
+    let Ok(contents) = std::fs::read_to_string(&path) else {
+        return vec![];
+    };
+    serde_json::from_str(&contents).unwrap_or_default()
+}
+
+pub fn save_history(entries: &[HistoryEntry]) -> anyhow::Result<()> {
+    let path = history_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, serde_json::to_string(entries)?)?;
+    Ok(())
+}
+
 fn default_model_path() -> PathBuf {
     let mut p = dirs::home_dir().unwrap_or_default();
     p.push(".config/librewin/turbotalk/models/ggml-base.en.bin");
