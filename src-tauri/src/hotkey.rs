@@ -41,6 +41,8 @@ pub fn spawn(recorder: Arc<Recorder>, app: AppHandle) {
                                         }
                                         Err(e) => {
                                             tracing::error!("[transcribe] {:?}", e);
+                                            // Always emit so the frontend resets transcribing state
+                                            let _ = app2.emit("transcript", "");
                                         }
                                     }
                                 });
