@@ -56,6 +56,16 @@ fn set_launch_at_login(app: tauri::AppHandle, enabled: bool) -> Result<(), Strin
 }
 
 #[tauri::command]
+fn load_history() -> Vec<settings::HistoryEntry> {
+    settings::load_history()
+}
+
+#[tauri::command]
+fn save_history(entries: Vec<settings::HistoryEntry>) -> Result<(), String> {
+    settings::save_history(&entries).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn list_audio_devices() -> Vec<String> {
     use cpal::traits::{DeviceTrait, HostTrait};
     let host = cpal::default_host();
@@ -85,7 +95,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![get_theme, get_accent, get_config, save_config, scan_models_dir, get_launch_at_login, set_launch_at_login, list_audio_devices])
+        .invoke_handler(tauri::generate_handler![get_theme, get_accent, get_config, save_config, scan_models_dir, get_launch_at_login, set_launch_at_login, list_audio_devices, load_history, save_history])
         .setup(|app| {
             // ── Tray icon ──────────────────────────────────────────────────
             let show_item = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;
