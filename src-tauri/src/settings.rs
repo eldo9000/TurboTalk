@@ -32,6 +32,24 @@ pub struct CleanupConfig {
     pub mode: String,
     pub ollama_url: String,
     pub classifier_model: String,
+    /// Domain-specific words/phrases injected into the classifier context.
+    #[serde(default)]
+    pub vocabulary: Vec<String>,
+    /// Classifier prompt template. Use `{text}` as the transcript placeholder.
+    #[serde(default = "default_classifier_prompt")]
+    pub classifier_prompt: String,
+}
+
+pub fn default_classifier_prompt() -> String {
+    "Classify this voice dictation into exactly one word: prose, code, command, or raw.\n\
+     Rules:\n\
+     - prose: natural language sentences (emails, notes, messages)\n\
+     - code: identifiers, snippets, technical syntax (camelCase, snake_case, brackets)\n\
+     - command: shell commands or CLI invocations (starts with a verb like run/git/ls/cd)\n\
+     - raw: anything else\n\
+     Reply with only the single word, lowercase, no punctuation.\n\n\
+     Text: {text}"
+        .to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +74,8 @@ impl Default for CleanupConfig {
             mode: "regex".into(),
             ollama_url: "http://localhost:11434".into(),
             classifier_model: "llama3.2:3b".into(),
+            vocabulary: vec![],
+            classifier_prompt: default_classifier_prompt(),
         }
     }
 }

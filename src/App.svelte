@@ -39,11 +39,28 @@
   let newModelPath   = $state('');
   let modelsSaveMsg  = $state('');
 
+  // Modes tab
+  const DEFAULT_CLASSIFIER_PROMPT =
+`Classify this voice dictation into exactly one word: prose, code, command, or raw.
+Rules:
+- prose: natural language sentences (emails, notes, messages)
+- code: identifiers, snippets, technical syntax (camelCase, snake_case, brackets)
+- command: shell commands or CLI invocations (starts with a verb like run/git/ls/cd)
+- raw: anything else
+Reply with only the single word, lowercase, no punctuation.
+
+Text: {text}`;
+
+  let cfgCleanupMode      = $state('regex');
+  let cfgOllamaUrl        = $state('');
+  let cfgLlmModel         = $state('');
+  let cfgVocabulary       = $state('');
+  let cfgClassifierPrompt = $state('');
+  let showPromptEditor    = $state(false);
+  let modesSaveMsg        = $state('');
+
   // Settings tab
   let cfgBin          = $state('');
-  let cfgCleanupMode  = $state('regex');
-  let cfgOllamaUrl    = $state('');
-  let cfgLlmModel     = $state('');
   let cfgLaunchLogin  = $state(false);
   let cfgDevice       = $state('default');
   let audioDevices    = $state([]);
@@ -176,6 +193,33 @@
     }
   }
 
+  // ── Modes ─────────────────────────────────────────────────────────────────
+
+  async function openModes() {
+    const cfg = await invoke('get_config');
+    cfgCleanupMode      = cfg.cleanup.mode;
+    cfgOllamaUrl        = cfg.cleanup.ollama_url;
+    cfgLlmModel         = cfg.cleanup.classifier_model;
+    cfgVocabulary       = (cfg.cleanup.vocabulary ?? []).join('\n');
+    cfgClassifierPrompt = cfg.cleanup.classifier_prompt ?? '';
+    modesSaveMsg = '';
+  }
+
+  async function saveModes() {
+    const cfg = await invoke('get_config');
+    cfg.cleanup.mode             = cfgCleanupMode;
+    cfg.cleanup.ollama_url       = cfgOllamaUrl;
+    cfg.cleanup.classifier_model = cfgLlmModel;
+    cfg.cleanup.vocabulary       = cfgVocabulary.split('\n').map(s => s.trim()).filter(Boolean);
+    cfg.cleanup.classifier_prompt = cfgClassifierPrompt;
+    try {
+      await invoke('save_config', { cfg });
+      modesSaveMsg = 'Saved.';
+    } catch (e) {
+      modesSaveMsg = 'Error: ' + e;
+    }
+  }
+
   // ── Settings ──────────────────────────────────────────────────────────────
 
   async function openSettings() {
@@ -184,12 +228,9 @@
       invoke('list_audio_devices'),
       invoke('get_launch_at_login'),
     ]);
-    cfgBin         = cfg.whisper.bin;
-    cfgCleanupMode = cfg.cleanup.mode;
-    cfgOllamaUrl   = cfg.cleanup.ollama_url;
-    cfgLlmModel    = cfg.cleanup.classifier_model;
-    cfgDevice      = cfg.audio.device;
-    cfgTheme       = cfg.theme ?? 'auto';
+    cfgBin        = cfg.whisper.bin;
+    cfgDevice     = cfg.audio.device;
+    cfgTheme      = cfg.theme ?? 'auto';
     cfgHotkeyKey  = cfg.hotkey?.key  ?? 'right_option';
     cfgHotkeyMode = cfg.hotkey?.mode ?? 'hold';
     cfgLaunchLogin = launch;
@@ -199,12 +240,9 @@
 
   async function saveSettings() {
     const cfg = await invoke('get_config');
-    cfg.whisper.bin              = cfgBin;
-    cfg.cleanup.mode             = cfgCleanupMode;
-    cfg.cleanup.ollama_url       = cfgOllamaUrl;
-    cfg.cleanup.classifier_model = cfgLlmModel;
-    cfg.audio.device             = cfgDevice;
-    cfg.theme                    = cfgTheme;
+    cfg.whisper.bin  = cfgBin;
+    cfg.audio.device = cfgDevice;
+    cfg.theme        = cfgTheme;
     if (!cfg.hotkey) cfg.hotkey = {};
     cfg.hotkey.key  = cfgHotkeyKey;
     cfg.hotkey.mode = cfgHotkeyMode;
@@ -236,6 +274,7 @@
   function switchTab(tab) {
     activeTab = tab;
     if (tab === 'models')   openModels().then(forceResize);
+    if (tab === 'modes')    openModes().then(forceResize);
     if (tab === 'settings') openSettings().then(forceResize);
     if (tab === 'about')    forceResize();
   }
@@ -308,7 +347,7 @@
 
     <!-- Main tabs — absolutely centered in the full bar width -->
     <div class="absolute inset-0 flex items-end justify-center pointer-events-none">
-      {#each ['history', 'models', 'settings'] as tab}
+      {#each ['history', 'models', 'modes', 'settings'] as tab}
         <button
           onclick={() => switchTab(tab)}
           class="relative px-3 h-full text-xs font-medium capitalize transition-colors pointer-events-auto
@@ -489,6 +528,122 @@
     </div>
   {/if}
 
+  <!-- Modes tab -->
+  {#if activeTab === 'modes'}
+    <div class="flex flex-col gap-3 px-4 py-4">
+
+      <!-- Post-processing segment control -->
+      <div class="flex flex-col gap-1.5">
+        <span class="text-[var(--text-secondary)] text-xs">Post-processing</span>
+        <div class="flex rounded-lg overflow-hidden border border-[var(--border)]">
+          {#each [['off','Off'],['regex','Regex'],['chaperone','Chaperone']] as [val, label]}
+            <button
+              onclick={() => { cfgCleanupMode = val; }}
+              class="flex-1 text-xs py-1.5 transition-colors
+                     {cfgCleanupMode === val
+                       ? 'bg-[var(--accent)] text-white'
+                       : 'bg-[var(--surface-raised)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+            >{label}</button>
+          {/each}
+        </div>
+        <span class="text-[var(--text-tertiary,#666)] text-[10px]">
+          {#if cfgCleanupMode === 'off'}Paste raw Whisper output.
+          {:else if cfgCleanupMode === 'regex'}Capitalize and trim punctuation (default).
+          {:else}Route through a local LLM classifier via Ollama.{/if}
+        </span>
+      </div>
+
+      {#if cfgCleanupMode === 'chaperone'}
+
+        <label class="flex flex-col gap-1">
+          <span class="text-[var(--text-secondary)] text-xs">Ollama URL</span>
+          <input
+            bind:value={cfgOllamaUrl}
+            class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
+                   rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
+                   focus:border-[var(--accent)]"
+            spellcheck="false"
+          />
+        </label>
+
+        <label class="flex flex-col gap-1">
+          <span class="text-[var(--text-secondary)] text-xs">Classifier model</span>
+          <input
+            bind:value={cfgLlmModel}
+            placeholder="llama3.2:3b"
+            class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
+                   rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
+                   focus:border-[var(--accent)] placeholder:text-[var(--text-tertiary,#666)]"
+            spellcheck="false"
+          />
+          <span class="text-[var(--text-tertiary,#666)] text-[10px]">
+            Run <code class="font-mono">ollama pull llama3.2:3b</code> to fetch the default model.
+          </span>
+        </label>
+
+        <!-- Custom vocabulary -->
+        <label class="flex flex-col gap-1">
+          <span class="text-[var(--text-secondary)] text-xs">Custom vocabulary</span>
+          <textarea
+            bind:value={cfgVocabulary}
+            rows="4"
+            placeholder={"One word or phrase per line…\nTurboTalk\nOllama\nggml-base"}
+            class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
+                   rounded px-2 py-1.5 text-[var(--text-primary)] outline-none resize-none
+                   focus:border-[var(--accent)] font-mono w-full
+                   placeholder:text-[var(--text-tertiary,#666)]"
+            spellcheck="false"
+          ></textarea>
+          <span class="text-[var(--text-tertiary,#666)] text-[10px]">
+            Domain terms Whisper tends to mishear. Injected as context for the classifier.
+          </span>
+        </label>
+
+        <!-- Classifier prompt -->
+        <div class="flex flex-col gap-1">
+          <button
+            onclick={() => { showPromptEditor = !showPromptEditor; }}
+            class="text-left text-[10px] text-[var(--text-tertiary,#666)]
+                   hover:text-[var(--text-secondary)] transition-colors select-none"
+          >{showPromptEditor ? '▾ Classifier prompt' : '▸ Classifier prompt'}</button>
+
+          {#if showPromptEditor}
+            <textarea
+              bind:value={cfgClassifierPrompt}
+              rows="10"
+              class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
+                     rounded px-2 py-1.5 text-[var(--text-primary)] outline-none resize-none
+                     focus:border-[var(--accent)] font-mono w-full leading-relaxed"
+              spellcheck="false"
+            ></textarea>
+            <div class="flex items-center justify-between">
+              <span class="text-[var(--text-tertiary,#666)] text-[10px]">
+                <code class="font-mono">{'{text}'}</code> is replaced with the transcript.
+              </span>
+              <button
+                onclick={() => { cfgClassifierPrompt = DEFAULT_CLASSIFIER_PROMPT; }}
+                class="text-[10px] text-[var(--text-tertiary,#666)] hover:text-[var(--accent)]
+                       transition-colors"
+              >Reset to default</button>
+            </div>
+          {/if}
+        </div>
+
+      {/if}
+
+      <div class="flex items-center gap-3 pt-1 pb-1">
+        <button
+          onclick={saveModes}
+          class="text-xs px-3 py-1.5 rounded bg-[var(--accent)] text-white
+                 hover:opacity-90 transition-opacity"
+        >Save</button>
+        {#if modesSaveMsg}
+          <span class="text-xs text-[var(--text-secondary)]">{modesSaveMsg}</span>
+        {/if}
+      </div>
+    </div>
+  {/if}
+
   <!-- Settings tab -->
   {#if activeTab === 'settings'}
     <div class="flex flex-col gap-3 px-4 py-4">
@@ -586,48 +741,6 @@
           />
           <span class="text-[var(--text-tertiary,#666)] text-[10px]">
             Overrides the bundled sidecar. Leave as "auto" to use the default.
-          </span>
-        </label>
-      {/if}
-
-      <label class="flex flex-col gap-1">
-        <span class="text-[var(--text-secondary)] text-xs">Cleanup mode</span>
-        <select
-          bind:value={cfgCleanupMode}
-          class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
-                 rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
-                 focus:border-[var(--accent)]"
-        >
-          <option value="off">Off — paste raw whisper output</option>
-          <option value="regex">Regex — capitalize, trim (default)</option>
-          <option value="chaperone">Chaperone — local LLM via Ollama</option>
-        </select>
-      </label>
-
-      {#if cfgCleanupMode === 'chaperone'}
-        <label class="flex flex-col gap-1">
-          <span class="text-[var(--text-secondary)] text-xs">Ollama URL</span>
-          <input
-            bind:value={cfgOllamaUrl}
-            class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
-                   rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
-                   focus:border-[var(--accent)]"
-            spellcheck="false"
-          />
-        </label>
-
-        <label class="flex flex-col gap-1">
-          <span class="text-[var(--text-secondary)] text-xs">Classifier model</span>
-          <input
-            bind:value={cfgLlmModel}
-            class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
-                   rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
-                   focus:border-[var(--accent)]"
-            spellcheck="false"
-            placeholder="llama3.2:3b"
-          />
-          <span class="text-[var(--text-tertiary,#666)] text-[10px]">
-            Run <code class="font-mono">ollama pull llama3.2:3b</code> to fetch the default model.
           </span>
         </label>
       {/if}
