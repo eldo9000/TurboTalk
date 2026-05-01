@@ -1,9 +1,10 @@
 import './app.css';
-import App from './App.svelte';
 import { mount } from 'svelte';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
-const app = mount(App, {
-  target: document.getElementById('app'),
-});
+const label = getCurrentWindow().label;
+const Component = label === 'overlay'
+  ? (await import('./Overlay.svelte')).default
+  : (await import('./App.svelte')).default;
 
-export default app;
+mount(Component, { target: document.getElementById('app') });

@@ -96,8 +96,15 @@ pub fn run() {
                 tracing::warn!("[settings] could not write config: {:?}", e);
             }
 
+            // ── Overlay — cursor-transparent so clicks always pass through ──
+            if let Some(overlay) = app.get_webview_window("overlay") {
+                let _ = overlay.set_ignore_cursor_events(true);
+            }
+
             // ── Hotkey ─────────────────────────────────────────────────────
-            let recorder = Arc::new(recorder::Recorder::new());
+            // Recorder::new() pre-warms the CoreAudio stream so first keypress
+            // has zero hardware-init latency.
+            let recorder = Arc::new(recorder::Recorder::new()?);
             hotkey::spawn(recorder, app.handle().clone());
 
             Ok(())

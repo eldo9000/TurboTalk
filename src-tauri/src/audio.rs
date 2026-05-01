@@ -1,102 +1,121 @@
+// Keep one CoreAudio stream running at all times (started at app launch).
+// On start(): flip is_recording true and clear the buffer — zero hardware latency.
+// On stop(): flip false, drain the buffer, write WAV.
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub struct ActiveRecording {
-    stop_signal: Arc<AtomicBool>,
-    join: JoinHandle<anyhow::Result<PathBuf>>,
+pub struct AudioCapture {
+    _stream: cpal::Stream,
+    is_recording: Arc<AtomicBool>,
+    samples: Arc<Mutex<Vec<f32>>>,
+    sample_rate: u32,
+    channels: u16,
 }
 
-pub fn start() -> anyhow::Result<ActiveRecording> {
-    let stop_signal = Arc::new(AtomicBool::new(false));
-    let stop_thread = stop_signal.clone();
-    let join = std::thread::spawn(move || run_stream(stop_thread));
-    Ok(ActiveRecording { stop_signal, join })
-}
+// _stream is held only to keep CoreAudio alive — never accessed across threads.
+// All mutable state (is_recording, samples) is already thread-safe.
+unsafe impl Send for AudioCapture {}
+unsafe impl Sync for AudioCapture {}
 
-pub fn stop(rec: ActiveRecording) -> anyhow::Result<PathBuf> {
-    rec.stop_signal.store(true, Ordering::SeqCst);
-    rec.join
-        .join()
-        .map_err(|_| anyhow::anyhow!("audio thread panicked"))?
-}
+impl AudioCapture {
+    pub fn new() -> anyhow::Result<Self> {
+        let host = cpal::default_host();
+        let device = host
+            .default_input_device()
+            .ok_or_else(|| anyhow::anyhow!("no default input device"))?;
+        let config = device.default_input_config()?;
+        let sample_rate = config.sample_rate().0;
+        let channels = config.channels();
+        let sample_format = config.sample_format();
 
-fn run_stream(stop: Arc<AtomicBool>) -> anyhow::Result<PathBuf> {
-    let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| anyhow::anyhow!("no default input device"))?;
-    let config = device.default_input_config()?;
-    let sample_rate = config.sample_rate().0;
-    let channels = config.channels();
-    let sample_format = config.sample_format();
+        let is_recording = Arc::new(AtomicBool::new(false));
+        let samples = Arc::new(Mutex::new(Vec::<f32>::new()));
 
-    let samples = Arc::new(Mutex::new(Vec::<f32>::with_capacity(sample_rate as usize)));
-    let samples_cb = samples.clone();
-    let err_fn = |e| tracing::error!("[audio] stream error: {:?}", e);
+        let rec_flag = is_recording.clone();
+        let samples_cb = samples.clone();
+        let err_fn = |e| tracing::error!("[audio] stream error: {:?}", e);
 
-    let stream = match sample_format {
-        cpal::SampleFormat::F32 => device.build_input_stream(
-            &config.into(),
-            move |data: &[f32], _: &_| samples_cb.lock().extend_from_slice(data),
-            err_fn,
-            None,
-        )?,
-        cpal::SampleFormat::I16 => device.build_input_stream(
-            &config.into(),
-            move |data: &[i16], _: &_| {
-                let mut buf = samples_cb.lock();
-                buf.extend(data.iter().map(|&s| s as f32 / i16::MAX as f32));
-            },
-            err_fn,
-            None,
-        )?,
-        cpal::SampleFormat::U16 => device.build_input_stream(
-            &config.into(),
-            move |data: &[u16], _: &_| {
-                let mut buf = samples_cb.lock();
-                buf.extend(data.iter().map(|&s| (s as f32 - 32768.0) / 32768.0));
-            },
-            err_fn,
-            None,
-        )?,
-        other => return Err(anyhow::anyhow!("unsupported sample format: {:?}", other)),
-    };
-    stream.play()?;
-    tracing::info!(
-        "[audio] capturing — {} Hz, {} ch, {:?}",
-        sample_rate,
-        channels,
-        sample_format
-    );
+        let stream = match sample_format {
+            cpal::SampleFormat::F32 => device.build_input_stream(
+                &config.into(),
+                move |data: &[f32], _: &_| {
+                    if rec_flag.load(Ordering::Relaxed) {
+                        samples_cb.lock().extend_from_slice(data);
+                    }
+                },
+                err_fn,
+                None,
+            )?,
+            cpal::SampleFormat::I16 => device.build_input_stream(
+                &config.into(),
+                move |data: &[i16], _: &_| {
+                    if rec_flag.load(Ordering::Relaxed) {
+                        let mut buf = samples_cb.lock();
+                        buf.extend(data.iter().map(|&s| s as f32 / i16::MAX as f32));
+                    }
+                },
+                err_fn,
+                None,
+            )?,
+            cpal::SampleFormat::U16 => device.build_input_stream(
+                &config.into(),
+                move |data: &[u16], _: &_| {
+                    if rec_flag.load(Ordering::Relaxed) {
+                        let mut buf = samples_cb.lock();
+                        buf.extend(data.iter().map(|&s| (s as f32 - 32768.0) / 32768.0));
+                    }
+                },
+                err_fn,
+                None,
+            )?,
+            other => anyhow::bail!("unsupported sample format: {:?}", other),
+        };
 
-    while !stop.load(Ordering::SeqCst) {
-        std::thread::sleep(Duration::from_millis(20));
+        stream.play()?;
+        tracing::info!(
+            "[audio] stream warmed — {} Hz, {} ch, {:?}",
+            sample_rate, channels, sample_format
+        );
+
+        Ok(Self { _stream: stream, is_recording, samples, sample_rate, channels })
     }
-    drop(stream);
 
-    let buf = samples.lock();
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let path = std::env::temp_dir().join(format!("turbotalk-{}.wav", stamp));
-    let spec = hound::WavSpec {
-        channels,
-        sample_rate,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut writer = hound::WavWriter::create(&path, spec)?;
-    for &s in buf.iter() {
-        let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-        writer.write_sample(v)?;
+    pub fn start(&self) {
+        self.samples.lock().clear();
+        self.is_recording.store(true, Ordering::SeqCst);
+        tracing::info!("[audio] recording started");
     }
-    writer.finalize()?;
-    tracing::info!("[audio] wrote {} samples → {:?}", buf.len(), path);
-    Ok(path)
+
+    pub fn stop(&self) -> anyhow::Result<PathBuf> {
+        self.is_recording.store(false, Ordering::SeqCst);
+        // Let the last in-flight callback finish (CoreAudio buffer ≈ 10ms)
+        std::thread::sleep(Duration::from_millis(25));
+
+        let buf = self.samples.lock().clone();
+        tracing::info!("[audio] {} samples captured", buf.len());
+
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("turbotalk-{}.wav", stamp));
+        let spec = hound::WavSpec {
+            channels: self.channels,
+            sample_rate: self.sample_rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec)?;
+        for &s in buf.iter() {
+            let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+            writer.write_sample(v)?;
+        }
+        writer.finalize()?;
+        tracing::info!("[audio] wrote {} samples → {:?}", buf.len(), path);
+        Ok(path)
+    }
 }
