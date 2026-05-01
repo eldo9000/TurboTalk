@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
+  import { open } from '@tauri-apps/plugin-shell';
   import { initTheme } from '@libre/ui/src/theme.js';
 
   let recording    = $state(false);
@@ -136,6 +137,14 @@
                  focus:border-[var(--accent)]"
           spellcheck="false"
         />
+        <span class="text-[var(--text-tertiary,#666)] text-[10px] leading-relaxed">
+          Models live in <code class="font-mono">~/.config/librewin/turbotalk/models/</code>.
+          <button
+            onclick={() => open('https://huggingface.co/ggerganov/whisper.cpp/tree/main')}
+            class="underline hover:text-[var(--text-secondary)] transition-colors"
+          >Download from HuggingFace</button>
+          or <code class="font-mono">brew install whisper-cpp</code> (includes whisper-cli).
+        </span>
       </label>
 
       <div class="flex items-center gap-3 pt-1">
