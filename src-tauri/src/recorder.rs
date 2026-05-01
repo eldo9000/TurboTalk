@@ -24,7 +24,7 @@ impl Recorder {
     pub fn start(&self) -> anyhow::Result<()> {
         let mut s = self.state.lock();
         if matches!(*s, State::Ready) {
-            self.capture.start();
+            self.capture.start()?;
             *s = State::Recording;
             tracing::info!("[recorder] Ready → Recording");
         }

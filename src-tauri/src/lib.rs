@@ -140,8 +140,8 @@ pub fn run() {
             }
 
             // ── Hotkey ─────────────────────────────────────────────────────
-            // Recorder::new() pre-warms the CoreAudio stream so first keypress
-            // has zero hardware-init latency.
+            // Stream opens on first keypress; always re-queries the config device
+            // so built-in mic / AirPods switches work without restarting.
             let recorder = Arc::new(recorder::Recorder::new()?);
 
             // Emit live audio level to the overlay at 20 Hz while recording.
