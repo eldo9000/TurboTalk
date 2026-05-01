@@ -48,6 +48,8 @@
   let cfgDevice       = $state('default');
   let audioDevices    = $state([]);
   let settingsSaveMsg = $state('');
+  let cfgHotkeyKey  = $state('right_option');
+  let cfgHotkeyMode = $state('hold');
 
   // Ref to the outermost div — used to measure total natural content height.
   let outerEl = $state(null);
@@ -76,6 +78,13 @@
 
   const ZOOM_LEVELS = [100, 110, 120, 130, 140, 150, 160, 170, 180];
   let zoomIdx = $state(parseInt(localStorage.getItem('tt-zoom') ?? '0'));
+
+  const KEY_DISPLAY = {
+    right_option:  'Right Option ⌥',
+    right_control: 'Right Control ⌃',
+    right_command: 'Right Command ⌘',
+    right_shift:   'Right Shift ⇧',
+  };
 
   $effect(() => {
     document.documentElement.style.zoom = `${ZOOM_LEVELS[zoomIdx]}%`;
@@ -172,6 +181,8 @@
     cfgLlmModel    = cfg.cleanup.classifier_model;
     cfgDevice      = cfg.audio.device;
     cfgTheme       = cfg.theme ?? 'auto';
+    cfgHotkeyKey  = cfg.hotkey?.key  ?? 'right_option';
+    cfgHotkeyMode = cfg.hotkey?.mode ?? 'hold';
     cfgLaunchLogin = launch;
     audioDevices   = devs;
     settingsSaveMsg = '';
@@ -185,6 +196,9 @@
     cfg.cleanup.classifier_model = cfgLlmModel;
     cfg.audio.device             = cfgDevice;
     cfg.theme                    = cfgTheme;
+    if (!cfg.hotkey) cfg.hotkey = {};
+    cfg.hotkey.key  = cfgHotkeyKey;
+    cfg.hotkey.mode = cfgHotkeyMode;
     try {
       await invoke('save_config', { cfg });
       await invoke('set_launch_at_login', { enabled: cfgLaunchLogin });
@@ -210,7 +224,9 @@
   onMount(async () => {
     // Load saved theme before anything renders
     const initialCfg = await invoke('get_config');
-    cfgTheme = initialCfg.theme ?? 'auto';
+    cfgTheme      = initialCfg.theme        ?? 'auto';
+    cfgHotkeyKey  = initialCfg.hotkey?.key  ?? 'right_option';
+    cfgHotkeyMode = initialCfg.hotkey?.mode ?? 'hold';
 
     function handleKeydown(e) {
       if (e.metaKey || e.ctrlKey) {
@@ -277,7 +293,10 @@
       {#if history.length === 0}
         <div class="flex-1 flex flex-col items-center justify-center gap-2">
           <p class="text-[var(--text-tertiary,#666)] text-sm select-none">
-            {recording ? 'Recording…' : transcribing ? 'Transcribing…' : 'Hold Right Alt to record'}
+            {recording ? 'Recording…' : transcribing ? 'Transcribing…'
+              : cfgHotkeyMode === 'toggle'
+                ? `Press ${KEY_DISPLAY[cfgHotkeyKey] ?? cfgHotkeyKey} to toggle`
+                : `Hold ${KEY_DISPLAY[cfgHotkeyKey] ?? cfgHotkeyKey} to record`}
           </p>
         </div>
       {:else}
@@ -381,12 +400,15 @@
               <span class="text-[10px] text-[var(--text-tertiary,#666)] ml-1.5">{m.size}</span>
               <p class="text-[10px] text-[var(--text-tertiary,#666)] mt-0.5">{m.description}</p>
             </div>
+            {@const isInstalled = cfgModels.some(p => p.endsWith(m.name + '.bin'))}
             <button
-              onclick={() => open(m.url)}
-              class="shrink-0 text-[10px] px-2 py-1 rounded border border-[var(--accent)]
-                     text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white
-                     transition-colors whitespace-nowrap"
-            >↓ Download</button>
+              onclick={() => { if (!isInstalled) open(m.url); }}
+              disabled={isInstalled}
+              class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap transition-colors
+                     {isInstalled
+                       ? 'border-green-500/40 text-green-500/60 cursor-default'
+                       : 'border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white'}"
+            >{isInstalled ? '✓ Installed' : '↓ Download'}</button>
           </div>
         {/each}
       </div>
@@ -423,6 +445,51 @@
   <!-- Settings tab -->
   {#if activeTab === 'settings'}
     <div class="flex flex-col gap-3 px-4 py-4">
+
+      <!-- Launch at login -->
+      <label class="flex items-center justify-between gap-3 cursor-pointer">
+        <span class="text-[var(--text-secondary)] text-xs">Launch at login</span>
+        <button
+          role="switch"
+          aria-checked={cfgLaunchLogin}
+          aria-label="Launch at login"
+          onclick={() => { cfgLaunchLogin = !cfgLaunchLogin; }}
+          class="relative w-8 h-4 rounded-full transition-colors
+                 {cfgLaunchLogin ? 'bg-[var(--accent)]' : 'bg-[var(--surface-raised)] border border-[var(--border)]'}"
+        >
+          <span class="absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-all
+                       {cfgLaunchLogin ? 'left-[18px]' : 'left-0.5'}"></span>
+        </button>
+      </label>
+
+      <label class="flex flex-col gap-1">
+        <span class="text-[var(--text-secondary)] text-xs">Hotkey</span>
+        <select
+          bind:value={cfgHotkeyKey}
+          class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
+                 rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
+                 focus:border-[var(--accent)]"
+        >
+          <option value="right_option">Right Option ⌥</option>
+          <option value="right_control">Right Control ⌃</option>
+          <option value="right_command">Right Command ⌘</option>
+          <option value="right_shift">Right Shift ⇧</option>
+        </select>
+      </label>
+
+      <label class="flex flex-col gap-1">
+        <span class="text-[var(--text-secondary)] text-xs">Hotkey mode</span>
+        <select
+          bind:value={cfgHotkeyMode}
+          class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
+                 rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
+                 focus:border-[var(--accent)]"
+        >
+          <option value="hold">Press and hold</option>
+          <option value="toggle">Toggle (press once to start, again to stop)</option>
+        </select>
+        <span class="text-[var(--text-tertiary,#666)] text-[10px]">Restart required to apply.</span>
+      </label>
 
       <label class="flex flex-col gap-1">
         <span class="text-[var(--text-secondary)] text-xs">Microphone</span>
@@ -506,22 +573,6 @@
           </span>
         </label>
       {/if}
-
-      <!-- Launch at login -->
-      <label class="flex items-center justify-between gap-3 cursor-pointer">
-        <span class="text-[var(--text-secondary)] text-xs">Launch at login</span>
-        <button
-          role="switch"
-          aria-checked={cfgLaunchLogin}
-          aria-label="Launch at login"
-          onclick={() => { cfgLaunchLogin = !cfgLaunchLogin; }}
-          class="relative w-8 h-4 rounded-full transition-colors
-                 {cfgLaunchLogin ? 'bg-[var(--accent)]' : 'bg-[var(--surface-raised)] border border-[var(--border)]'}"
-        >
-          <span class="absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-all
-                       {cfgLaunchLogin ? 'left-[18px]' : 'left-0.5'}"></span>
-        </button>
-      </label>
 
       <div class="flex items-center gap-3 pt-1 pb-1">
         <button

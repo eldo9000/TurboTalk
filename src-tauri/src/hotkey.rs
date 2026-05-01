@@ -8,10 +8,64 @@ use core_graphics::event::{
 use std::sync::Arc;
 use tauri::{tray::TrayIcon, AppHandle, Emitter};
 
-// kVK_RightOption = 0x3D
-const RIGHT_OPTION_KEYCODE: i64 = 0x3D;
+fn key_for_name(name: &str) -> (i64, CGEventFlags) {
+    match name {
+        "right_control" => (0x3E, CGEventFlags::CGEventFlagControl),
+        "right_command" => (0x36, CGEventFlags::CGEventFlagCommand),
+        "right_shift"   => (0x3C, CGEventFlags::CGEventFlagShift),
+        _               => (0x3D, CGEventFlags::CGEventFlagAlternate), // right_option (default)
+    }
+}
+
+fn ptt_down(recorder: &Recorder, tray_icon: &TrayIcon, app: &AppHandle) {
+    if let Err(e) = recorder.start() {
+        tracing::error!("[hotkey] start failed: {:?}", e);
+    }
+    let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Recording)));
+    let _ = app.emit("ptt-down", ());
+}
+
+fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
+    let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Transcribing)));
+    let _ = app.emit("ptt-up", ());
+    match recorder.stop() {
+        Ok(Some(path)) => {
+            let app2  = app.clone();
+            let tray2 = tray_icon.clone();
+            let rec2  = recorder.clone();
+            std::thread::spawn(move || {
+                match crate::transcribe::run(&path) {
+                    Ok(text) => {
+                        tracing::info!("[transcribe] {:?}", text);
+                        let _ = app2.emit("transcript", text.clone());
+                        if let Err(e) = crate::paste::paste(&text) {
+                            tracing::error!("[paste] {:?}", e);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("[transcribe] {:?}", e);
+                        let _ = app2.emit("transcript", "");
+                    }
+                }
+                let _ = tray2.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                drop(rec2);
+            });
+        }
+        Ok(None) => {
+            let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Idle)));
+        }
+        Err(e) => {
+            tracing::error!("[hotkey] stop failed: {:?}", e);
+            let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Idle)));
+        }
+    }
+}
 
 pub fn spawn(recorder: Arc<Recorder>, tray_icon: TrayIcon, app: AppHandle) {
+    let cfg = crate::settings::load();
+    let (target_keycode, target_flag) = key_for_name(&cfg.hotkey.key);
+    let toggle_mode = cfg.hotkey.mode == "toggle";
+
     std::thread::spawn(move || {
         let tap = match CGEventTap::new(
             CGEventTapLocation::HID,
@@ -19,47 +73,24 @@ pub fn spawn(recorder: Arc<Recorder>, tray_icon: TrayIcon, app: AppHandle) {
             CGEventTapOptions::Default,
             vec![CGEventType::FlagsChanged],
             move |_proxy, _etype, event| {
-                let keycode =
-                    event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
-                if keycode == RIGHT_OPTION_KEYCODE {
-                    let flags = event.get_flags();
-                    if flags.contains(CGEventFlags::CGEventFlagAlternate) {
-                        if let Err(e) = recorder.start() {
-                            tracing::error!("[hotkey] start failed: {:?}", e);
+                let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
+                if keycode == target_keycode {
+                    let flags  = event.get_flags();
+                    let is_key_down = flags.contains(target_flag);
+
+                    if toggle_mode {
+                        if is_key_down {
+                            if recorder.is_recording() {
+                                ptt_up(&recorder, &tray_icon, &app);
+                            } else {
+                                ptt_down(&recorder, &tray_icon, &app);
+                            }
                         }
-                        let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Recording)));
-                        let _ = app.emit("ptt-down", ());
                     } else {
-                        let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Transcribing)));
-                        let _ = app.emit("ptt-up", ());
-                        match recorder.stop() {
-                            Ok(Some(path)) => {
-                                let app2 = app.clone();
-                                let tray2 = tray_icon.clone();
-                                std::thread::spawn(move || {
-                                    match crate::transcribe::run(&path) {
-                                        Ok(text) => {
-                                            tracing::info!("[transcribe] {:?}", text);
-                                            let _ = app2.emit("transcript", text.clone());
-                                            if let Err(e) = crate::paste::paste(&text) {
-                                                tracing::error!("[paste] {:?}", e);
-                                            }
-                                        }
-                                        Err(e) => {
-                                            tracing::error!("[transcribe] {:?}", e);
-                                            let _ = app2.emit("transcript", "");
-                                        }
-                                    }
-                                    let _ = tray2.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                                });
-                            }
-                            Ok(None) => {
-                                let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                            }
-                            Err(e) => {
-                                tracing::error!("[hotkey] stop failed: {:?}", e);
-                                let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                            }
+                        if is_key_down {
+                            ptt_down(&recorder, &tray_icon, &app);
+                        } else {
+                            ptt_up(&recorder, &tray_icon, &app);
                         }
                     }
                 }
