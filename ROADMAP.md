@@ -22,13 +22,15 @@ The bar: press hotkey, speak, release, see text appear in the focused app.
 
 Proved 2026-05-01. Spoken text lands in focused app in under 3 seconds.
 
-## M2 — Configurable
+## M2 — Configurable ✅
 
-- [ ] Tray icon — hide window, live in menu bar
-- [ ] Basic cleanup — capitalize first word, strip leading/trailing whitespace
-- [ ] Config persistence — `~/.config/librewin/turbotalk/config.toml`
-- [ ] Settings window — model path, hotkey display, mic select
-- [ ] Whisper model selector / downloader hint
+- [x] Tray icon — hide window, live in menu bar
+- [x] Basic cleanup — capitalize first word, strip leading/trailing whitespace
+- [x] Config persistence — `~/.config/librewin/turbotalk/config.toml`
+- [x] Settings window — two-tab UI (History + Settings), whisper bin/model path
+- [x] Whisper model selector / downloader hint — HuggingFace link + brew command
+
+Proved 2026-05-01. Config persists across launches. Tray icon hides/shows window.
 
 ## M3 — Chaperone Layer
 

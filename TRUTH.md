@@ -18,19 +18,26 @@ What this project can honestly claim today. Updated when a claim changes.
 
 Proof: `[audio] wrote 42240 samples` (1.76s voice), transcript landed in Notes.app.
 
+## M2 also working — confirmed 2026-05-01
+
+- Tray icon: left-click shows/hides window; right-click menu has Show + Quit
+- Close button hides to tray (does not quit)
+- Config persists at `~/.config/librewin/turbotalk/config.toml` (TOML, written on first run)
+- Settings tab: whisper bin + model path editable and saved live
+- History tab: last 50 transcripts shown, most recent first
+- Whisper model hint: HuggingFace link opens in browser; brew command shown
+
 ## What is hardcoded / not yet configurable
 
-- Whisper binary: `/opt/homebrew/bin/whisper-cli`
-- Model: `~/.config/librewin/turbotalk/models/ggml-base.en.bin`
 - Hotkey: Right Alt (Right Option) — not rebindable
-- No settings UI, no tray icon, no config persistence
+- Mic device: always system default
+- Cleanup: capitalize first word only (no LLM, no voice commands)
 
 ## What is explicitly not working
 
-- Chaperone Layer / LLM cleanup (not implemented)
-- Settings persistence (not implemented)
-- Tray icon (not implemented)
-- Launch on login (not implemented)
+- Chaperone Layer / LLM cleanup (M3 — next)
+- Launch on login (M4)
+- Codesigning / notarization (M4)
 
 ## Key technical decisions
 

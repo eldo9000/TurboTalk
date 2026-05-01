@@ -16,6 +16,8 @@ pub struct Config {
 pub struct WhisperConfig {
     pub bin: String,
     pub model: String,
+    #[serde(default)]
+    pub models: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,11 +35,11 @@ pub struct AudioConfig {
 
 impl Default for WhisperConfig {
     fn default() -> Self {
+        let model = default_model_path().to_string_lossy().into_owned();
         Self {
             bin: "/opt/homebrew/bin/whisper-cli".into(),
-            model: default_model_path()
-                .to_string_lossy()
-                .into_owned(),
+            models: vec![model.clone()],
+            model,
         }
     }
 }
@@ -91,6 +93,27 @@ pub fn load() -> Config {
         }
     }
     Config::default()
+}
+
+pub fn scan_models_dir() -> Vec<String> {
+    let mut dir = dirs::home_dir().unwrap_or_default();
+    dir.push(".config/librewin/turbotalk/models");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return vec![];
+    };
+    let mut paths: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            if p.extension().map_or(false, |x| x == "bin") {
+                Some(p.to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        })
+        .collect();
+    paths.sort();
+    paths
 }
 
 pub fn save(cfg: &Config) -> anyhow::Result<()> {

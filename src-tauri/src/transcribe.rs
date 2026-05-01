@@ -37,14 +37,5 @@ pub fn run(wav: &Path) -> anyhow::Result<String> {
         .map_err(|_| anyhow::anyhow!("whisper output file not found: {:?}", txt_path))?;
     let _ = std::fs::remove_file(&txt_path);
 
-    Ok(cleanup(text.trim()))
-}
-
-fn cleanup(raw: &str) -> String {
-    if raw.is_empty() {
-        return String::new();
-    }
-    let mut chars = raw.chars();
-    let first = chars.next().unwrap().to_uppercase().to_string();
-    first + chars.as_str()
+    Ok(crate::cleanup::process(text.trim()))
 }
