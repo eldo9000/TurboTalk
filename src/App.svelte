@@ -230,7 +230,6 @@ Text: {text}`;
     ]);
     cfgBin        = cfg.whisper.bin;
     cfgDevice     = cfg.audio.device;
-    cfgTheme      = cfg.theme ?? 'auto';
     cfgHotkeyKey  = cfg.hotkey?.key  ?? 'right_option';
     cfgHotkeyMode = cfg.hotkey?.mode ?? 'hold';
     cfgLaunchLogin = launch;
@@ -478,7 +477,7 @@ Text: {text}`;
             <button
               onclick={() => { if (!isInstalled) open(m.url); }}
               disabled={isInstalled}
-              class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap text-white transition-colors
+              class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap text-[var(--text-primary)] transition-colors
                      {isInstalled
                        ? 'border-green-500 bg-green-500/20 cursor-default'
                        : 'border-[var(--accent)] bg-[var(--accent)]/20 hover:bg-[var(--accent)]/40'}"
