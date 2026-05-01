@@ -53,7 +53,6 @@ pub fn run(wav: &Path) -> anyhow::Result<String> {
             "-np",
             "-nt",
             "-l", "en",
-            "--vad",   // energy-based VAD: skip non-speech segments
         ])
         .output()?;
 
