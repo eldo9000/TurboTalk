@@ -17,6 +17,31 @@ pub struct AudioCapture {
     channels: u16,
 }
 
+fn rms(data: &[f32]) -> f32 {
+    if data.is_empty() { return 0.0; }
+    (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt()
+}
+
+/// Strips leading/trailing silence below `THRESHOLD`. Returns the slice indices.
+/// Leaves ~40 ms of padding on each side so speech onset isn't clipped.
+/// Returns `None` when the whole recording is below threshold (accidental press).
+fn trim_silence(samples: &[f32], sample_rate: u32) -> Option<(usize, usize)> {
+    const THRESHOLD: f32 = 0.008; // ~-42 dBFS — separates ambient from speech
+    const PAD: usize = 2;         // 20 ms chunks of padding each side
+
+    let chunk = (sample_rate as usize) / 50; // 20 ms
+    if chunk == 0 { return Some((0, samples.len())); }
+
+    let levels: Vec<f32> = samples.chunks(chunk).map(|c| rms(c)).collect();
+
+    let first = levels.iter().position(|&r| r > THRESHOLD)?;
+    let last  = levels.iter().rposition(|&r| r > THRESHOLD)?;
+
+    let start = first.saturating_sub(PAD) * chunk;
+    let end   = ((last + 1 + PAD) * chunk).min(samples.len());
+    Some((start, end))
+}
+
 // _stream is held only to keep CoreAudio alive — never accessed across threads.
 // All mutable state (is_recording, samples) is already thread-safe.
 unsafe impl Send for AudioCapture {}
@@ -46,12 +71,6 @@ impl AudioCapture {
         let level = Arc::new(AtomicU32::new(0));
 
         let err_fn = |e| tracing::error!("[audio] stream error: {:?}", e);
-
-        fn rms(data: &[f32]) -> f32 {
-            if data.is_empty() { return 0.0; }
-            let sum: f32 = data.iter().map(|&s| s * s).sum();
-            (sum / data.len() as f32).sqrt()
-        }
 
         let stream = match sample_format {
             cpal::SampleFormat::F32 => {
@@ -132,13 +151,30 @@ impl AudioCapture {
         tracing::info!("[audio] recording started");
     }
 
-    pub fn stop(&self) -> anyhow::Result<PathBuf> {
+    pub fn stop(&self) -> anyhow::Result<Option<PathBuf>> {
         self.is_recording.store(false, Ordering::SeqCst);
         // Let the last in-flight callback finish (CoreAudio buffer ≈ 10ms)
         std::thread::sleep(Duration::from_millis(25));
 
         let buf = self.samples.lock().clone();
         tracing::info!("[audio] {} samples captured", buf.len());
+
+        // Strip leading/trailing silence; bail out on accidental short presses.
+        let (start, end) = match trim_silence(&buf, self.sample_rate) {
+            Some(range) => range,
+            None => {
+                tracing::info!("[audio] silent recording — skipping transcription");
+                return Ok(None);
+            }
+        };
+        let trimmed = &buf[start..end];
+
+        // Require at least 100 ms of speech after trimming.
+        let min_samples = self.sample_rate as usize / 10;
+        if trimmed.len() < min_samples {
+            tracing::info!("[audio] recording too short after trim ({} samples) — skipping", trimmed.len());
+            return Ok(None);
+        }
 
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -152,12 +188,13 @@ impl AudioCapture {
             sample_format: hound::SampleFormat::Int,
         };
         let mut writer = hound::WavWriter::create(&path, spec)?;
-        for &s in buf.iter() {
+        for &s in trimmed.iter() {
             let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
             writer.write_sample(v)?;
         }
         writer.finalize()?;
-        tracing::info!("[audio] wrote {} samples → {:?}", buf.len(), path);
-        Ok(path)
+        tracing::info!("[audio] wrote {} samples ({:.2}s trimmed) → {:?}",
+            trimmed.len(), trimmed.len() as f32 / self.sample_rate as f32, path);
+        Ok(Some(path))
     }
 }
