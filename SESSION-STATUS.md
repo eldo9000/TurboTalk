@@ -1,15 +1,16 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-04-30
-**Current state:** Block-out. Architecture decided, Tauri scaffolding pending.
+**Last updated:** 2026-05-01
+**Current state:** M0 complete. Tauri 2 + Svelte 5 scaffold landed. Window opens with Libre chrome.
 
 ## Where We Are
 
-Repo just created. Documentation and module layout are in place. No working build yet.
+Scaffold is live. `npm run tauri dev` opens a 480×400 window with the Libre titlebar
+showing "TurboTalk" and the standard window controls. Theme and accent commands wired.
 
 ## Active Focus
 
-M0 — landing the Tauri 2 + Svelte 5 scaffold and wiring the Libre foundation.
+M1 — hotkey capture + mic recording state machine.
 
 ## Blockers
 
@@ -17,15 +18,17 @@ None.
 
 ## Next Session Should
 
-1. Run `npm create tauri-app@latest` in a temp dir; copy generated `tauri.conf.json`, `build.rs`, `capabilities/`, and frontend skeleton into this repo.
-2. Reconcile with existing `Cargo.toml` and `package.json`.
-3. Vendor `~/Downloads/Github/Libre-Apps/common-js/` into `./common-js/` for `@libre/ui`.
-4. `npm install && npm run tauri dev` — confirm a window opens with Libre titlebar.
-5. Land as a single clean commit: `scaffold: Tauri 2 + Svelte 5 + librewin foundation`.
+1. Implement `hotkey.rs` — register F1 as global push-to-talk via `tauri-plugin-global-shortcut`.
+2. Implement `audio.rs` — open default mic via cpal, buffer 16kHz mono PCM.
+3. Implement `recorder.rs` — 3-state machine (Ready → Recording → Transcribing → Ready).
+4. Wire hotkey events → recorder state transitions via a Tauri event channel.
+5. Proof: hold F1, speak, release; confirm WAV file written to tempdir.
 
 ## Recent Decisions
 
-- **Reference, not fork.** Build from scratch using Handy / typr / sagascript as references. Reasoning in `ARCHITECTURE.md`.
-- **Consume Libre foundation.** Pin `librewin-common` (tag v0.1.3), vendor `common-js/`. Same pattern as Shelf/Stack/Prism/Fade/Ghost.
-- **Private repo.** Personal-use scope until it earns Libre-product promotion.
-- **MIT license.** Matches Libre family; no friction if it gets promoted.
+- **Reference, not fork.** Build from scratch. Reasoning in `ARCHITECTURE.md`.
+- **Cargo patch for librewin-common.** `[patch]` in root `Cargo.toml` + `.cargo/config.toml`
+  `net.git-fetch-with-cli = true` to resolve local path during dev.
+- **Placeholder icons from Fade-App.** Real TurboTalk icons are M1+ work.
+- **theme.rs command wrapper.** Added thin Tauri command wrappers for `get_theme` /
+  `get_accent` — same pattern as Fade-App.

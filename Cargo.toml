@@ -8,6 +8,9 @@ unwrap_used          = "warn"
 await_holding_lock   = "deny"
 needless_collect     = "warn"
 
+[patch."https://github.com/eldo9000/Libre-Apps.git"]
+librewin-common = { path = "../Libre-Apps/common" }
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

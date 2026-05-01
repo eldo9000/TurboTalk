@@ -1,0 +1,129 @@
+/* @libre/ui — Design Tokens
+ * Single source of truth for all Libre app visual values.
+ * Import in every app's app.css — after @import "tailwindcss" and font imports.
+ * Override any token after this import in your own app.css if needed.
+ */
+
+/* ── Colors: light + Typography ─────────────────────────────────────────────── */
+:root {
+  --accent:          #004e9c;
+  --accent-hover:    #004288;
+  --titlebar-bg:     #f5f5f5;
+  --surface:         #fff;
+  --surface-raised:  #f8f8f8;
+  --surface-panel:   #fafafa;
+  --border:          #e0e0e0;
+  --border-subtle:   #eee;
+  --text-primary:    #1a1a1a;
+  --text-secondary:  #666;
+  --text-muted:      #999;
+  --tab-active-bg:   #fff;
+  --tab-bar-bg:      #f0f0f0;
+
+  font-family: Geist, -apple-system, BlinkMacSystemFont, 'Segoe UI', Cantarell, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 9%);
+}
+
+/* ── Colors: dark ──────────────────────────────────────────────────────────── */
+html.dark {
+  --accent:          #004e9c;
+  --accent-hover:    #004288;
+  --titlebar-bg:     #1a1a1a;
+  --surface:         #111;
+  --surface-raised:  #1a1a1a;
+  --surface-panel:   #1e1e1e;
+  --border:          #2a2a2a;
+  --border-subtle:   #222;
+  --text-primary:    #f0f0f0;
+  --text-secondary:  #888;
+  --text-muted:      #555;
+  --tab-active-bg:   #111;
+  --tab-bar-bg:      #0d0d0d;
+}
+
+/* ── Base reset ────────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* ── Accessibility ─────────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ── Scrollbars ────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgb(0 0 0 / 18%);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(0 0 0 / 28%);
+}
+
+/* ── Drag region ───────────────────────────────────────────────────────────── */
+[data-tauri-drag-region] {
+  user-select: none;
+}
+
+/* ── Window chrome ───────────────────────────────────────────────────────────
+   transparent: true in tauri.conf.json makes the window surface transparent.
+   #app gets padding to create space for the drop shadow.
+   #app > div (main wrapper) gets border-radius + shadow.
+   X11 without compositing: corners appear opaque; acceptable known limitation.
+──────────────────────────────────────────────────────────────────────────── */
+html, body {
+  background: transparent;
+}
+
+#app {
+  padding: 8px;
+  box-sizing: border-box;
+  overflow: visible;
+  background: transparent;
+}
+
+#app > div:first-child {
+  border-radius: 10px !important;
+  overflow: hidden;
+  box-shadow: 0 1px 8px rgb(0 0 0 / 24%);
+}
+
+/* ── Motion ────────────────────────────────────────────────────────────────── */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 150ms ease-out both;
+}
