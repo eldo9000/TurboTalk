@@ -320,34 +320,22 @@ Text: {text}`;
     <!-- Traffic-light spacer (left) -->
     <div class="w-[76px] shrink-0 h-full" data-tauri-drag-region></div>
 
-    <!-- Drag fill -->
+    <!-- Drag fill (right) -->
     <div class="flex-1 h-full" data-tauri-drag-region></div>
 
-    <!-- Right side: recording dot + About tab -->
+    <!-- Recording status dot (right side, doesn't affect centering) -->
     {#if recording || transcribing}
-      <div class="flex items-center pb-1.5 pr-1">
+      <div class="flex items-center pb-1.5 pr-3">
         <span class={
           recording ? 'w-2 h-2 rounded-full bg-red-500 animate-pulse'
                     : 'w-2 h-2 rounded-full bg-yellow-400 animate-pulse'
         }></span>
       </div>
     {/if}
-    <button
-      onclick={() => switchTab('about')}
-      class="relative px-3 h-full text-xs font-medium capitalize transition-colors
-             {activeTab === 'about'
-               ? 'text-[var(--text-primary)]'
-               : 'text-[var(--text-tertiary,#666)] hover:text-[var(--text-secondary)]'}"
-    >
-      about
-      {#if activeTab === 'about'}
-        <span class="absolute bottom-0 left-2 right-2 h-[2px] rounded-t bg-[var(--accent)]"></span>
-      {/if}
-    </button>
 
-    <!-- Main tabs — absolutely centered in the full bar width -->
+    <!-- All tabs — absolutely centered in the full bar width -->
     <div class="absolute inset-0 flex items-end justify-center pointer-events-none">
-      {#each ['history', 'models', 'modes', 'settings'] as tab}
+      {#each ['history', 'models', 'modes', 'settings', 'about'] as tab}
         <button
           onclick={() => switchTab(tab)}
           class="relative px-3 h-full text-xs font-medium capitalize transition-colors pointer-events-auto
