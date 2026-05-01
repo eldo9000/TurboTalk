@@ -20,6 +20,16 @@ pub mod transcribe;
 
 pub use theme::{get_accent, get_theme};
 
+#[tauri::command]
+fn get_config() -> settings::Config {
+    settings::load()
+}
+
+#[tauri::command]
+fn save_config(cfg: settings::Config) -> Result<(), String> {
+    settings::save(&cfg).map_err(|e| e.to_string())
+}
+
 use std::sync::Arc;
 use tauri::{
     menu::{Menu, MenuItem},
@@ -32,7 +42,7 @@ pub fn run() {
     tracing_subscriber::fmt::init();
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_theme, get_accent])
+        .invoke_handler(tauri::generate_handler![get_theme, get_accent, get_config, save_config])
         .setup(|app| {
             // ── Tray icon ──────────────────────────────────────────────────
             let show_item = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;
