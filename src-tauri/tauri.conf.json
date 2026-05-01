@@ -30,6 +30,7 @@
         "height": 80,
         "decorations": false,
         "transparent": true,
+        "shadow": false,
         "alwaysOnTop": true,
         "visible": true,
         "focus": false,
