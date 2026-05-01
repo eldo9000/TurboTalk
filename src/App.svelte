@@ -237,6 +237,7 @@
     activeTab = tab;
     if (tab === 'models')   openModels().then(forceResize);
     if (tab === 'settings') openSettings().then(forceResize);
+    if (tab === 'about')    forceResize();
   }
 
   onMount(async () => {
@@ -275,34 +276,54 @@
 >
 
   <!-- Titlebar -->
-  <div data-tauri-drag-region class="h-10 shrink-0 flex items-end select-none border-b border-[var(--border,#2a2a2a)]">
+  <div data-tauri-drag-region class="relative h-10 shrink-0 flex items-end select-none border-b border-[var(--border,#2a2a2a)]">
+
+    <!-- Traffic-light spacer (left) -->
     <div class="w-[76px] shrink-0 h-full" data-tauri-drag-region></div>
 
-    {#each ['history', 'models', 'settings'] as tab}
-      <button
-        onclick={() => switchTab(tab)}
-        class="relative px-3 h-full text-xs font-medium capitalize transition-colors
-               {activeTab === tab
-                 ? 'text-[var(--text-primary)]'
-                 : 'text-[var(--text-tertiary,#666)] hover:text-[var(--text-secondary)]'}"
-      >
-        {tab}
-        {#if activeTab === tab}
-          <span class="absolute bottom-0 left-2 right-2 h-[2px] rounded-t bg-[var(--accent)]"></span>
-        {/if}
-      </button>
-    {/each}
-
+    <!-- Drag fill -->
     <div class="flex-1 h-full" data-tauri-drag-region></div>
 
+    <!-- Right side: recording dot + About tab -->
     {#if recording || transcribing}
-      <div class="flex items-center gap-1.5 pr-3 pb-1.5">
+      <div class="flex items-center pb-1.5 pr-1">
         <span class={
           recording ? 'w-2 h-2 rounded-full bg-red-500 animate-pulse'
                     : 'w-2 h-2 rounded-full bg-yellow-400 animate-pulse'
         }></span>
       </div>
     {/if}
+    <button
+      onclick={() => switchTab('about')}
+      class="relative px-3 h-full text-xs font-medium capitalize transition-colors
+             {activeTab === 'about'
+               ? 'text-[var(--text-primary)]'
+               : 'text-[var(--text-tertiary,#666)] hover:text-[var(--text-secondary)]'}"
+    >
+      about
+      {#if activeTab === 'about'}
+        <span class="absolute bottom-0 left-2 right-2 h-[2px] rounded-t bg-[var(--accent)]"></span>
+      {/if}
+    </button>
+
+    <!-- Main tabs — absolutely centered in the full bar width -->
+    <div class="absolute inset-0 flex items-end justify-center pointer-events-none">
+      {#each ['history', 'models', 'settings'] as tab}
+        <button
+          onclick={() => switchTab(tab)}
+          class="relative px-3 h-full text-xs font-medium capitalize transition-colors pointer-events-auto
+                 {activeTab === tab
+                   ? 'text-[var(--text-primary)]'
+                   : 'text-[var(--text-tertiary,#666)] hover:text-[var(--text-secondary)]'}"
+        >
+          {tab}
+          {#if activeTab === tab}
+            <span class="absolute bottom-0 left-2 right-2 h-[2px] rounded-t bg-[var(--accent)]"></span>
+          {/if}
+        </button>
+      {/each}
+    </div>
+
   </div>
 
   <!-- History tab -->
@@ -621,6 +642,30 @@
           <span class="text-xs text-[var(--text-secondary)]">{settingsSaveMsg}</span>
         {/if}
       </div>
+    </div>
+  {/if}
+
+  <!-- About tab -->
+  {#if activeTab === 'about'}
+    <div class="flex flex-col items-center gap-4 px-6 py-8 text-center">
+
+      <div class="flex flex-col items-center gap-1">
+        <span class="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">TurboTalk</span>
+        <span class="text-[10px] text-[var(--text-tertiary,#666)] tabular-nums">v0.0.1</span>
+      </div>
+
+      <p class="text-xs text-[var(--text-secondary)] leading-relaxed max-w-[220px]">
+        Personal voice dictation for macOS.<br>Speak anywhere, paste everywhere.
+      </p>
+
+      <div class="w-full border-t border-[var(--border,#2a2a2a)]"></div>
+
+      <div class="flex flex-col gap-1.5 text-[10px] text-[var(--text-tertiary,#666)]">
+        <span>Built by IronTree Software</span>
+        <span>Powered by whisper.cpp · Ollama</span>
+        <span class="mt-1">{KEY_DISPLAY[cfgHotkeyKey] ?? cfgHotkeyKey} to {cfgHotkeyMode === 'toggle' ? 'toggle' : 'record'}</span>
+      </div>
+
     </div>
   {/if}
 
