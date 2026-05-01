@@ -44,7 +44,8 @@ fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
                     }
                     Err(e) => {
                         tracing::error!("[transcribe] {:?}", e);
-                        let _ = app2.emit("transcript", "");
+                        let msg = format!("{}", e);
+                        let _ = app2.emit("transcript-error", msg);
                     }
                 }
                 let _ = tray2.set_icon(Some(tray::make_icon(TrayState::Idle)));

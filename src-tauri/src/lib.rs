@@ -56,6 +56,16 @@ fn set_launch_at_login(app: tauri::AppHandle, enabled: bool) -> Result<(), Strin
 }
 
 #[tauri::command]
+fn paste_history_item(text: String, app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.hide();
+    }
+    // Give the previously-focused app time to regain focus before the keystroke.
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    crate::paste::paste(&text).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn load_history() -> Vec<settings::HistoryEntry> {
     settings::load_history()
 }
@@ -95,7 +105,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![get_theme, get_accent, get_config, save_config, scan_models_dir, get_launch_at_login, set_launch_at_login, list_audio_devices, load_history, save_history])
+        .invoke_handler(tauri::generate_handler![get_theme, get_accent, get_config, save_config, scan_models_dir, get_launch_at_login, set_launch_at_login, list_audio_devices, load_history, save_history, paste_history_item])
         .setup(|app| {
             // ── Tray icon ──────────────────────────────────────────────────
             let show_item = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;

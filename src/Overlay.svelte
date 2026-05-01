@@ -86,6 +86,12 @@
       setTimeout(() => { mode = 'idle'; }, 350);
     }).then(u => uns.push(u));
 
+    listen('transcript-error', () => {
+      mode = 'error';
+      draw();
+      setTimeout(() => { mode = 'idle'; }, 2500);
+    }).then(u => uns.push(u));
+
     listen('audio-level', (e) => {
       if (mode !== 'recording') return;
       const v = Math.min(1.0, e.payload);
@@ -140,9 +146,9 @@
     <div class="flex flex-col items-start gap-[1px]">
       <span
         class="text-[11px] font-semibold tracking-wide select-none leading-tight"
-        style="color: {mode === 'recording' ? '#f87171' : '#fbbf24'};"
+        style="color: {mode === 'recording' ? '#f87171' : mode === 'error' ? '#f87171' : '#fbbf24'};"
       >
-        {mode === 'recording' ? 'Recording' : 'Transcribing…'}
+        {mode === 'recording' ? 'Recording' : mode === 'error' ? 'Error' : 'Transcribing…'}
       </span>
       {#if wordCount > 0}
         <span class="text-[9px] tabular-nums select-none leading-tight"
