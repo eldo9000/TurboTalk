@@ -167,21 +167,39 @@ pub fn load() -> Config {
     Config::default()
 }
 
-pub fn scan_models_dir() -> Vec<String> {
-    let mut dir = dirs::home_dir().unwrap_or_default();
+/// Canonical models directory: `~/.config/librewin/turbotalk/models/`.
+/// Returns `None` if the directory does not exist or cannot be canonicalized.
+pub(crate) fn canonical_models_dir() -> Option<PathBuf> {
+    let mut dir = dirs::home_dir()?;
     dir.push(".config/librewin/turbotalk/models");
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    dir.canonicalize().ok()
+}
+
+pub fn scan_models_dir() -> Vec<String> {
+    let Some(canon_dir) = canonical_models_dir() else {
+        return vec![];
+    };
+    let Ok(entries) = std::fs::read_dir(&canon_dir) else {
         return vec![];
     };
     let mut paths: Vec<String> = entries
         .flatten()
         .filter_map(|e| {
             let p = e.path();
-            if p.extension().map_or(false, |x| x == "bin") {
-                Some(p.to_string_lossy().into_owned())
-            } else {
-                None
+            if !p.extension().is_some_and(|x| x == "bin") {
+                return None;
             }
+            // Resolve symlinks; reject anything that escapes the models dir.
+            let canon = p.canonicalize().ok()?;
+            if !canon.starts_with(&canon_dir) {
+                tracing::warn!(
+                    "[settings] skipping model outside models dir: {:?} -> {:?}",
+                    p,
+                    canon
+                );
+                return None;
+            }
+            Some(canon.to_string_lossy().into_owned())
         })
         .collect();
     paths.sort();
