@@ -37,7 +37,7 @@ impl Default for WhisperConfig {
     fn default() -> Self {
         let model = default_model_path().to_string_lossy().into_owned();
         Self {
-            bin: "/opt/homebrew/bin/whisper-cli".into(),
+            bin: "auto".into(),
             models: vec![model.clone()],
             model,
         }
