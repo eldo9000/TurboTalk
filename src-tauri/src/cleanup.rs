@@ -135,20 +135,33 @@ struct OllamaResponse {
     response: String,
 }
 
+fn build_prompt(text: &str, cfg: &crate::settings::CleanupConfig) -> String {
+    let template = if cfg.classifier_prompt.trim().is_empty() {
+        crate::settings::default_classifier_prompt()
+    } else {
+        cfg.classifier_prompt.clone()
+    };
+
+    let vocab_section = if cfg.vocabulary.is_empty() {
+        String::new()
+    } else {
+        let words = cfg
+            .vocabulary
+            .iter()
+            .map(|w| format!("- {w}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("Domain vocabulary (recognize these terms exactly):\n{words}\n\n")
+    };
+
+    format!("{vocab_section}{}", template.replace("{text}", text))
+}
+
 fn classify_blocking(
     text: &str,
     cfg: &crate::settings::CleanupConfig,
 ) -> anyhow::Result<Mode> {
-    let prompt = format!(
-        "Classify this voice dictation into exactly one word: prose, code, command, or raw.\n\
-         Rules:\n\
-         - prose: natural language sentences (emails, notes, messages)\n\
-         - code: identifiers, snippets, technical syntax (camelCase, snake_case, brackets)\n\
-         - command: shell commands or CLI invocations (starts with a verb like run/git/ls/cd)\n\
-         - raw: anything else\n\
-         Reply with only the single word, lowercase, no punctuation.\n\n\
-         Text: {text}"
-    );
+    let prompt = build_prompt(text, cfg);
 
     let body = OllamaRequest {
         model: &cfg.classifier_model,
