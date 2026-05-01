@@ -74,6 +74,12 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            // ── Config (write defaults on first run) ───────────────────────
+            let cfg = settings::load();
+            if let Err(e) = settings::save(&cfg) {
+                tracing::warn!("[settings] could not write config: {:?}", e);
+            }
+
             // ── Hotkey ─────────────────────────────────────────────────────
             let recorder = Arc::new(recorder::Recorder::new());
             hotkey::spawn(recorder, app.handle().clone());

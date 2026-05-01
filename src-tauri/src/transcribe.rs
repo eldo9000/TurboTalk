@@ -1,20 +1,15 @@
 // Spawns whisper-cli, feeds it the WAV, reads back the transcript.
-// Output strategy: -otxt writes <wav_path>.txt; we read and delete that file.
+// Output strategy: -otxt writes <wav_path>.wav.txt; we read and delete that file.
 use std::path::{Path, PathBuf};
 
-const WHISPER_BIN: &str = "/opt/homebrew/bin/whisper-cli";
-
-fn default_model() -> PathBuf {
-    let mut p = dirs::home_dir().unwrap_or_default();
-    p.push(".config/librewin/turbotalk/models/ggml-base.en.bin");
-    p
-}
-
 pub fn run(wav: &Path) -> anyhow::Result<String> {
-    let model = default_model();
-    if !model.exists() {
+    let cfg = crate::settings::load();
+    let bin = &cfg.whisper.bin;
+    let model = &cfg.whisper.model;
+
+    if !std::path::Path::new(model).exists() {
         anyhow::bail!(
-            "whisper model not found at {:?} — download ggml-base.en.bin into that path",
+            "whisper model not found at {:?} — set [whisper] model in config.toml",
             model
         );
     }
@@ -22,13 +17,13 @@ pub fn run(wav: &Path) -> anyhow::Result<String> {
     // whisper-cli appends .txt to the full input filename: <wav>.wav.txt
     let txt_path = PathBuf::from(format!("{}.txt", wav.display()));
 
-    let output = std::process::Command::new(WHISPER_BIN)
+    let output = std::process::Command::new(bin)
         .args([
-            "-m", model.to_str().unwrap(),
+            "-m", model,
             "-f", wav.to_str().unwrap(),
             "-otxt",
-            "-np",  // suppress diagnostics on stdout
-            "-nt",  // no timestamps in text file
+            "-np",
+            "-nt",
             "-l", "en",
         ])
         .output()?;
@@ -49,7 +44,6 @@ fn cleanup(raw: &str) -> String {
     if raw.is_empty() {
         return String::new();
     }
-    // Capitalize first character
     let mut chars = raw.chars();
     let first = chars.next().unwrap().to_uppercase().to_string();
     first + chars.as_str()
