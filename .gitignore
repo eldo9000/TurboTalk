@@ -1,0 +1,41 @@
+# Rust
+target/
+Cargo.lock.bak
+**/*.rs.bk
+
+# Node
+node_modules/
+dist/
+.vite/
+*.log
+npm-debug.log*
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+src-tauri/WixTools/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local config / secrets
+.env
+.env.*
+!.env.example
+
+# Whisper models (downloaded at runtime, never commit)
+models/
+*.ggml
+*.bin
+
+# Build artifacts
+*.dmg
+*.app
+*.pkg

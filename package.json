@@ -1,0 +1,27 @@
+{
+  "name": "turbotalk",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fontsource/geist": "^5.2.8",
+    "@libre/ui": "file:./common-js",
+    "@tauri-apps/api": "^2"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7",
+    "@tailwindcss/vite": "^4",
+    "@tauri-apps/cli": "^2",
+    "svelte": "^5",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vite": "^8"
+  }
+}
