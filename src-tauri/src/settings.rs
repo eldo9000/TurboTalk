@@ -10,7 +10,11 @@ pub struct Config {
     pub cleanup: CleanupConfig,
     #[serde(default)]
     pub audio: AudioConfig,
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
+
+fn default_theme() -> String { "auto".into() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WhisperConfig {
@@ -68,6 +72,7 @@ impl Default for Config {
             whisper: WhisperConfig::default(),
             cleanup: CleanupConfig::default(),
             audio: AudioConfig::default(),
+            theme: default_theme(),
         }
     }
 }
