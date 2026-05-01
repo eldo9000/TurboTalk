@@ -3,7 +3,16 @@
 ## Shared Standards
 
 - **Engineering standards:** `~/Downloads/Github/Business-OS/standards/ENGINEERING.md` — session protocol, investigation logs, commit conventions. Read before any implementation session.
+- **Operating model:** `~/Downloads/Github/Business-OS/bin/SOFTWARE-DEVELOPMENT-OPERATING-MODEL.md` — the portfolio's evidence/ledger discipline. **TurboTalk operates at Tier 1** (see §15): small app, obvious behavior, personal-use scope. Required artifacts are limited to `SESSION-STATUS.md` (status ledger) and `TRUTH.md` (truth ledger). Do **not** add: heavy red-build ladders, observer loops, structured commit notes, milestone gates for every task, or full closure ceremony for every commit. Add weight only if a concrete failure mode appears.
 - **Design language & shared patterns:** `~/Downloads/Github/Libre-Apps/CLAUDE.md` — design tokens, Tauri 2 patterns, Svelte 5 patterns, cross-app conventions. Read before any UI work.
+
+## Tier 1 Habits (enforce these)
+
+- Name the proof before calling work done. ("It compiles" is not proof. "I held F1, said 'hello world', and 'hello world' appeared in the focused TextEdit window" is proof.)
+- Keep visible TODOs and stubs explicit — module headers in `src-tauri/src/*.rs` already do this.
+- When a failure is not obvious, classify it before fixing.
+- Update `SESSION-STATUS.md` after any meaningful work.
+- Update `TRUTH.md` whenever the answer to "what works end-to-end" changes.
 
 ## What This Is
 
