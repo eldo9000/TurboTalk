@@ -1,6 +1,7 @@
-// Keep one CoreAudio stream running at all times (started at app launch).
-// On start(): flip is_recording true and clear the buffer — zero hardware latency.
-// On stop(): flip false, drain the buffer, write WAV.
+// Keep the CoreAudio stream open only while recording.
+// On start(): query the current device from config, open a fresh stream.
+// On stop(): stop recording, drain the buffer, write WAV, drop the stream.
+// This lets the device change (built-in ↔ AirPods) without restarting the app.
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use parking_lot::Mutex;
 use std::path::PathBuf;
@@ -8,14 +9,25 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub struct AudioCapture {
-    _stream: cpal::Stream,
-    is_recording: Arc<AtomicBool>,
-    samples: Arc<Mutex<Vec<f32>>>,
-    level: Arc<AtomicU32>, // current RMS stored as f32 bits
+struct ActiveStream {
+    _stream:     cpal::Stream,
     sample_rate: u32,
-    channels: u16,
+    channels:    u16,
 }
+
+pub struct AudioCapture {
+    samples:      Arc<Mutex<Vec<f32>>>,
+    level:        Arc<AtomicU32>, // current RMS as f32 bits
+    is_recording: Arc<AtomicBool>,
+    active:       Mutex<Option<ActiveStream>>,
+}
+
+// cpal::Stream is !Send but we never access it across threads simultaneously.
+// The Mutex<Option<ActiveStream>> ensures exclusive access; the CoreAudio
+// callback thread only touches is_recording / samples / level atomics.
+unsafe impl Send for AudioCapture {}
+unsafe impl Sync for AudioCapture {}
+unsafe impl Send for ActiveStream {}
 
 fn rms(data: &[f32]) -> f32 {
     if data.is_empty() { return 0.0; }
@@ -42,15 +54,17 @@ fn trim_silence(samples: &[f32], sample_rate: u32) -> Option<(usize, usize)> {
     Some((start, end))
 }
 
-// _stream is held only to keep CoreAudio alive — never accessed across threads.
-// All mutable state (is_recording, samples) is already thread-safe.
-unsafe impl Send for AudioCapture {}
-unsafe impl Sync for AudioCapture {}
-
 impl AudioCapture {
     pub fn new() -> anyhow::Result<Self> {
-        let cfg = crate::settings::load();
-        let want = cfg.audio.device.as_str();
+        Ok(Self {
+            samples:      Arc::new(Mutex::new(Vec::new())),
+            level:        Arc::new(AtomicU32::new(0)),
+            is_recording: Arc::new(AtomicBool::new(false)),
+            active:       Mutex::new(None),
+        })
+    }
+
+    fn open_stream(&self, want: &str) -> anyhow::Result<ActiveStream> {
         let host = cpal::default_host();
         let device = if want == "default" || want.is_empty() {
             host.default_input_device()
@@ -61,22 +75,23 @@ impl AudioCapture {
                 .or_else(|| host.default_input_device())
                 .ok_or_else(|| anyhow::anyhow!("no input device found"))?
         };
+
+        let name = device.name().unwrap_or_else(|_| "unknown".into());
         let config = device.default_input_config()?;
-        let sample_rate = config.sample_rate().0;
-        let channels = config.channels();
+        let sample_rate  = config.sample_rate().0;
+        let channels     = config.channels();
         let sample_format = config.sample_format();
 
-        let is_recording = Arc::new(AtomicBool::new(false));
-        let samples = Arc::new(Mutex::new(Vec::<f32>::new()));
-        let level = Arc::new(AtomicU32::new(0));
+        tracing::info!("[audio] opening stream: \"{}\" {} Hz {} ch {:?}",
+            name, sample_rate, channels, sample_format);
 
+        let rec = self.is_recording.clone();
+        let smp = self.samples.clone();
+        let lvl = self.level.clone();
         let err_fn = |e| tracing::error!("[audio] stream error: {:?}", e);
 
         let stream = match sample_format {
             cpal::SampleFormat::F32 => {
-                let rec = is_recording.clone();
-                let smp = samples.clone();
-                let lvl = level.clone();
                 device.build_input_stream(
                     &config.into(),
                     move |data: &[f32], _: &_| {
@@ -87,14 +102,10 @@ impl AudioCapture {
                             lvl.store(0_f32.to_bits(), Ordering::Relaxed);
                         }
                     },
-                    err_fn,
-                    None,
+                    err_fn, None,
                 )?
             }
             cpal::SampleFormat::I16 => {
-                let rec = is_recording.clone();
-                let smp = samples.clone();
-                let lvl = level.clone();
                 device.build_input_stream(
                     &config.into(),
                     move |data: &[i16], _: &_| {
@@ -106,14 +117,10 @@ impl AudioCapture {
                             lvl.store(0_f32.to_bits(), Ordering::Relaxed);
                         }
                     },
-                    err_fn,
-                    None,
+                    err_fn, None,
                 )?
             }
             cpal::SampleFormat::U16 => {
-                let rec = is_recording.clone();
-                let smp = samples.clone();
-                let lvl = level.clone();
                 device.build_input_stream(
                     &config.into(),
                     move |data: &[u16], _: &_| {
@@ -125,30 +132,32 @@ impl AudioCapture {
                             lvl.store(0_f32.to_bits(), Ordering::Relaxed);
                         }
                     },
-                    err_fn,
-                    None,
+                    err_fn, None,
                 )?
             }
             other => anyhow::bail!("unsupported sample format: {:?}", other),
         };
 
         stream.play()?;
-        tracing::info!(
-            "[audio] stream warmed — {} Hz, {} ch, {:?}",
-            sample_rate, channels, sample_format
-        );
-
-        Ok(Self { _stream: stream, is_recording, samples, level, sample_rate, channels })
+        Ok(ActiveStream { _stream: stream, sample_rate, channels })
     }
 
     pub fn level(&self) -> f32 {
         f32::from_bits(self.level.load(Ordering::Relaxed))
     }
 
-    pub fn start(&self) {
+    pub fn start(&self) -> anyhow::Result<()> {
         self.samples.lock().clear();
+        self.level.store(0_f32.to_bits(), Ordering::Relaxed);
+
+        // Always read device from config so changes take effect without restart.
+        let want = crate::settings::load().audio.device;
+        let stream = self.open_stream(&want)?;
+        *self.active.lock() = Some(stream);
+
         self.is_recording.store(true, Ordering::SeqCst);
         tracing::info!("[audio] recording started");
+        Ok(())
     }
 
     pub fn stop(&self) -> anyhow::Result<Option<PathBuf>> {
@@ -156,11 +165,19 @@ impl AudioCapture {
         // Let the last in-flight callback finish (CoreAudio buffer ≈ 10ms)
         std::thread::sleep(Duration::from_millis(25));
 
+        let (sample_rate, channels) = {
+            let active = self.active.lock();
+            match active.as_ref() {
+                Some(a) => (a.sample_rate, a.channels),
+                None    => return Ok(None),
+            }
+        };
+        *self.active.lock() = None; // drop stream
+
         let buf = self.samples.lock().clone();
         tracing::info!("[audio] {} samples captured", buf.len());
 
-        // Strip leading/trailing silence; bail out on accidental short presses.
-        let (start, end) = match trim_silence(&buf, self.sample_rate) {
+        let (start, end) = match trim_silence(&buf, sample_rate) {
             Some(range) => range,
             None => {
                 tracing::info!("[audio] silent recording — skipping transcription");
@@ -169,8 +186,7 @@ impl AudioCapture {
         };
         let trimmed = &buf[start..end];
 
-        // Require at least 100 ms of speech after trimming.
-        let min_samples = self.sample_rate as usize / 10;
+        let min_samples = sample_rate as usize / 10;
         if trimmed.len() < min_samples {
             tracing::info!("[audio] recording too short after trim ({} samples) — skipping", trimmed.len());
             return Ok(None);
@@ -182,8 +198,8 @@ impl AudioCapture {
             .unwrap_or(0);
         let path = std::env::temp_dir().join(format!("turbotalk-{}.wav", stamp));
         let spec = hound::WavSpec {
-            channels: self.channels,
-            sample_rate: self.sample_rate,
+            channels,
+            sample_rate,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
@@ -194,7 +210,7 @@ impl AudioCapture {
         }
         writer.finalize()?;
         tracing::info!("[audio] wrote {} samples ({:.2}s trimmed) → {:?}",
-            trimmed.len(), trimmed.len() as f32 / self.sample_rate as f32, path);
+            trimmed.len(), trimmed.len() as f32 / sample_rate as f32, path);
         Ok(Some(path))
     }
 }
