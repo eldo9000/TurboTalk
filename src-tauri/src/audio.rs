@@ -22,9 +22,47 @@ pub struct AudioCapture {
     active:       Mutex<Option<ActiveStream>>,
 }
 
-// cpal::Stream is !Send but we never access it across threads simultaneously.
-// The Mutex<Option<ActiveStream>> ensures exclusive access; the CoreAudio
-// callback thread only touches is_recording / samples / level atomics.
+// SAFETY (Send + Sync for AudioCapture, Send for ActiveStream):
+//
+// `cpal::Stream` on macOS (cpal 0.15.3) is `Arc<Mutex<StreamInner>>` where
+// `StreamInner` contains:
+//   1. an `AudioUnit` — coreaudio-rs declares `unsafe impl Send for AudioUnit`
+//      (coreaudio-rs 0.11.3 audio_unit/mod.rs:317). `AudioUnit::drop` calls
+//      `AudioOutputUnitStop`, `AudioUnitUninitialize`, and
+//      `AudioComponentInstanceDispose`, all documented by Apple as callable
+//      from any thread. So the AudioUnit half is naturally Send.
+//   2. a `_disconnect_listener: Option<AudioObjectPropertyListener>` carrying
+//      a `Box<dyn FnMut()>` (no `+ Send` bound). This is the *only* reason
+//      cpal::Stream is `!Send` on macOS — a missing bound, not a real
+//      threading hazard. The closure captures a clone of the Stream and an
+//      `Arc<Mutex<E>>` error callback; both are Send when `E: Send`, which
+//      our `err_fn` is. cpal also only attaches this listener when the
+//      device is non-default (cpal macos/mod.rs:614-618). For our default-
+//      device path, `_disconnect_listener` is `None` and Stream is morally
+//      Send already.
+//
+// Concrete access pattern in this codebase, threading the needle:
+//   - Hotkey thread (the CGEventTap callback in hotkey.rs runs on a single
+//     dedicated OS thread that owns the CFRunLoop): the *only* thread that
+//     ever touches `self.active`. It calls `start()` (creating the Stream)
+//     and `stop()` (dropping the Stream) — both on the same thread. The
+//     `active: Mutex<Option<ActiveStream>>` is taken as the only path to
+//     read or replace the stream; it serializes against any pathological
+//     re-entry.
+//   - Level-broadcast thread (spawned in lib.rs): calls `level()` which
+//     reads the `level: Arc<AtomicU32>` only, and `recorder.is_recording()`
+//     which reads Recorder's own `Mutex<State>` — never touches `active`
+//     and therefore never touches the cpal::Stream.
+//   - CoreAudio callback thread (cpal-managed): the callback closure
+//     captures clones of `is_recording` (AtomicBool), `samples` (Arc<Mutex>)
+//     and `level` (AtomicU32) — never the `active` field, never the Stream
+//     itself, never `&self`.
+//
+// So `active` is single-threaded in practice, and every other field is
+// already-Send-and-Sync (atomics + `Arc<Mutex<Vec<f32>>>`). No data race
+// on the Stream is reachable. The unsafe impls patch over a missing Send
+// bound on a `Box<dyn FnMut()>` deep inside cpal; they do not paper over
+// any real concurrent access.
 unsafe impl Send for AudioCapture {}
 unsafe impl Sync for AudioCapture {}
 unsafe impl Send for ActiveStream {}
@@ -44,7 +82,7 @@ fn trim_silence(samples: &[f32], sample_rate: u32) -> Option<(usize, usize)> {
     let chunk = (sample_rate as usize) / 50; // 20 ms
     if chunk == 0 { return Some((0, samples.len())); }
 
-    let levels: Vec<f32> = samples.chunks(chunk).map(|c| rms(c)).collect();
+    let levels: Vec<f32> = samples.chunks(chunk).map(rms).collect();
 
     let first = levels.iter().position(|&r| r > THRESHOLD)?;
     let last  = levels.iter().rposition(|&r| r > THRESHOLD)?;
