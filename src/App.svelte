@@ -725,9 +725,19 @@ Text: {text}`;
 
       <button
         onclick={() => { showAdvanced = !showAdvanced; }}
-        class="text-left text-[10px] text-[var(--text-tertiary,#666)]
-               hover:text-[var(--text-secondary)] transition-colors select-none"
-      >{showAdvanced ? '▾ Advanced' : '▸ Advanced'}</button>
+        class="w-full flex items-center justify-between px-3 py-2.5 rounded-lg
+               bg-[var(--surface-raised)] border border-[var(--border)]
+               hover:border-[var(--accent)] transition-colors select-none group"
+      >
+        <span class="text-xs font-medium text-[var(--text-secondary)]
+                     group-hover:text-[var(--text-primary)] transition-colors">
+          Advanced
+        </span>
+        <span class="text-[var(--text-tertiary,#666)] group-hover:text-[var(--accent)]
+                     transition-colors text-sm leading-none">
+          {showAdvanced ? '▾' : '▸'}
+        </span>
+      </button>
 
       {#if showAdvanced}
         <label class="flex flex-col gap-1">
