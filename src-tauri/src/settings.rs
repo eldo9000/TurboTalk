@@ -10,6 +10,8 @@ pub struct Config {
     pub cleanup: CleanupConfig,
     #[serde(default)]
     pub audio: AudioConfig,
+    #[serde(default)]
+    pub hotkey: HotkeyConfig,
     #[serde(default = "default_theme")]
     pub theme: String,
 }
@@ -66,12 +68,28 @@ impl Default for AudioConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HotkeyConfig {
+    pub key: String,  // "right_option" | "right_control" | "right_command" | "right_shift"
+    pub mode: String, // "hold" | "toggle"
+}
+
+impl Default for HotkeyConfig {
+    fn default() -> Self {
+        Self {
+            key: "right_option".into(),
+            mode: "hold".into(),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             whisper: WhisperConfig::default(),
             cleanup: CleanupConfig::default(),
             audio: AudioConfig::default(),
+            hotkey: HotkeyConfig::default(),
             theme: default_theme(),
         }
     }
