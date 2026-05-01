@@ -30,8 +30,9 @@
   let activeTab    = $state('history');
 
   // History
-  let history  = $state([]);
-  let copiedTs = $state(null);
+  let history         = $state([]);
+  let pastedTs        = $state(null);
+  let transcriptError = $state('');
 
   // Models tab
   let cfgModels      = $state([]);
@@ -73,7 +74,7 @@ Text: {text}`;
   let outerEl = $state(null);
 
   const HISTORY_H = 280;
-  const WINDOW_W  = 380;
+  const WINDOW_W  = 440;
 
   function contentSize() {
     const zoom = ZOOM_LEVELS[zoomIdx] / 100;
@@ -124,10 +125,15 @@ Text: {text}`;
 
   // ── History ───────────────────────────────────────────────────────────────
 
-  async function copyItem(item) {
-    await navigator.clipboard.writeText(item.text);
-    copiedTs = item.ts;
-    setTimeout(() => { if (copiedTs === item.ts) copiedTs = null; }, 1500);
+  async function pasteHistoryItem(item) {
+    pastedTs = item.ts;
+    try {
+      await invoke('paste_history_item', { text: item.text });
+    } catch (e) {
+      transcriptError = 'Paste failed: ' + e;
+      setTimeout(() => { transcriptError = ''; }, 4000);
+    }
+    setTimeout(() => { if (pastedTs === item.ts) pastedTs = null; }, 1500);
   }
 
   // ── Models ────────────────────────────────────────────────────────────────
@@ -308,6 +314,10 @@ Text: {text}`;
         invoke('save_history', { entries: history });
       }
     }).then(u => unlisteners.push(u));
+    listen('transcript-error', (e) => {
+      transcriptError = e.payload || 'Transcription failed.';
+      setTimeout(() => { transcriptError = ''; }, 5000);
+    }).then(u => unlisteners.push(u));
     listen('open-history', () => switchTab('history')).then(u => unlisteners.push(u));
 
     return () => {
@@ -362,6 +372,14 @@ Text: {text}`;
   <!-- History tab -->
   {#if activeTab === 'history'}
     <div class="flex-1 min-h-0 flex flex-col">
+      {#if transcriptError}
+        <div class="mx-3 mt-2 px-3 py-2 rounded-lg flex items-center justify-between gap-2
+                    bg-red-500/10 border border-red-500/25">
+          <span class="text-[11px] text-red-400 leading-snug">{transcriptError}</span>
+          <button onclick={() => { transcriptError = ''; }}
+                  class="shrink-0 text-red-400/60 hover:text-red-400 text-base leading-none">×</button>
+        </div>
+      {/if}
       {#if history.length === 0}
         <div class="flex-1 flex flex-col items-center justify-center gap-2">
           {#if recording || transcribing}
@@ -383,15 +401,15 @@ Text: {text}`;
         <div class="flex-1 min-h-0 overflow-y-auto px-3 py-2 flex flex-col gap-1">
           {#each history as item (item.ts)}
             <button
-              onclick={() => copyItem(item)}
-              title="Click to copy"
+              onclick={() => pasteHistoryItem(item)}
+              title="Click to paste"
               class="w-full text-left text-sm leading-relaxed px-2 py-1.5 rounded
                      transition-colors cursor-pointer select-text
                      border-b border-[var(--border,#2a2a2a)] last:border-0
                      hover:bg-[var(--surface-raised)]
-                     {copiedTs === item.ts ? 'text-[var(--accent)]' : 'text-[var(--text-primary)]'}"
+                     {pastedTs === item.ts ? 'text-[var(--accent)]' : 'text-[var(--text-primary)]'}"
             >
-              {copiedTs === item.ts ? 'Copied!' : item.text}
+              {pastedTs === item.ts ? 'Pasted!' : item.text}
             </button>
           {/each}
         </div>
