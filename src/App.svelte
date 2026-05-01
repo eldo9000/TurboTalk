@@ -47,9 +47,10 @@
   let cfgLaunchLogin  = $state(false);
   let cfgDevice       = $state('default');
   let audioDevices    = $state([]);
-  let settingsSaveMsg = $state('');
-  let cfgHotkeyKey  = $state('right_option');
-  let cfgHotkeyMode = $state('hold');
+  let settingsSaveMsg  = $state('');
+  let cfgHotkeyKey     = $state('right_option');
+  let cfgHotkeyMode    = $state('hold');
+  let showAdvanced     = $state(false);
 
   // Ref to the outermost div — used to measure total natural content height.
   let outerEl = $state(null);
@@ -210,7 +211,7 @@
     try {
       await invoke('save_config', { cfg });
       await invoke('set_launch_at_login', { enabled: cfgLaunchLogin });
-      settingsSaveMsg = 'Saved. Restart to apply mic change.';
+      settingsSaveMsg = 'Saved.';
     } catch (e) {
       settingsSaveMsg = 'Error: ' + e;
     }
@@ -309,12 +310,20 @@
     <div class="flex-1 min-h-0 flex flex-col">
       {#if history.length === 0}
         <div class="flex-1 flex flex-col items-center justify-center gap-2">
-          <p class="text-[var(--text-tertiary,#666)] text-sm select-none">
-            {recording ? 'Recording…' : transcribing ? 'Transcribing…'
-              : cfgHotkeyMode === 'toggle'
-                ? `Press ${KEY_DISPLAY[cfgHotkeyKey] ?? cfgHotkeyKey} to toggle`
-                : `Hold ${KEY_DISPLAY[cfgHotkeyKey] ?? cfgHotkeyKey} to record`}
-          </p>
+          {#if recording || transcribing}
+            <p class="text-[var(--text-tertiary,#666)] text-sm select-none animate-pulse">
+              {recording ? 'Recording…' : 'Transcribing…'}
+            </p>
+          {:else}
+            <kbd class="px-3 py-1.5 text-xs rounded-lg border border-[var(--border,#2a2a2a)]
+                        bg-[var(--surface-raised)] text-[var(--text-secondary)]
+                        select-none shadow-sm">
+              {KEY_DISPLAY[cfgHotkeyKey] ?? cfgHotkeyKey}
+            </kbd>
+            <p class="text-[var(--text-tertiary,#666)] text-xs select-none">
+              {cfgHotkeyMode === 'toggle' ? 'Press to start · press again to stop' : 'Hold to record'}
+            </p>
+          {/if}
         </div>
       {:else}
         <div class="flex-1 min-h-0 overflow-y-auto px-3 py-2 flex flex-col gap-1">
@@ -538,16 +547,27 @@
         </select>
       </label>
 
-      <label class="flex flex-col gap-1">
-        <span class="text-[var(--text-secondary)] text-xs">Whisper binary</span>
-        <input
-          bind:value={cfgBin}
-          class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
-                 rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
-                 focus:border-[var(--accent)]"
-          spellcheck="false"
-        />
-      </label>
+      <button
+        onclick={() => { showAdvanced = !showAdvanced; }}
+        class="text-left text-[10px] text-[var(--text-tertiary,#666)]
+               hover:text-[var(--text-secondary)] transition-colors select-none"
+      >{showAdvanced ? '▾ Advanced' : '▸ Advanced'}</button>
+
+      {#if showAdvanced}
+        <label class="flex flex-col gap-1">
+          <span class="text-[var(--text-secondary)] text-xs">Whisper binary</span>
+          <input
+            bind:value={cfgBin}
+            class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
+                   rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
+                   focus:border-[var(--accent)]"
+            spellcheck="false"
+          />
+          <span class="text-[var(--text-tertiary,#666)] text-[10px]">
+            Overrides the bundled sidecar. Leave as "auto" to use the default.
+          </span>
+        </label>
+      {/if}
 
       <label class="flex flex-col gap-1">
         <span class="text-[var(--text-secondary)] text-xs">Cleanup mode</span>
