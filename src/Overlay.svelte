@@ -4,8 +4,14 @@
   import { getCurrentWindow, primaryMonitor } from '@tauri-apps/api/window';
   import { LogicalPosition } from '@tauri-apps/api/dpi';
 
-  let mode = $state('idle'); // 'idle' | 'recording' | 'transcribing'
-  let canvasEl = $state(null);
+  let mode      = $state('idle'); // 'idle' | 'recording' | 'transcribing'
+  let canvasEl  = $state(null);
+  let wordCount = $state(0);
+
+  // Each audio-level event = 50ms. Frames above threshold = speech time.
+  // At 140 WPM: words ≈ speech_seconds * 140 / 60
+  const SPEECH_THRESHOLD = 0.008;
+  let speechFrames = 0;
 
   const CANVAS_W   = 140; // CSS pixels
   const CANVAS_H   = 28;
@@ -65,6 +71,8 @@
 
     listen('ptt-down', () => {
       levels = Array(HISTORY).fill(0);
+      speechFrames = 0;
+      wordCount = 0;
       mode = 'recording';
       draw();
     }).then(u => uns.push(u));
@@ -80,7 +88,12 @@
 
     listen('audio-level', (e) => {
       if (mode !== 'recording') return;
-      levels = [...levels.slice(1), Math.min(1.0, e.payload)];
+      const v = Math.min(1.0, e.payload);
+      levels = [...levels.slice(1), v];
+      if (v > SPEECH_THRESHOLD) {
+        speechFrames++;
+        wordCount = Math.round(speechFrames * 0.05 * 140 / 60);
+      }
       draw();
     }).then(u => uns.push(u));
 
@@ -124,11 +137,19 @@
       style="width: {CANVAS_W}px; height: {CANVAS_H}px;"
     ></canvas>
 
-    <span
-      class="text-[11px] font-semibold tracking-wide select-none"
-      style="color: {mode === 'recording' ? '#f87171' : '#fbbf24'};"
-    >
-      {mode === 'recording' ? 'Recording' : 'Transcribing…'}
-    </span>
+    <div class="flex flex-col items-start gap-[1px]">
+      <span
+        class="text-[11px] font-semibold tracking-wide select-none leading-tight"
+        style="color: {mode === 'recording' ? '#f87171' : '#fbbf24'};"
+      >
+        {mode === 'recording' ? 'Recording' : 'Transcribing…'}
+      </span>
+      {#if wordCount > 0}
+        <span class="text-[9px] tabular-nums select-none leading-tight"
+              style="color: rgba(255,255,255,0.4);">
+          ~{wordCount}w
+        </span>
+      {/if}
+    </div>
   </div>
 </div>
