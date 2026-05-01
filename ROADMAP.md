@@ -2,33 +2,33 @@
 
 Personal-use scope. Milestones are checkpoints, not deadlines.
 
-## M0 — Block-out (current)
+## M0 — Block-out ✅
 
 - [x] Repo structure decided
 - [x] Architecture documented
-- [ ] Tauri 2 + Svelte 5 scaffold landed
-- [ ] `librewin-common` + `@libre/ui` wired
-- [ ] First `npm run tauri dev` succeeds
+- [x] Tauri 2 + Svelte 5 scaffold landed
+- [x] `librewin-common` + `@libre/ui` wired
+- [x] First `npm run tauri dev` succeeds
 
-## M1 — End-to-end happy path
+## M1 — End-to-end happy path ✅
 
 The bar: press hotkey, speak, release, see text appear in the focused app.
 
-- [ ] Global hotkey capture (push-to-talk)
-- [ ] Mic stream → WAV buffer
-- [ ] Whisper.cpp sidecar with `small` model
-- [ ] Clipboard paste into active app (macOS only)
-- [ ] Recording overlay (just a dot — "ready / listening / thinking")
+- [x] Global hotkey capture — Right Alt via CGEventTap (rdev dropped: macOS 26 TSM thread crash)
+- [x] Mic stream → WAV buffer — cpal, 24kHz mono F32, hound WAV writer
+- [x] Whisper transcription — whisper-cli (Homebrew), ggml-base.en, ~130ms on M4 via Metal
+- [x] Clipboard paste into active app — arboard + osascript Cmd+V, clipboard restored after
+- [x] Recording overlay — dot: gray (idle) / red pulse (recording) / yellow pulse (transcribing)
 
-No settings UI yet. No cleanup. Hardcoded everything. Goal: prove the loop works.
+Proved 2026-05-01. Spoken text lands in focused app in under 3 seconds.
 
 ## M2 — Configurable
 
-- [ ] Settings window (model select, hotkey rebind, mic select)
-- [ ] Config persistence under `~/.config/librewin/turbotalk/`
-- [ ] Tray icon
-- [ ] Whisper model downloader UI
-- [ ] Basic regex cleanup (capitalize first letter, period at end)
+- [ ] Tray icon — hide window, live in menu bar
+- [ ] Basic cleanup — capitalize first word, strip leading/trailing whitespace
+- [ ] Config persistence — `~/.config/librewin/turbotalk/config.toml`
+- [ ] Settings window — model path, hotkey display, mic select
+- [ ] Whisper model selector / downloader hint
 
 ## M3 — Chaperone Layer
 
@@ -40,13 +40,12 @@ No settings UI yet. No cleanup. Hardcoded everything. Goal: prove the loop works
 ## M4 — Polish
 
 - [ ] Codesigning + notarization (use Libre signing infra)
-- [ ] Cross-platform (Windows + Linux paste injection)
+- [ ] Launch-on-login option
+- [ ] Cross-platform paste (Windows + Linux)
 - [ ] Streaming transcription (optional — big lift)
-- [ ] Custom vocabulary
+- [ ] Custom vocabulary / hotwords
 
 ## Open Questions
 
-- Whisper model default — `small` or `base.en`? Test latency on Apple Silicon.
-- Local LLM model for Chaperone — Llama 3.2 3B or smaller? Latency budget is ~200ms.
-- Should TurboTalk launch on login, or be opened manually each session? (Login agent recommended.)
+- Local LLM for Chaperone — Llama 3.2 3B or smaller? Latency budget ~200ms.
 - Promote to Libre product if/when usable. Trigger: "I use this every day for 2 weeks."

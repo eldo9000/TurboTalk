@@ -8,41 +8,41 @@ What this project can honestly claim today. Updated when a claim changes.
 
 ## What works end-to-end
 
-**M0 scaffold** — `npm run tauri dev` opens a window with Libre chrome (titlebar, window
-controls, theme). Confirmed visually on 2026-05-01. The window shows "TurboTalk" in the
-titlebar and "Voice dictation — M0 scaffold" in the body.
+**Full dictation loop** — confirmed 2026-05-01 on macOS 26.4.1 (Apple M4):
 
-## What is partially proven
+1. Hold Right Alt → mic opens (<200ms), red dot pulses
+2. Speak → audio captured 24 kHz mono F32 via cpal
+3. Release Right Alt → whisper-cli runs ggml-base.en via Metal (~130ms on M4)
+4. Transcript appears in TurboTalk window AND is pasted into the focused app via Cmd+V
+5. Prior clipboard contents are restored after paste
 
-- Rust compilation: all 451 crates compile clean on macOS.
-- Frontend: Vite + Svelte 5 + Tailwind 4 build and serve at port 1428.
-- `@libre/ui` components (WindowFrame, Titlebar) render correctly.
-- `get_theme` / `get_accent` Tauri commands registered and resolving.
+Proof: `[audio] wrote 42240 samples` (1.76s voice), transcript landed in Notes.app.
+
+## What is hardcoded / not yet configurable
+
+- Whisper binary: `/opt/homebrew/bin/whisper-cli`
+- Model: `~/.config/librewin/turbotalk/models/ggml-base.en.bin`
+- Hotkey: Right Alt (Right Option) — not rebindable
+- No settings UI, no tray icon, no config persistence
 
 ## What is explicitly not working
 
-- Hotkey capture (not implemented)
-- Mic recording (not implemented)
-- Whisper transcription (not implemented)
-- LLM cleanup / Chaperone Layer (not implemented)
-- Text paste injection (not implemented)
+- Chaperone Layer / LLM cleanup (not implemented)
 - Settings persistence (not implemented)
+- Tray icon (not implemented)
+- Launch on login (not implemented)
 
-## Support claims that are FORBIDDEN until stronger evidence exists
+## Key technical decisions
 
-- "TurboTalk transcribes voice." (No transcription code exists.)
-- "Push-to-talk works." (No hotkey code exists.)
-- "It pastes into apps." (No paste code exists.)
-- Any claim about latency, accuracy, or quality.
-
-## Current strategic bet
-
-**Reference, not fork.** Build from scratch using Handy / typr / sagascript as references.
-Reversal trigger: if M1 (hotkey + audio + recorder) takes more than two sessions, fork Handy instead.
+- **rdev dropped** — macOS 26 enforces `dispatch_assert_queue` on TSM APIs; rdev crashes
+  on its background thread. Replaced with direct `CGEventTap` via `core-graphics 0.24`.
+  Right Option detected by keycode 0x3D + `CGEventFlagAlternate` only — no TSM call.
+- **Homebrew whisper-cpp** — Metal-accelerated, not bundled as Tauri sidecar yet (M2).
+- **ggml-base.en** — 141MB, ~130ms latency on M4. Tiny model rejected (stub weights in brew bundle).
 
 ## Promotion criteria
 
 TurboTalk is a personal-use tool, not a Libre product. Promotion happens only if:
-- Eldo uses it daily for two consecutive weeks, AND
-- It demonstrably works for at least one non-Eldo person, AND
-- The Chaperone Layer pattern proves out and is worth shipping
+- Used daily for two consecutive weeks, AND
+- Demonstrably works for at least one non-Eldo person, AND
+- Chaperone Layer proves out and is worth shipping
