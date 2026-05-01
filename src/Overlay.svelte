@@ -39,6 +39,9 @@
 <style>
   :global(html, body, #app) {
     background: transparent !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
     width: 100%; height: 100%;
     margin: 0; padding: 0; overflow: hidden;
   }
