@@ -57,18 +57,26 @@
   const HISTORY_H = 280;
   const WINDOW_W  = 380;
 
-  function contentH() {
-    return Math.min(Math.ceil(outerEl.scrollHeight * (ZOOM_LEVELS[zoomIdx] / 100)), 700);
+  function contentSize() {
+    const zoom = ZOOM_LEVELS[zoomIdx] / 100;
+    const w = Math.ceil(WINDOW_W * zoom);
+    const h = Math.min(Math.ceil(outerEl.scrollHeight * zoom), Math.ceil(700 * zoom));
+    return { w, h };
   }
 
   $effect(() => {
+    const zoom = ZOOM_LEVELS[zoomIdx] / 100;
     if (activeTab === 'history') {
-      getCurrentWindow().setSize(new LogicalSize(WINDOW_W, HISTORY_H));
+      getCurrentWindow().setSize(new LogicalSize(
+        Math.ceil(WINDOW_W * zoom),
+        Math.ceil(HISTORY_H * zoom),
+      ));
       return;
     }
     if (!outerEl) return;
     const ro = new ResizeObserver(() => {
-      getCurrentWindow().setSize(new LogicalSize(WINDOW_W, contentH()));
+      const { w, h } = contentSize();
+      getCurrentWindow().setSize(new LogicalSize(w, h));
     });
     ro.observe(outerEl);
     return () => ro.disconnect();
@@ -90,7 +98,7 @@
     document.documentElement.style.zoom = `${ZOOM_LEVELS[zoomIdx]}%`;
     localStorage.setItem('tt-zoom', String(zoomIdx));
     // CSS zoom scales visuals but not layout metrics — re-fit the window
-    if (activeTab !== 'history') forceResize();
+    forceResize();
   });
 
   function zoomIn()  { if (zoomIdx < ZOOM_LEVELS.length - 1) zoomIdx++; }
@@ -211,8 +219,17 @@
   async function forceResize() {
     await tick();
     await new Promise(r => requestAnimationFrame(r));
-    if (!outerEl || activeTab === 'history') return;
-    getCurrentWindow().setSize(new LogicalSize(WINDOW_W, contentH()));
+    const zoom = ZOOM_LEVELS[zoomIdx] / 100;
+    if (activeTab === 'history') {
+      getCurrentWindow().setSize(new LogicalSize(
+        Math.ceil(WINDOW_W * zoom),
+        Math.ceil(HISTORY_H * zoom),
+      ));
+      return;
+    }
+    if (!outerEl) return;
+    const { w, h } = contentSize();
+    getCurrentWindow().setSize(new LogicalSize(w, h));
   }
 
   function switchTab(tab) {
@@ -394,20 +411,20 @@
       <div class="flex flex-col gap-0.5">
         <span class="text-[var(--text-secondary)] text-xs mb-0.5">Available models</span>
         {#each MODEL_CATALOG as m}
+          {@const isInstalled = cfgModels.some(p => p.endsWith(m.name + '.bin'))}
           <div class="flex items-center gap-2 py-1.5 border-b border-[var(--border,#2a2a2a)] last:border-0">
             <div class="flex-1 min-w-0">
               <span class="text-xs font-mono text-[var(--text-primary)]">{m.name}</span>
               <span class="text-[10px] text-[var(--text-tertiary,#666)] ml-1.5">{m.size}</span>
               <p class="text-[10px] text-[var(--text-tertiary,#666)] mt-0.5">{m.description}</p>
             </div>
-            {@const isInstalled = cfgModels.some(p => p.endsWith(m.name + '.bin'))}
             <button
               onclick={() => { if (!isInstalled) open(m.url); }}
               disabled={isInstalled}
-              class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap transition-colors
+              class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap text-white transition-colors
                      {isInstalled
-                       ? 'border-green-500/40 text-green-500/60 cursor-default'
-                       : 'border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white'}"
+                       ? 'border-green-500 bg-green-500/20 cursor-default'
+                       : 'border-[var(--accent)] bg-[var(--accent)]/20 hover:bg-[var(--accent)]/40'}"
             >{isInstalled ? '✓ Installed' : '↓ Download'}</button>
           </div>
         {/each}
