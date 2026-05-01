@@ -37,7 +37,10 @@ pub fn spawn(recorder: Arc<Recorder>, app: AppHandle) {
                                     match crate::transcribe::run(&path) {
                                         Ok(text) => {
                                             tracing::info!("[transcribe] {:?}", text);
-                                            let _ = app2.emit("transcript", text);
+                                            let _ = app2.emit("transcript", text.clone());
+                                            if let Err(e) = crate::paste::paste(&text) {
+                                                tracing::error!("[paste] {:?}", e);
+                                            }
                                         }
                                         Err(e) => {
                                             tracing::error!("[transcribe] {:?}", e);
