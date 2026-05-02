@@ -65,6 +65,18 @@ Download a model from the Models tab. Set your trigger key and mode in Settings.
 
 ---
 
+## For Engineers
+
+The parts that don't show up in a feature list but represent most of the real work:
+
+- **Explicit audio pipeline contract.** Every recording goes through a fixed, non-negotiable path: native mic capture → downmix mono → resample to 16 kHz → Silero VAD trim → min-duration reject → peak normalize to −1 dBFS → write 16 kHz mono 16-bit PCM WAV. This order is documented, tested, and enforced with named constants. No codec detours. No "supported formats." One correct format for Whisper.
+- **Stage timing on every dictation.** Post-release audio finalization is instrumented: downmix, resample, VAD, normalize, and WAV write each emit a timing entry. Optimization decisions are based on measured evidence, not assumptions.
+- **Strictly one in-flight dictation job.** The recorder has a full 6-state lifecycle: `Ready → Recording → FinalizingAudio → Transcribing → Cleaning → Pasting → Ready`. Pressing the hotkey while a job is in any non-Ready state is handled explicitly — a `dictation-busy` event fires, no second job spawns. The foundation for a deliberate queue is there when it's needed.
+- **Transcription, cleanup, and paste are separate named stages.** Whisper runs and returns raw text. Cleanup runs as its own stage. Paste runs as its own stage. Each has its own lifecycle state transition and its own timing. "Transcribing" means Whisper only — not Whisper-plus-postprocessing silently bundled together.
+- **Paste target is observable.** The frontmost app is captured at recording start and again immediately before paste. Both are logged with the job id. If focus changed between the two, a `focus-changed-before-paste` event fires and surfaces a recoverable UI banner. No silent paste into the wrong window.
+- **Silero VAD session reuse.** VAD model initialization (ONNX session construction) is not paid on every dictation. The session is held and reused with per-call state isolation to ensure no speech bounds from a prior recording can influence the next.
+- **Persistent Whisper worker (in progress).** The current model spawns a fresh `whisper-cli` process per recording. Whisper's dominant cost is model load and Metal context setup — not inference. A persistent transcription worker that keeps the model warm between dictations is the next major latency win.
+
 ## License
 
 MIT.
