@@ -92,6 +92,22 @@
       setTimeout(() => { mode = 'idle'; }, 2500);
     }).then(u => uns.push(u));
 
+    listen('recording-discarded', () => {
+      // Silence-trim discarded all samples — clear overlay immediately so
+      // it doesn't hang on "Transcribing…" with no transcript ever arriving.
+      mode = 'idle';
+      draw();
+    }).then(u => uns.push(u));
+
+    listen('paste-error', () => {
+      // Transcription succeeded but paste failed — show the same brief
+      // error pulse the overlay uses for transcript errors. The banner in
+      // the main window carries the detailed message.
+      mode = 'error';
+      draw();
+      setTimeout(() => { mode = 'idle'; }, 2500);
+    }).then(u => uns.push(u));
+
     listen('audio-level', (e) => {
       if (mode !== 'recording') return;
       const v = Math.min(1.0, e.payload);

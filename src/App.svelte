@@ -315,8 +315,21 @@ Reply with only the single word, lowercase, no punctuation.
       }
     }).then(u => unlisteners.push(u));
     listen('transcript-error', (e) => {
+      recording = false;
       transcriptError = e.payload || 'Transcription failed.';
       setTimeout(() => { transcriptError = ''; }, 5000);
+    }).then(u => unlisteners.push(u));
+    listen('paste-error', (e) => {
+      // Transcript still appears in history; surface a distinct banner so the
+      // user knows nothing was actually pasted into the focused app.
+      transcriptError = e.payload || "Couldn't paste — check Accessibility permission";
+      setTimeout(() => { transcriptError = ''; }, 5000);
+    }).then(u => unlisteners.push(u));
+    listen('recording-discarded', () => {
+      // Recording was too quiet/short — silently reset the overlay state.
+      // No banner: this is a normal outcome, not an error.
+      recording = false;
+      transcribing = false;
     }).then(u => unlisteners.push(u));
     listen('open-history', () => switchTab('history')).then(u => unlisteners.push(u));
 
