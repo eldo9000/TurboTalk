@@ -117,3 +117,26 @@ and would add streaming-pipeline complexity with no measured payoff.
 
 Task file moves to `tasks/done/TASK-19-…` with this deferral note as the
 proof-of-completion.
+
+## TASK-20 (warm Whisper backend retry) — 2026-05-02 → option 3 landed
+
+Retried TASK-18 with a three-option ladder. Option 1 (`whisper-rs`) gate
+**failed** again — same `cmTC_*` cmake hang as the first deferral, killed at
+the 300-second budget. Option 2 (`whisper-server`) is **blocked** on a
+packaging decision: the binary is not bundled in `src-tauri/binaries/` and
+internet downloads were out of scope for this retry. Option 3 (serialized
+worker around `whisper-cli`) **landed**: `TranscriptionWorker` in
+`src-tauri/src/transcribe.rs` owns binary+model path validation, prompt
+state, and a `Mutex` spawn lock; `lib.rs::save_config` invalidates the
+cached worker on every save so model swaps and vocabulary edits are
+picked up next dictation.
+
+**Warmup is still pending.** Each transcribe call still spawns
+`whisper-cli` and reloads the model — the lifecycle wrapper centralizes
+the spawn path but does not amortize startup cost. Re-attempt unblocks
+on either of (a) `whisper-rs-sys` upstream fix for the macOS 26.x cmake
+hang, or (b) deciding to bundle `whisper-server` alongside `whisper-cli`
+in `src-tauri/binaries/`.
+
+`cargo build`, `cargo test` (66 passed), and
+`cargo clippy -D warnings` all green for `src-tauri`.

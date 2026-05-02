@@ -116,3 +116,50 @@ Re-attempt conditions (any one):
 - Acceptable to drop down to option 3 (serialized worker around `whisper-cli`)
   if the lifecycle ownership benefit is wanted independent of warmup.
 
+## Retry 2026-05-02 — outcome: option 3 (lifecycle wrapper, no warmup)
+
+TASK-20 retried this work with three branched options. Outcome:
+
+- **Option 1 (whisper-rs).** Gate: a temp `cargo check` of `whisper-rs = "0.16"`
+  with the `metal` feature must complete in under 5 minutes. Built the probe
+  crate at `/tmp/whisper-rs-probe/`, ran `cargo check` in the background, and
+  killed it after a hard 300-second wait — the build was still inside
+  `whisper-rs-sys` with no progress and matching `cmake` / `cmTC_*` processes
+  parented to it. **Same hang as the original deferral, reproduced cleanly.**
+  No `cargo check` stdout reached the log buffer before the kill, consistent
+  with cargo holding output until the failing child exits. Abandoned per the
+  original deferral note ("do not fork `whisper-rs-sys` to suppress the cmake
+  flags").
+- **Option 2 (whisper-server long-lived sidecar).** Gate: bundled binary must
+  exist in `src-tauri/binaries/`. Only `whisper-cli-aarch64-apple-darwin`
+  plus three dylibs are present; no `whisper-server`. Per dispatch guardrails
+  for this retry, downloading external binaries is out of scope — option 2
+  is therefore blocked on a packaging decision (whether to bundle whisper.cpp's
+  server binary alongside the CLI), not on a code constraint. Deferred.
+- **Option 3 (serialized worker around `whisper-cli`).** Implemented. Refactor:
+  introduced `TranscriptionWorker` in `src-tauri/src/transcribe.rs` that
+  validates the binary path + model path at construction, holds them plus
+  the `cleanup.vocabulary` prompt, and serializes spawns through an internal
+  `Mutex`. A process-wide `Mutex<Option<Arc<TranscriptionWorker>>>` caches
+  the worker; `run_raw` get-or-builds it from the live config and rebuilds
+  if `cfg.whisper.model` differs from the cached canonical path. `lib.rs::save_config`
+  now calls `transcribe::invalidate_worker()` on every save so vocabulary
+  edits and model swaps are picked up next dictation.
+
+**This is a lifecycle/structural cleanup, not a warmup win.** Each transcribe
+call still spawns `whisper-cli` and reloads the model end-to-end; the model
+is not held in memory between recordings. The original task's warmup goal
+remains pending. The benefit landed is: path validation runs once per
+config-change rather than per recording, the spawn point is centralized
+inside one type with explicit one-in-flight semantics matching TASK-14's
+invariant, and the `TranscriptionWorker` shape is the seam where a real
+warm worker (whisper-rs once cmake is unstuck, or whisper-server once it's
+bundled) will plug in without changing the call site in `hotkey.rs`.
+
+`SESSION-STATUS.md` should reflect that warmup is still pending.
+
+Verification: `cargo build`, `cargo test` (66 passed; 1 pre-existing ignore),
+and `cargo clippy -D warnings` all green for `src-tauri`. Manual proofs
+(first-recording vs repeated-recording latency, model-swap invalidation)
+require a real microphone and are deferred to user-driven runtime testing.
+
