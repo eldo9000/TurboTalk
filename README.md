@@ -4,6 +4,14 @@ Voice dictation for getting work done.
 
 ---
 
+## Setup
+
+- Download a model from the Models tab. 
+- Set your trigger key and mode in Settings. 
+- Start dictating.
+
+---
+
 ## Why this exists
 
 Every other dictation tool is built around a feature list. You get a dropdown of 40 models, a settings panel with 12 tabs, and a history buried three clicks deep. They optimized for "supported" instead of "usable."
@@ -59,15 +67,9 @@ Everything runs on your machine. Metal-accelerated on Apple Silicon. Nothing lea
 
 ---
 
-## Setup
-
-Download a model from the Models tab. Set your trigger key and mode in Settings. Start dictating.
-
----
-
 ## For Engineers
 
-The parts that don't show up in a feature list but represent most of the real work:
+The parts that don't show up in a feature list but represent most of the real work, this is actually why Turbo Talk is well made:
 
 - **Explicit audio pipeline contract.** Every recording goes through a fixed, non-negotiable path: native mic capture → downmix mono → resample to 16 kHz → Silero VAD trim → min-duration reject → peak normalize to −1 dBFS → write 16 kHz mono 16-bit PCM WAV. This order is documented, tested, and enforced with named constants. No codec detours. No "supported formats." One correct format for Whisper.
 - **Stage timing on every dictation.** Post-release audio finalization is instrumented: downmix, resample, VAD, normalize, and WAV write each emit a timing entry. Optimization decisions are based on measured evidence, not assumptions.
