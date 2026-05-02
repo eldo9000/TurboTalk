@@ -25,6 +25,7 @@ librewin-common = { git = "https://github.com/eldo9000/Libre-Apps.git", tag = "v
 # Audio
 cpal            = "0.15"
 hound           = "3.5"
+rubato          = "0.15"
 
 # Clipboard / paste injection
 arboard         = "3"
