@@ -16,6 +16,7 @@
 // full deferral evidence.
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::Instant;
 
 /// Allowed roots for the whisper-cli binary:
 /// - the directory containing the running executable (release bundle sidecar)
@@ -214,7 +215,15 @@ impl TranscriptionWorker {
             args.push(self.vocabulary.join(", "));
         }
 
+        // TASK-21: capture per-recording whisper subprocess wall time so we can
+        // compare it against the audio-finalization stage sum and decide whether
+        // the streaming finalizer in TASK-19 is worth implementing. The
+        // measurement brackets exactly the spawn → exit window — the model load
+        // and the actual decode are both inside it, which is what we want.
+        let t_whisper_start = Instant::now();
         let output = std::process::Command::new(&self.bin).args(&args).output()?;
+        let whisper_ms = t_whisper_start.elapsed().as_millis();
+        tracing::info!("[transcribe] whisper took {} ms", whisper_ms);
 
         // Even on exit-0, stderr can contain warnings ("argument not recognized") that
         // explain why the .txt below is missing. Log it at debug; promote to warn if
