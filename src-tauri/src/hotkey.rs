@@ -17,19 +17,31 @@ fn key_for_name(name: &str) -> (i64, CGEventFlags) {
     }
 }
 
+/// Emit a UI-critical event. Logs at warn-level if the emit fails (e.g. no
+/// frontend listener is registered yet). Non-critical signals like
+/// `audio-level` can keep using fire-and-forget `let _ = app.emit(...)`.
+fn emit_critical<P: serde::Serialize + Clone>(app: &AppHandle, event: &str, payload: P) {
+    if let Err(e) = app.emit(event, payload) {
+        tracing::warn!("[hotkey] failed to emit {}: {:?}", event, e);
+    }
+}
+
 fn ptt_down(recorder: &Recorder, tray_icon: &TrayIcon, app: &AppHandle) {
     if let Err(e) = recorder.start() {
-        tracing::error!("[hotkey] start failed: {:?}", e);
+        // Illegal transition or audio error — do NOT emit ptt-down, do NOT
+        // change tray icon. Frontend stays in its current state.
+        tracing::warn!("[hotkey] start ignored: {}", e);
+        return;
     }
     let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Recording)));
-    let _ = app.emit("ptt-down", ());
+    emit_critical(app, "ptt-down", ());
 }
 
 fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
-    let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Transcribing)));
-    let _ = app.emit("ptt-up", ());
     match recorder.stop() {
         Ok(Some(path)) => {
+            let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Transcribing)));
+            emit_critical(app, "ptt-up", ());
             let app2  = app.clone();
             let tray2 = tray_icon.clone();
             let rec2  = recorder.clone();
@@ -37,15 +49,20 @@ fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
                 match crate::transcribe::run(&path) {
                     Ok(text) => {
                         tracing::info!("[transcribe] {:?}", text);
-                        let _ = app2.emit("transcript", text.clone());
+                        emit_critical(&app2, "transcript", text.clone());
                         if let Err(e) = crate::paste::paste(&text) {
                             tracing::error!("[paste] {:?}", e);
+                            // Surface to UI so the user knows the transcript
+                            // was processed but never reached the focused app.
+                            // Keep the message short and actionable.
+                            let msg = "Couldn't paste — check Accessibility permission".to_string();
+                            emit_critical(&app2, "paste-error", msg);
                         }
                     }
                     Err(e) => {
                         tracing::error!("[transcribe] {:?}", e);
                         let msg = format!("{}", e);
-                        let _ = app2.emit("transcript-error", msg);
+                        emit_critical(&app2, "transcript-error", msg);
                     }
                 }
                 let _ = tray2.set_icon(Some(tray::make_icon(TrayState::Idle)));
@@ -53,11 +70,15 @@ fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
             });
         }
         Ok(None) => {
+            // Silence trim discarded all samples. Tell the frontend to clear
+            // its overlay — otherwise it stays stuck on "Transcribing…".
             let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Idle)));
+            emit_critical(app, "recording-discarded", ());
         }
         Err(e) => {
-            tracing::error!("[hotkey] stop failed: {:?}", e);
-            let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Idle)));
+            // Illegal transition (e.g. stop while not Recording) — do NOT
+            // emit ptt-up or any other event. Frontend stays as-is.
+            tracing::warn!("[hotkey] stop ignored: {}", e);
         }
     }
 }
@@ -95,12 +116,10 @@ pub fn spawn(
                                 ptt_down(&recorder, &tray_icon, &app);
                             }
                         }
+                    } else if is_key_down {
+                        ptt_down(&recorder, &tray_icon, &app);
                     } else {
-                        if is_key_down {
-                            ptt_down(&recorder, &tray_icon, &app);
-                        } else {
-                            ptt_up(&recorder, &tray_icon, &app);
-                        }
+                        ptt_up(&recorder, &tray_icon, &app);
                     }
                 }
                 None
