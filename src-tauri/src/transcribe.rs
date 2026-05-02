@@ -106,7 +106,14 @@ fn validate_model_path(raw_model: &str, canon_models_dir: &Path) -> anyhow::Resu
     Ok(canon_model)
 }
 
-pub fn run(wav: &Path) -> anyhow::Result<String> {
+/// Run whisper-cli on `wav` and return the **raw** trimmed transcript text.
+///
+/// This function is responsible only for the Whisper stage: locating the
+/// sidecar binary, validating the model path, spawning the process, and
+/// reading back the `.txt` output. It does **not** call `cleanup::process` —
+/// the caller is expected to drive the `Transcribing → Cleaning → Pasting`
+/// stages explicitly so each stage's latency is observable (TASK-15).
+pub fn run_raw(wav: &Path) -> anyhow::Result<String> {
     let cfg = crate::settings::load();
     let bin = find_whisper(&cfg.whisper.bin)?;
 
@@ -178,7 +185,7 @@ pub fn run(wav: &Path) -> anyhow::Result<String> {
     })?;
     let _ = std::fs::remove_file(&txt_path);
 
-    Ok(crate::cleanup::process(text.trim()))
+    Ok(text.trim().to_string())
 }
 
 #[cfg(test)]

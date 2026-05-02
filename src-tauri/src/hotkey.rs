@@ -6,8 +6,35 @@ use core_graphics::event::{
     CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
     CGEventType, EventField,
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{tray::TrayIcon, AppHandle, Emitter};
+
+/// Monotonically-increasing identifier attached to every accepted dictation
+/// job. Incremented exactly once per successful `recorder.start()` so that
+/// backend logs and frontend `dictation-stage` events for a single press all
+/// carry the same `job_id`. Wraps after ~1.8e19 jobs — i.e. never.
+static JOB_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Allocate the next `job_id`. First call returns 1.
+fn next_job_id() -> u64 {
+    JOB_ID.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+/// Payload for the additive `dictation-stage` event introduced in TASK-15.
+/// Frontend listeners may ignore this entirely; existing events
+/// (`ptt-down`, `ptt-up`, `transcript`, `recording-discarded`, …) are
+/// preserved unchanged for backward compatibility.
+#[derive(Clone, serde::Serialize)]
+struct DictationStage {
+    job_id: u64,
+    stage: &'static str,
+}
+
+fn emit_stage(app: &AppHandle, job_id: u64, stage: &'static str) {
+    tracing::debug!("[dictation job_id={}] stage={}", job_id, stage);
+    emit_critical(app, "dictation-stage", DictationStage { job_id, stage });
+}
 
 fn key_for_name(name: &str) -> (i64, CGEventFlags) {
     match name {
@@ -38,6 +65,12 @@ fn emit_critical<P: serde::Serialize + Clone>(app: &AppHandle, event: &str, payl
 // Both ptt_down and ptt_up therefore spawn a worker thread and return
 // immediately. The tap callback finishes in microseconds.
 
+/// Cell shared between `ptt_down` and `ptt_up` so the upstroke worker can
+/// recover the `job_id` allocated by the downstroke worker. Holds `None`
+/// when no recording is in flight. Guarded by `parking_lot::Mutex`; the
+/// critical section is a single load/store and never blocks audio work.
+static CURRENT_JOB_ID: parking_lot::Mutex<Option<u64>> = parking_lot::Mutex::new(None);
+
 fn ptt_down(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
     let rec  = recorder.clone();
     let tray = tray_icon.clone();
@@ -62,8 +95,14 @@ fn ptt_down(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
             emit_critical(&app, "dictation-busy", rec.state().to_string());
             return;
         }
+        // Recording was accepted — allocate this job's id.
+        let job_id = next_job_id();
+        *CURRENT_JOB_ID.lock() = Some(job_id);
+        tracing::info!("[hotkey job_id={}] recording started", job_id);
+
         let _ = tray.set_icon(Some(tray::make_icon(TrayState::Recording)));
         emit_critical(&app, "ptt-down", ());
+        emit_stage(&app, job_id, "recording");
     });
 }
 
@@ -72,6 +111,11 @@ fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
     let tray = tray_icon.clone();
     let app  = app.clone();
     std::thread::spawn(move || {
+        // Recover the job id allocated when this recording started. If the
+        // upstroke arrives without a matching downstroke (no in-flight job),
+        // we still call `rec.stop()` defensively but skip stage emissions.
+        let job_id_opt = CURRENT_JOB_ID.lock().take();
+
         // Tray-state policy: Recording icon only during literal capture; the
         // moment we enter FinalizingAudio (inside `rec.stop()`) the tray flips
         // to Transcribing and stays that way through Cleaning + Pasting.
@@ -81,6 +125,9 @@ fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
                 // We are now in `FinalizingAudio` per recorder contract.
                 let _ = tray.set_icon(Some(tray::make_icon(TrayState::Transcribing)));
                 emit_critical(&app, "ptt-up", ());
+                if let Some(job_id) = job_id_opt {
+                    emit_stage(&app, job_id, "finalizing_audio");
+                }
 
                 // `path` is a tempfile::TempPath — its Drop deletes the WAV
                 // automatically whether we exit via the success arm, the
@@ -88,42 +135,72 @@ fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
 
                 // FinalizingAudio → Transcribing
                 if let Err(e) = rec.begin_transcribing() {
-                    tracing::error!("[hotkey] begin_transcribing failed: {}", e);
+                    tracing::error!(
+                        "[hotkey job_id={:?}] begin_transcribing failed: {}",
+                        job_id_opt, e
+                    );
                     rec.finish();
                     let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                    if let Some(job_id) = job_id_opt {
+                        emit_stage(&app, job_id, "ready");
+                    }
                     return;
                 }
+                if let Some(job_id) = job_id_opt {
+                    emit_stage(&app, job_id, "transcribing");
+                }
 
-                let transcribe_result = crate::transcribe::run(&path);
+                // Stage 1: raw whisper transcription (no cleanup).
+                let transcribe_result = crate::transcribe::run_raw(&path);
 
-                // NOTE: TASK-15 will split the cleanup pass out of
-                // `transcribe::run` so the Cleaning state covers the cleanup
-                // call only. Today cleanup runs inside `transcribe::run`, so
-                // we walk Transcribing → Cleaning at the same instant —
-                // structure for the future, accuracy will follow.
+                // Transcribing → Cleaning (always — even on whisper error,
+                // so the lifecycle reaches `finish` through legal transitions).
                 if rec.begin_cleaning().is_err() {
                     // Should be unreachable given begin_transcribing succeeded,
                     // but if it does happen the recorder has been forced out
                     // from under us (e.g. cancel). Bail cleanly.
                     rec.finish();
                     let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                    if let Some(job_id) = job_id_opt {
+                        emit_stage(&app, job_id, "ready");
+                    }
                     return;
+                }
+                if let Some(job_id) = job_id_opt {
+                    emit_stage(&app, job_id, "cleaning");
                 }
 
                 match transcribe_result {
-                    Ok(text) => {
-                        tracing::info!("[transcribe] {:?}", text);
-                        emit_critical(&app, "transcript", text.clone());
+                    Ok(raw_text) => {
+                        tracing::info!(
+                            "[transcribe job_id={:?}] raw {:?}",
+                            job_id_opt, raw_text
+                        );
+
+                        // Stage 2: cleanup as its own explicit call site.
+                        let final_text = crate::cleanup::process(&raw_text);
+                        tracing::info!(
+                            "[cleanup   job_id={:?}] final {:?}",
+                            job_id_opt, final_text
+                        );
+                        emit_critical(&app, "transcript", final_text.clone());
 
                         // Cleaning → Pasting
                         if rec.begin_pasting().is_err() {
                             rec.finish();
                             let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                            if let Some(job_id) = job_id_opt {
+                                emit_stage(&app, job_id, "ready");
+                            }
                             return;
                         }
+                        if let Some(job_id) = job_id_opt {
+                            emit_stage(&app, job_id, "pasting");
+                        }
 
-                        if let Err(e) = crate::paste::paste(&text) {
-                            tracing::error!("[paste] {:?}", e);
+                        // Stage 3: paste into the focused app.
+                        if let Err(e) = crate::paste::paste(&final_text) {
+                            tracing::error!("[paste job_id={:?}] {:?}", job_id_opt, e);
                             // Surface to UI so the user knows the transcript
                             // was processed but never reached the focused app.
                             let msg = "Couldn't paste — check Accessibility permission".to_string();
@@ -131,7 +208,7 @@ fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
                         }
                     }
                     Err(e) => {
-                        tracing::error!("[transcribe] {:?}", e);
+                        tracing::error!("[transcribe job_id={:?}] {:?}", job_id_opt, e);
                         let msg = format!("{}", e);
                         emit_critical(&app, "transcript-error", msg);
                     }
@@ -141,6 +218,9 @@ fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
                 // took (success, transcribe error, or paste error).
                 rec.finish();
                 let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                if let Some(job_id) = job_id_opt {
+                    emit_stage(&app, job_id, "ready");
+                }
                 // `path` drops here → WAV file deleted from /tmp.
             }
             Ok(StopOutcome::Discard(reason)) => {
@@ -155,14 +235,20 @@ fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
                     emit_critical(&app, "recording-too-short", duration_ms);
                 }
                 emit_critical(&app, "recording-discarded", ());
+                if let Some(job_id) = job_id_opt {
+                    emit_stage(&app, job_id, "ready");
+                }
             }
             Err(e) => {
                 // Illegal transition (e.g. stop while not Recording) or audio
                 // pipeline error. The recorder has already returned itself to
                 // Ready on the error arm. Do NOT emit ptt-up. Restore the tray
                 // defensively in case this was an audio failure mid-job.
-                tracing::warn!("[hotkey] stop ignored: {}", e);
+                tracing::warn!("[hotkey job_id={:?}] stop ignored: {}", job_id_opt, e);
                 let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                if let Some(job_id) = job_id_opt {
+                    emit_stage(&app, job_id, "ready");
+                }
             }
         }
     });
