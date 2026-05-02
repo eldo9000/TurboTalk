@@ -1,6 +1,21 @@
 // Spawns whisper-cli, feeds it the WAV, reads back the transcript.
 // Output strategy: -otxt writes <wav_path>.wav.txt; we read and delete that file.
+//
+// TASK-20 (option 3): the spawn lifecycle is wrapped in `TranscriptionWorker`
+// so callers go through one type with a `Mutex` enforcing the one-in-flight
+// invariant from TASK-14. The worker still spawns `whisper-cli` per call —
+// there is **no model warmup** in this option. Options 1 (`whisper-rs`) and
+// 2 (`whisper-server` long-lived sidecar) were both blocked on this host on
+// 2026-05-02:
+//   - Option 1: `cargo check` of `whisper-rs = "0.16"` (metal feature) hung
+//     in `whisper-rs-sys`'s build script for 300+ s, same `cmTC_*` cmake
+//     probe symptom as the original TASK-18 deferral. Repro confirmed.
+//   - Option 2: `whisper-server` is not bundled in `src-tauri/binaries/`,
+//     and downloading external binaries is out of scope for this task.
+// See `tasks/done/TASK-18-persistent-whisper-transcription-worker.md` for
+// full deferral evidence.
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// Allowed roots for the whisper-cli binary:
 /// - the directory containing the running executable (release bundle sidecar)
@@ -106,6 +121,179 @@ fn validate_model_path(raw_model: &str, canon_models_dir: &Path) -> anyhow::Resu
     Ok(canon_model)
 }
 
+/// Lifecycle owner for whisper transcription. TASK-20 option 3: this struct
+/// holds the validated model path and prompt for the current configuration so
+/// callers don't re-run path validation per recording. The internal `Mutex`
+/// makes the one-in-flight invariant from TASK-14 explicit at the type level
+/// — any second concurrent caller blocks here rather than racing the spawn.
+///
+/// **This implementation does NOT keep the whisper model warm.** Each
+/// `transcribe` call still spawns `whisper-cli` and reloads the model. Options
+/// 1 (`whisper-rs`) and 2 (`whisper-server`) were both blocked on this host
+/// on 2026-05-02 — see the module-level deferral note. A real warm worker
+/// remains future work; this struct is the seam where it will eventually
+/// plug in.
+pub struct TranscriptionWorker {
+    /// Canonicalized whisper-cli binary path. Validated at construction.
+    bin: PathBuf,
+    /// Canonicalized model path. Validated at construction; lives inside
+    /// `~/.config/librewin/turbotalk/models/`.
+    model: PathBuf,
+    /// Vocabulary phrases passed to whisper as `--prompt`. Empty = no prompt.
+    vocabulary: Vec<String>,
+    /// Spawn serialization. Held across the whole `transcribe` call so the
+    /// process tree can never have two whisper-cli instances at once.
+    /// (Option 3 has no warm context to protect, but this matches the shape
+    /// options 1 and 2 will need.)
+    spawn_lock: Mutex<()>,
+}
+
+impl TranscriptionWorker {
+    /// Build a worker from a snapshot of the current settings. Validates the
+    /// binary path and the model path eagerly so a misconfigured `config.toml`
+    /// surfaces at construction time, not deep inside a spawn call.
+    pub fn from_config(cfg: &crate::settings::Config) -> anyhow::Result<Self> {
+        let bin = find_whisper(&cfg.whisper.bin)?;
+        let canon_models_dir = crate::settings::canonical_models_dir().ok_or_else(|| {
+            anyhow::anyhow!(
+                "models directory does not exist — create ~/.config/librewin/turbotalk/models/ \
+                 and place a ggml model there"
+            )
+        })?;
+        let model = validate_model_path(&cfg.whisper.model, &canon_models_dir)?;
+        Ok(Self {
+            bin,
+            model,
+            vocabulary: cfg.cleanup.vocabulary.clone(),
+            spawn_lock: Mutex::new(()),
+        })
+    }
+
+    /// The canonicalized model path this worker was built against. Callers
+    /// can compare against a fresh `cfg.whisper.model` to decide whether to
+    /// rebuild the worker.
+    pub fn model_path(&self) -> &Path {
+        &self.model
+    }
+
+    /// Run whisper-cli on `wav` and return the **raw** trimmed transcript text.
+    /// Holds `spawn_lock` for the whole call.
+    pub fn transcribe(&self, wav: &Path) -> anyhow::Result<String> {
+        let _guard = self.spawn_lock.lock().unwrap_or_else(|e| e.into_inner());
+
+        let model_str = self
+            .model
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("model path is not valid UTF-8: {:?}", self.model))?;
+
+        // whisper-cli appends .txt to the full input filename: <wav>.wav.txt
+        let txt_path = PathBuf::from(format!("{}.txt", wav.display()));
+
+        // Flags tuned for short-form push-to-talk dictation (not long-form transcription):
+        //   -mc 0            max-context 0 = don't carry prior-segment text into decoding
+        //                    (whisper.cpp's equivalent of OpenAI Whisper's --no-context)
+        //   --beam-size 5    moderate bump from default 1; better short-utterance accuracy
+        //   --temperature 0  deterministic decoding; whisper.cpp still falls back internally on no-speech
+        //   --suppress-nst   suppress non-speech tokens (e.g. <|nospeech|>); pairs with VAD
+        // The user-editable `cleanup.vocabulary` (already used by the Chaperone classifier) is
+        // also fed to whisper as `--prompt` to bias spelling of names/jargon/identifiers.
+        let mut args: Vec<String> = vec![
+            "-m".into(), model_str.to_string(),
+            "-f".into(), wav.to_str().unwrap().to_string(),
+            "-otxt".into(),
+            "-np".into(),
+            "-nt".into(),
+            "-l".into(), "en".into(),
+            "-mc".into(), "0".into(),
+            "--beam-size".into(), "5".into(),
+            "--temperature".into(), "0".into(),
+            "--suppress-nst".into(),
+        ];
+        if !self.vocabulary.is_empty() {
+            args.push("--prompt".into());
+            args.push(self.vocabulary.join(", "));
+        }
+
+        let output = std::process::Command::new(&self.bin).args(&args).output()?;
+
+        // Even on exit-0, stderr can contain warnings ("argument not recognized") that
+        // explain why the .txt below is missing. Log it at debug; promote to warn if
+        // the next read fails.
+        if !output.stderr.is_empty() {
+            tracing::debug!(
+                "[transcribe] whisper-cli stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("whisper-cli failed ({}): {}", output.status, stderr);
+        }
+
+        let text = std::fs::read_to_string(&txt_path).map_err(|_| {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::anyhow!(
+                "whisper output file not found: {:?}\n--- whisper-cli stderr ---\n{}",
+                txt_path,
+                stderr
+            )
+        })?;
+        let _ = std::fs::remove_file(&txt_path);
+
+        Ok(text.trim().to_string())
+    }
+}
+
+/// Process-wide handle to the active worker. `None` on cold start and after
+/// model invalidation; rebuilt lazily by `run_raw`.
+///
+/// The outer `Mutex` is the sequencing point — it serializes `take` /
+/// `replace` / read accesses across the recorder, settings, and any future
+/// app-shutdown drop site. The inner `Option` represents "worker not yet
+/// built (or invalidated)".
+static WORKER: Mutex<Option<std::sync::Arc<TranscriptionWorker>>> = Mutex::new(None);
+
+/// Drop the cached worker. Called by `settings::save` (via `lib.rs`) when the
+/// user changes the model — the next `run_raw` will rebuild against the new
+/// config. Idempotent.
+pub fn invalidate_worker() {
+    let mut slot = WORKER.lock().unwrap_or_else(|e| e.into_inner());
+    if slot.is_some() {
+        tracing::info!("[transcribe] worker invalidated");
+    }
+    *slot = None;
+}
+
+/// Get-or-build the worker against the current settings snapshot. If the
+/// cached worker's model differs from the current `cfg.whisper.model`, it is
+/// dropped and rebuilt. Returns an `Arc` so the spawn call can drop the outer
+/// mutex before the (potentially long) whisper invocation.
+fn worker_for(cfg: &crate::settings::Config) -> anyhow::Result<std::sync::Arc<TranscriptionWorker>> {
+    let mut slot = WORKER.lock().unwrap_or_else(|e| e.into_inner());
+
+    // Cheap cache-validity check: compare canonicalized model paths.
+    // canonicalize() may fail if the file was deleted out from under us —
+    // treat that as "rebuild and let the build error surface".
+    let configured_canon = std::path::PathBuf::from(&cfg.whisper.model).canonicalize().ok();
+    let cached_matches = match (&*slot, configured_canon.as_ref()) {
+        (Some(w), Some(c)) => w.model_path() == c.as_path(),
+        _ => false,
+    };
+
+    if cached_matches {
+        return Ok(slot.as_ref().unwrap().clone());
+    }
+
+    let fresh = std::sync::Arc::new(TranscriptionWorker::from_config(cfg)?);
+    *slot = Some(fresh.clone());
+    tracing::info!(
+        "[transcribe] worker built for model {:?}",
+        fresh.model_path()
+    );
+    Ok(fresh)
+}
+
 /// Run whisper-cli on `wav` and return the **raw** trimmed transcript text.
 ///
 /// This function is responsible only for the Whisper stage: locating the
@@ -113,79 +301,15 @@ fn validate_model_path(raw_model: &str, canon_models_dir: &Path) -> anyhow::Resu
 /// reading back the `.txt` output. It does **not** call `cleanup::process` —
 /// the caller is expected to drive the `Transcribing → Cleaning → Pasting`
 /// stages explicitly so each stage's latency is observable (TASK-15).
+///
+/// TASK-20: routes through `TranscriptionWorker` for lifecycle ownership.
+/// On worker-build failure (e.g. invalid model path) the function returns
+/// the error directly — the cached worker remains absent so a fixed config
+/// is picked up on the next call.
 pub fn run_raw(wav: &Path) -> anyhow::Result<String> {
     let cfg = crate::settings::load();
-    let bin = find_whisper(&cfg.whisper.bin)?;
-
-    // Canonicalize the model path and verify it lives inside the allowed
-    // models directory. Blocks `model = "/etc/passwd"` style attacks and
-    // symlink escapes from the models dir.
-    let canon_models_dir = crate::settings::canonical_models_dir().ok_or_else(|| {
-        anyhow::anyhow!(
-            "models directory does not exist — create ~/.config/librewin/turbotalk/models/ \
-             and place a ggml model there"
-        )
-    })?;
-    let canon_model = validate_model_path(&cfg.whisper.model, &canon_models_dir)?;
-    let model_str = canon_model
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("model path is not valid UTF-8: {:?}", canon_model))?;
-
-    // whisper-cli appends .txt to the full input filename: <wav>.wav.txt
-    let txt_path = PathBuf::from(format!("{}.txt", wav.display()));
-
-    // Flags tuned for short-form push-to-talk dictation (not long-form transcription):
-    //   -mc 0            max-context 0 = don't carry prior-segment text into decoding
-    //                    (whisper.cpp's equivalent of OpenAI Whisper's --no-context)
-    //   --beam-size 5    moderate bump from default 1; better short-utterance accuracy
-    //   --temperature 0  deterministic decoding; whisper.cpp still falls back internally on no-speech
-    //   --suppress-nst   suppress non-speech tokens (e.g. <|nospeech|>); pairs with VAD
-    // The user-editable `cleanup.vocabulary` (already used by the Chaperone classifier) is
-    // also fed to whisper as `--prompt` to bias spelling of names/jargon/identifiers.
-    let mut args: Vec<String> = vec![
-        "-m".into(), model_str.to_string(),
-        "-f".into(), wav.to_str().unwrap().to_string(),
-        "-otxt".into(),
-        "-np".into(),
-        "-nt".into(),
-        "-l".into(), "en".into(),
-        "-mc".into(), "0".into(),
-        "--beam-size".into(), "5".into(),
-        "--temperature".into(), "0".into(),
-        "--suppress-nst".into(),
-    ];
-    if !cfg.cleanup.vocabulary.is_empty() {
-        args.push("--prompt".into());
-        args.push(cfg.cleanup.vocabulary.join(", "));
-    }
-
-    let output = std::process::Command::new(&bin)
-        .args(&args)
-        .output()?;
-
-    // Even on exit-0, stderr can contain warnings ("argument not recognized") that
-    // explain why the .txt below is missing. Log it at debug; promote to warn if
-    // the next read fails.
-    if !output.stderr.is_empty() {
-        tracing::debug!("[transcribe] whisper-cli stderr: {}", String::from_utf8_lossy(&output.stderr));
-    }
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("whisper-cli failed ({}): {}", output.status, stderr);
-    }
-
-    let text = std::fs::read_to_string(&txt_path).map_err(|_| {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::anyhow!(
-            "whisper output file not found: {:?}\n--- whisper-cli stderr ---\n{}",
-            txt_path,
-            stderr
-        )
-    })?;
-    let _ = std::fs::remove_file(&txt_path);
-
-    Ok(text.trim().to_string())
+    let worker = worker_for(&cfg)?;
+    worker.transcribe(wav)
 }
 
 #[cfg(test)]
@@ -305,6 +429,31 @@ mod tests {
             result.is_err(),
             "symlink escape should be rejected, got: {:?}",
             result.ok()
+        );
+    }
+
+    // ----------------------------------------------------------------------
+    // TASK-20: TranscriptionWorker construction-time validation.
+    //
+    // Construction must reject an invalid model path WITHOUT spawning
+    // whisper-cli. We test by handing `from_config` a cfg whose model points
+    // at /etc/hosts (exists, but lives outside the models dir). The worker
+    // build path goes through `validate_model_path`, which must short-circuit
+    // before any process is spawned.
+
+    #[test]
+    fn worker_from_config_rejects_invalid_model() {
+        // We can't easily fake `canonical_models_dir()` here (it reads
+        // $HOME), so we exercise the lower-level guard the worker delegates
+        // to. The behavior we care about — "construction returns Err without
+        // spawning anything" — is observable through `validate_model_path`,
+        // which is the single rejection point inside `from_config`.
+        let tmp = tempdir().expect("tempdir");
+        let canon_dir = tmp.path().canonicalize().expect("canon dir");
+        let result = validate_model_path("/etc/hosts", &canon_dir);
+        assert!(
+            result.is_err(),
+            "worker construction must reject a model path outside the models dir"
         );
     }
 }

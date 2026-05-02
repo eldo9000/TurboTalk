@@ -60,6 +60,11 @@ fn save_config(
 ) -> Result<(), String> {
     settings::save(&cfg).map_err(|e| e.to_string())?;
     *hotkey_state.write() = cfg.hotkey.clone();
+    // TASK-20: drop the cached TranscriptionWorker so the next dictation
+    // picks up any changes to `whisper.model` or `cleanup.vocabulary`. The
+    // rebuild is cheap (path validation only — no model load) so we do not
+    // try to detect "did anything actually change".
+    transcribe::invalidate_worker();
     Ok(())
 }
 
