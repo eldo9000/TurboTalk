@@ -84,6 +84,28 @@ fn find_whisper(configured_bin: &str) -> anyhow::Result<PathBuf> {
     Ok(configured)
 }
 
+/// Canonicalize `raw_model` and verify it lives inside `canon_models_dir`.
+/// Blocks `model = "/etc/passwd"` style attacks and symlink escapes from the
+/// models dir. Returns the canonicalized model path on success.
+///
+/// Extracted from `run()` so unit tests can exercise the path-traversal
+/// guard against a temp dir without spawning whisper-cli.
+fn validate_model_path(raw_model: &str, canon_models_dir: &Path) -> anyhow::Result<PathBuf> {
+    let canon_model = PathBuf::from(raw_model).canonicalize().map_err(|_| {
+        anyhow::anyhow!(
+            "model path does not exist or could not be resolved: {}",
+            raw_model
+        )
+    })?;
+    if !canon_model.starts_with(canon_models_dir) {
+        anyhow::bail!(
+            "model path is outside the allowed models directory: {}",
+            raw_model
+        );
+    }
+    Ok(canon_model)
+}
+
 pub fn run(wav: &Path) -> anyhow::Result<String> {
     let cfg = crate::settings::load();
     let bin = find_whisper(&cfg.whisper.bin)?;
@@ -91,25 +113,13 @@ pub fn run(wav: &Path) -> anyhow::Result<String> {
     // Canonicalize the model path and verify it lives inside the allowed
     // models directory. Blocks `model = "/etc/passwd"` style attacks and
     // symlink escapes from the models dir.
-    let raw_model = &cfg.whisper.model;
-    let canon_model = PathBuf::from(raw_model).canonicalize().map_err(|_| {
-        anyhow::anyhow!(
-            "model path does not exist or could not be resolved: {}",
-            raw_model
-        )
-    })?;
     let canon_models_dir = crate::settings::canonical_models_dir().ok_or_else(|| {
         anyhow::anyhow!(
             "models directory does not exist — create ~/.config/librewin/turbotalk/models/ \
              and place a ggml model there"
         )
     })?;
-    if !canon_model.starts_with(&canon_models_dir) {
-        anyhow::bail!(
-            "model path is outside the allowed models directory: {}",
-            raw_model
-        );
-    }
+    let canon_model = validate_model_path(&cfg.whisper.model, &canon_models_dir)?;
     let model_str = canon_model
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("model path is not valid UTF-8: {:?}", canon_model))?;
@@ -138,4 +148,125 @@ pub fn run(wav: &Path) -> anyhow::Result<String> {
     let _ = std::fs::remove_file(&txt_path);
 
     Ok(crate::cleanup::process(text.trim()))
+}
+
+#[cfg(test)]
+mod tests {
+    //! Path-traversal hardening tests for TASK-2.
+    //!
+    //! These tests do NOT exercise the canonicalization logic by mutation —
+    //! they assert the existing guards reject the obvious attack shapes
+    //! (`/etc/passwd`, `..` escapes, symlinks pointing outside the allowed
+    //! root) and accept legitimate paths inside the allow-list.
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn is_allowed_whisper_path_rejects_system_binaries() {
+        // /bin/ls and /etc/passwd canonicalize fine but live nowhere near the
+        // allowed roots, so the allow-list must reject them.
+        assert!(!is_allowed_whisper_path(Path::new("/bin/ls")));
+        assert!(!is_allowed_whisper_path(Path::new("/etc/passwd")));
+    }
+
+    #[test]
+    fn is_allowed_whisper_path_rejects_dotdot_escape() {
+        // A path with `..` segments that resolves outside the allowed roots
+        // must be rejected. We build one inside a tempdir and aim it at /tmp.
+        let tmp = tempdir().expect("tempdir");
+        let escape = tmp.path().join("..").join("..").join("etc").join("passwd");
+        assert!(!is_allowed_whisper_path(&escape));
+    }
+
+    #[test]
+    fn is_allowed_whisper_path_rejects_nonexistent() {
+        // Non-existent paths cannot canonicalize and must be rejected.
+        assert!(!is_allowed_whisper_path(Path::new(
+            "/definitely/not/a/real/path/whisper-cli"
+        )));
+    }
+
+    #[test]
+    fn is_allowed_whisper_path_accepts_path_inside_target_dir() {
+        // The cargo `target/` directory is one of the allowed roots. Any test
+        // running here lives under `target/debug/deps/`, so its canonical
+        // current_exe is by construction inside the allow-list.
+        let exe = std::env::current_exe().expect("current_exe");
+        // Sanity: the running test binary itself must be accepted.
+        assert!(
+            is_allowed_whisper_path(&exe),
+            "the running test binary at {:?} should be inside an allowed root",
+            exe
+        );
+    }
+
+    #[test]
+    fn validate_model_path_accepts_real_file_inside_models_dir() {
+        let tmp = tempdir().expect("tempdir");
+        let canon_dir = tmp.path().canonicalize().expect("canon dir");
+        let model = canon_dir.join("ggml-base.en.bin");
+        fs::write(&model, b"fake ggml bytes").expect("write model");
+
+        let result = validate_model_path(model.to_str().unwrap(), &canon_dir);
+        assert!(result.is_ok(), "expected accept, got: {:?}", result.err());
+        assert_eq!(result.unwrap(), model.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn validate_model_path_rejects_etc_hosts() {
+        let tmp = tempdir().expect("tempdir");
+        let canon_dir = tmp.path().canonicalize().expect("canon dir");
+
+        // /etc/hosts exists on macOS and Linux but is outside the models dir.
+        let result = validate_model_path("/etc/hosts", &canon_dir);
+        assert!(result.is_err(), "expected /etc/hosts to be rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("outside the allowed models directory"),
+            "unexpected error message: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_model_path_rejects_nonexistent_path() {
+        let tmp = tempdir().expect("tempdir");
+        let canon_dir = tmp.path().canonicalize().expect("canon dir");
+
+        let result = validate_model_path("/no/such/model.bin", &canon_dir);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("does not exist") || err.contains("could not be resolved"),
+            "unexpected error message: {}",
+            err
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_model_path_rejects_symlink_escape() {
+        // A symlink inside the models dir pointing at a target outside the
+        // models dir must be rejected. canonicalize() resolves the symlink
+        // before the starts_with check, which is the whole point.
+        use std::os::unix::fs::symlink;
+
+        let outside = tempdir().expect("outside tempdir");
+        let outside_canon = outside.path().canonicalize().expect("canon outside");
+        let target = outside_canon.join("evil.bin");
+        fs::write(&target, b"evil").expect("write evil");
+
+        let inside = tempdir().expect("inside tempdir");
+        let inside_canon = inside.path().canonicalize().expect("canon inside");
+        let link = inside_canon.join("ggml-evil.bin");
+        symlink(&target, &link).expect("symlink");
+
+        let result = validate_model_path(link.to_str().unwrap(), &inside_canon);
+        assert!(
+            result.is_err(),
+            "symlink escape should be rejected, got: {:?}",
+            result.ok()
+        );
+    }
 }

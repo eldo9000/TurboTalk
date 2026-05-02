@@ -166,8 +166,13 @@ pub fn load_history() -> Vec<HistoryEntry> {
 }
 
 pub fn load_history_detailed() -> LoadHistoryResult {
-    let path = history_path();
-    let Ok(contents) = std::fs::read_to_string(&path) else {
+    load_history_detailed_at(&history_path())
+}
+
+/// Path-parameterized variant of `load_history_detailed` so tests can drive
+/// the loader against a temp file without touching `~/.config/...`.
+pub(crate) fn load_history_detailed_at(path: &std::path::Path) -> LoadHistoryResult {
+    let Ok(contents) = std::fs::read_to_string(path) else {
         return LoadHistoryResult { entries: vec![], dropped: 0 };
     };
 
@@ -202,6 +207,12 @@ pub fn load_history_detailed() -> LoadHistoryResult {
 }
 
 pub fn save_history(entries: &[HistoryEntry]) -> anyhow::Result<()> {
+    save_history_at(&history_path(), entries)
+}
+
+/// Path-parameterized variant of `save_history` so tests can write to a temp
+/// file. Enforces the same `HISTORY_LIMIT` truncation as the public API.
+pub(crate) fn save_history_at(path: &std::path::Path, entries: &[HistoryEntry]) -> anyhow::Result<()> {
     // Backend is the single source of truth for the on-disk size cap. The
     // frontend may pass a longer in-memory list; we trim here. History is
     // most-recent-first (see App.svelte transcript listener), so `truncate`
@@ -211,11 +222,10 @@ pub fn save_history(entries: &[HistoryEntry]) -> anyhow::Result<()> {
     } else {
         entries
     };
-    let path = history_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&path, serde_json::to_string(trimmed)?)?;
+    std::fs::write(path, serde_json::to_string(trimmed)?)?;
     Ok(())
 }
 
@@ -297,7 +307,16 @@ pub fn scan_models_dir() -> Vec<String> {
     let Some(canon_dir) = canonical_models_dir() else {
         return vec![];
     };
-    let Ok(entries) = std::fs::read_dir(&canon_dir) else {
+    scan_models_dir_in(&canon_dir)
+}
+
+/// Inner helper: scans a pre-canonicalized models directory for `.bin` files,
+/// rejecting any entry whose canonical target escapes the directory.
+///
+/// Extracted from `scan_models_dir` so unit tests can drive the symlink-escape
+/// logic against a temp dir without having to clobber `$HOME`.
+pub(crate) fn scan_models_dir_in(canon_dir: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(canon_dir) else {
         return vec![];
     };
     let mut paths: Vec<String> = entries
@@ -309,7 +328,7 @@ pub fn scan_models_dir() -> Vec<String> {
             }
             // Resolve symlinks; reject anything that escapes the models dir.
             let canon = p.canonicalize().ok()?;
-            if !canon.starts_with(&canon_dir) {
+            if !canon.starts_with(canon_dir) {
                 tracing::warn!(
                     "[settings] skipping model outside models dir: {:?} -> {:?}",
                     p,
@@ -332,4 +351,269 @@ pub fn save(cfg: &Config) -> anyhow::Result<()> {
     let contents = toml::to_string_pretty(cfg)?;
     std::fs::write(&path, contents)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cleanup_mode_accepts_known_lowercase_tokens() {
+        assert_eq!(
+            serde_json::from_str::<CleanupMode>("\"off\"").unwrap(),
+            CleanupMode::Off
+        );
+        assert_eq!(
+            serde_json::from_str::<CleanupMode>("\"regex\"").unwrap(),
+            CleanupMode::Regex
+        );
+        assert_eq!(
+            serde_json::from_str::<CleanupMode>("\"chaperone\"").unwrap(),
+            CleanupMode::Chaperone
+        );
+    }
+
+    #[test]
+    fn cleanup_mode_rejects_typo() {
+        // The typo case is the load-bearing one: it's why we made this enum
+        // strict instead of falling back to a default. A misspelled mode
+        // value in config.toml must fail to deserialize so the recovery path
+        // in `load_detailed` can surface a `ui-error` to the user.
+        assert!(serde_json::from_str::<CleanupMode>("\"chaperon\"").is_err());
+    }
+
+    #[test]
+    fn cleanup_mode_is_case_sensitive_lowercase() {
+        // serde rename_all = "lowercase" only matches the lowercase form.
+        assert!(serde_json::from_str::<CleanupMode>("\"OFF\"").is_err());
+        assert!(serde_json::from_str::<CleanupMode>("\"Off\"").is_err());
+        assert!(serde_json::from_str::<CleanupMode>("\"Regex\"").is_err());
+        assert!(serde_json::from_str::<CleanupMode>("\"Chaperone\"").is_err());
+    }
+
+    // ----------------------------------------------------------------------
+    // TASK-2: scan_models_dir path-traversal hardening.
+    //
+    // `scan_models_dir_in` is the testable inner helper extracted from
+    // `scan_models_dir`. We drive it against a tempdir so the test does not
+    // depend on `~/.config/librewin/turbotalk/models` existing or being safe
+    // to mutate, and so the symlink-escape case is fully self-contained.
+
+    #[test]
+    fn scan_models_dir_in_returns_real_bin_files() {
+        use std::fs;
+        use tempfile::tempdir;
+
+        let tmp = tempdir().expect("tempdir");
+        let canon_dir = tmp.path().canonicalize().expect("canon dir");
+        let real = canon_dir.join("ggml-base.en.bin");
+        fs::write(&real, b"fake ggml").expect("write real");
+
+        let found = scan_models_dir_in(&canon_dir);
+        assert_eq!(found.len(), 1, "expected 1 model, got: {:?}", found);
+        assert_eq!(found[0], real.canonicalize().unwrap().to_string_lossy());
+    }
+
+    #[test]
+    fn scan_models_dir_in_ignores_non_bin_files() {
+        use std::fs;
+        use tempfile::tempdir;
+
+        let tmp = tempdir().expect("tempdir");
+        let canon_dir = tmp.path().canonicalize().expect("canon dir");
+        fs::write(canon_dir.join("README.md"), b"docs").expect("write readme");
+        fs::write(canon_dir.join("notes.txt"), b"notes").expect("write notes");
+
+        let found = scan_models_dir_in(&canon_dir);
+        assert!(found.is_empty(), "non-.bin files should be ignored, got: {:?}", found);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_models_dir_in_filters_symlink_escapes() {
+        // Drop a real .bin inside the models dir, AND a symlink whose target
+        // lives outside the models dir. Only the real .bin must be returned —
+        // canonicalize() resolves the symlink before the starts_with check.
+        use std::fs;
+        use std::os::unix::fs::symlink;
+        use tempfile::tempdir;
+
+        let tmp = tempdir().expect("tempdir");
+        let canon_dir = tmp.path().canonicalize().expect("canon dir");
+
+        // Real model — should be accepted.
+        let real = canon_dir.join("ggml-base.en.bin");
+        fs::write(&real, b"real bytes").expect("write real");
+
+        // External target outside canon_dir.
+        let outside = tempdir().expect("outside tempdir");
+        let outside_canon = outside.path().canonicalize().expect("canon outside");
+        let outside_target = outside_canon.join("evil.bin");
+        fs::write(&outside_target, b"evil bytes").expect("write outside");
+
+        // Symlink inside the models dir pointing at the outside target.
+        let link = canon_dir.join("ggml-evil.bin");
+        symlink(&outside_target, &link).expect("symlink");
+
+        let found = scan_models_dir_in(&canon_dir);
+        assert_eq!(
+            found.len(),
+            1,
+            "only the real model should be returned, got: {:?}",
+            found
+        );
+        assert_eq!(found[0], real.canonicalize().unwrap().to_string_lossy());
+    }
+
+    #[test]
+    fn scan_models_dir_in_returns_empty_for_nonexistent_dir() {
+        // If the directory doesn't exist, read_dir fails and we return [].
+        let bogus = std::path::Path::new("/no/such/models/dir/anywhere");
+        let found = scan_models_dir_in(bogus);
+        assert!(found.is_empty());
+    }
+
+    // ----------------------------------------------------------------------
+    // TASK-7: History pipeline hardening.
+    //
+    // These exercise `save_history_at` / `load_history_detailed_at` (the
+    // path-parameterized variants of `save_history` / `load_history_detailed`)
+    // so the on-disk path under `~/.config/librewin/turbotalk/` is never
+    // touched. The public wrappers delegate through these helpers, so the
+    // observable behavior is identical.
+
+    /// 60 entries in → exactly HISTORY_LIMIT (50) entries persisted on disk.
+    #[test]
+    fn save_history_truncates_to_limit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("history.json");
+
+        let entries: Vec<HistoryEntry> = (1..=60u64)
+            .map(|ts| HistoryEntry { text: format!("entry {}", ts), ts })
+            .collect();
+
+        save_history_at(&path, &entries).expect("save_history_at");
+
+        let raw = std::fs::read_to_string(&path).expect("read history.json");
+        let arr: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("parse JSON");
+        assert_eq!(arr.len(), HISTORY_LIMIT, "persisted file must be capped at HISTORY_LIMIT");
+    }
+
+    /// Convention is most-recent-first (see App.svelte transcript listener).
+    /// `truncate` keeps `entries[..50]` — the FIRST 50 of the input, which
+    /// by convention are the newest. Input timestamps 1..=60 — verify the
+    /// persisted slice is timestamps 1..=50 ("newest 50") and ts=51..=60
+    /// (the oldest 10) are dropped.
+    #[test]
+    fn save_history_keeps_newest_drops_oldest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("history.json");
+
+        // Most-recent-first: index 0 (ts=1) is "newest", index 59 (ts=60) is
+        // "oldest". Truncation keeps the first HISTORY_LIMIT, dropping the tail.
+        let entries: Vec<HistoryEntry> = (1..=60u64)
+            .map(|ts| HistoryEntry { text: format!("entry {}", ts), ts })
+            .collect();
+
+        save_history_at(&path, &entries).expect("save_history_at");
+        let loaded = load_history_detailed_at(&path);
+        assert_eq!(loaded.entries.len(), HISTORY_LIMIT);
+        assert_eq!(loaded.dropped, 0);
+
+        let kept_ts: Vec<u64> = loaded.entries.iter().map(|e| e.ts).collect();
+        let expected_ts: Vec<u64> = (1..=50u64).collect();
+        assert_eq!(
+            kept_ts, expected_ts,
+            "truncation must drop the tail (oldest), not the head (newest)"
+        );
+    }
+
+    /// Per-entry validation: 3 valid, 1 with `text=null`, 1 with `ts` as a
+    /// string. Loader returns the 3 valid entries and counts 2 drops — it
+    /// must NOT fail the whole file because of malformed siblings.
+    #[test]
+    fn load_history_drops_only_malformed_entries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("history.json");
+
+        let raw = r#"[
+            {"text": "alpha", "ts": 100},
+            {"text": null, "ts": 200},
+            {"text": "beta", "ts": 300},
+            {"text": "gamma", "ts": "not-a-number"},
+            {"text": "delta", "ts": 400}
+        ]"#;
+        std::fs::write(&path, raw).expect("write history.json");
+
+        let result = load_history_detailed_at(&path);
+        assert_eq!(
+            result.entries.len(),
+            3,
+            "exactly the 3 well-formed entries should survive"
+        );
+        assert_eq!(result.dropped, 2, "the 2 malformed entries should be counted as dropped");
+
+        let texts: Vec<&str> = result.entries.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, vec!["alpha", "beta", "delta"]);
+    }
+
+    /// File parses as a JSON array but every element is malformed → empty
+    /// Vec, no panic. `dropped` reflects the count of rejections.
+    #[test]
+    fn load_history_all_malformed_returns_empty() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("history.json");
+
+        let raw = r#"[
+            {"text": null, "ts": 1},
+            {"text": "ok", "ts": "stringy"},
+            {"foo": "bar"}
+        ]"#;
+        std::fs::write(&path, raw).expect("write history.json");
+
+        let result = load_history_detailed_at(&path);
+        assert!(result.entries.is_empty(), "no valid entries should survive");
+        assert_eq!(result.dropped, 3);
+    }
+
+    /// File contents are not JSON at all → empty Vec, no panic, dropped=0
+    /// (the file as a whole is treated as empty rather than per-entry-dropped).
+    #[test]
+    fn load_history_non_json_garbage_returns_empty() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("history.json");
+        std::fs::write(&path, "not json").expect("write history.json");
+
+        let result = load_history_detailed_at(&path);
+        assert!(result.entries.is_empty());
+        assert_eq!(result.dropped, 0);
+    }
+
+    /// Empty `text` is filtered at load even though serde would accept it.
+    #[test]
+    fn load_history_rejects_empty_text() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("history.json");
+
+        let raw = r#"[{"text": "", "ts": 12345}]"#;
+        std::fs::write(&path, raw).expect("write history.json");
+
+        let result = load_history_detailed_at(&path);
+        assert!(result.entries.is_empty(), "empty text must be filtered");
+        assert_eq!(result.dropped, 1);
+    }
+
+    /// `ts == 0` is treated as a sentinel "no timestamp" and filtered.
+    #[test]
+    fn load_history_rejects_zero_ts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("history.json");
+
+        let raw = r#"[{"text": "hello", "ts": 0}]"#;
+        std::fs::write(&path, raw).expect("write history.json");
+
+        let result = load_history_detailed_at(&path);
+        assert!(result.entries.is_empty(), "ts=0 must be filtered");
+        assert_eq!(result.dropped, 1);
+    }
 }
