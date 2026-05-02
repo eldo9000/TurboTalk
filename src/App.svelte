@@ -36,7 +36,7 @@
 
   // History
   let history         = $state([]);
-  let pastedTs        = $state(null);
+  let copiedTs        = $state(null);
   let transcriptError = $state('');
 
   // Unified backend error channel. Any `ui-error` event arriving from Rust is
@@ -46,10 +46,12 @@
   let uiErrorId = 0;
 
   // Models tab
-  let cfgModels      = $state([]);
-  let cfgModel       = $state('');
-  let newModelPath   = $state('');
-  let modelsSaveMsg  = $state('');
+  let cfgModels       = $state([]);
+  let cfgModel        = $state('');
+  let newModelPath    = $state('');
+  let modelsSaveMsg   = $state('');
+  // { [modelName: string]: number } — key present = downloading, value = pct 0-99
+  let downloadProgress = $state({});
 
   // Modes tab
   const DEFAULT_CLASSIFIER_PROMPT =
@@ -72,14 +74,17 @@ Reply with only the single word, lowercase, no punctuation.
   let modesSaveMsg        = $state('');
 
   // Settings tab
-  let cfgBin          = $state('');
-  let cfgLaunchLogin  = $state(false);
-  let cfgDevice       = $state('default');
-  let audioDevices    = $state([]);
-  let settingsSaveMsg  = $state('');
-  let cfgHotkeyKey     = $state('right_option');
-  let cfgHotkeyMode    = $state('hold');
-  let showAdvanced     = $state(false);
+  let cfgBin               = $state('');
+  let cfgLaunchLogin       = $state(false);
+  let cfgDevice            = $state('default');
+  let audioDevices         = $state([]);
+  let settingsSaveMsg      = $state('');
+  let cfgHotkeyKey         = $state('right_option');
+  let cfgHotkeyMode        = $state('hold');
+  let cfgHistoryAutoDelete = $state('10d');
+  let showAdvanced         = $state(false);
+  // Captured once from the Modes tab; all non-history tabs lock to this height.
+  let settingsH            = $state(0);
 
   // Ref to the outermost div — used to measure total natural content height.
   let outerEl = $state(null);
@@ -100,6 +105,13 @@ Reply with only the single word, lowercase, no punctuation.
       getCurrentWindow().setSize(new LogicalSize(
         Math.ceil(WINDOW_W * zoom),
         Math.ceil(HISTORY_H * zoom),
+      ));
+      return;
+    }
+    if (settingsH > 0) {
+      getCurrentWindow().setSize(new LogicalSize(
+        Math.ceil(WINDOW_W * zoom),
+        Math.ceil(settingsH * zoom),
       ));
       return;
     }
@@ -136,36 +148,48 @@ Reply with only the single word, lowercase, no punctuation.
 
   // ── History ───────────────────────────────────────────────────────────────
 
-  async function pasteHistoryItem(item) {
-    pastedTs = item.ts;
-    const res = await commands.pasteHistoryItem(item.text);
+  async function copyHistoryItem(item) {
+    copiedTs = item.ts;
+    const res = await commands.copyHistoryItem(item.text);
     if (res.status === 'error') {
-      transcriptError = 'Paste failed: ' + res.error;
+      transcriptError = 'Copy failed: ' + res.error;
       setTimeout(() => { transcriptError = ''; }, 4000);
     }
-    setTimeout(() => { if (pastedTs === item.ts) pastedTs = null; }, 1500);
+    setTimeout(() => { if (copiedTs === item.ts) copiedTs = null; }, 1500);
   }
 
   // ── Models ────────────────────────────────────────────────────────────────
 
   const MODEL_CATALOG = [
     {
-      name: 'ggml-base.en',
-      size: '141 MB',
-      description: 'Fast · English only · recommended',
-      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin',
-    },
-    {
       name: 'ggml-small.en',
       size: '466 MB',
-      description: 'Better accuracy · English only',
+      description: 'Fast · English only',
       url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin',
+    },
+    {
+      name: 'ggml-large-v3-turbo-q5_0',
+      size: '574 MB',
+      description: 'Recommended · multilingual · quantized · near-large quality',
+      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin',
     },
     {
       name: 'ggml-medium.en',
       size: '1.5 GB',
       description: 'High accuracy · English only',
       url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin',
+    },
+    {
+      name: 'ggml-large-v3-turbo',
+      size: '1.6 GB',
+      description: 'High accuracy · multilingual · ~6× faster than v3',
+      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin',
+    },
+    {
+      name: 'ggml-large-v3',
+      size: '3.1 GB',
+      description: 'Maximum accuracy · multilingual · slowest',
+      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin',
     },
   ];
 
@@ -177,18 +201,25 @@ Reply with only the single word, lowercase, no punctuation.
     modelsSaveMsg = '';
   }
 
-  function addModel() {
+  async function addModel() {
     const path = newModelPath.trim();
     if (!path || cfgModels.includes(path)) return;
     cfgModels = [...cfgModels, path];
     if (cfgModels.length === 1) cfgModel = path;
     newModelPath = '';
+    await saveModels();
   }
 
-  function removeModel(path) {
+  async function removeModel(path) {
     cfgModels = cfgModels.filter(m => m !== path);
     if (cfgModel === path) cfgModel = cfgModels[0] ?? '';
+    await saveModels();
   }
+
+  // Custom = paths in cfgModels not matching any catalog filename.
+  const customPaths = $derived(
+    cfgModels.filter(p => !MODEL_CATALOG.some(m => p.endsWith(m.name + '.bin')))
+  );
 
   async function refreshModels() {
     const found = await commands.scanModelsDir();
@@ -204,6 +235,29 @@ Reply with only the single word, lowercase, no punctuation.
     cfg.whisper.models = cfgModels;
     const res = await commands.saveConfig(cfg);
     modelsSaveMsg = res.status === 'ok' ? 'Saved.' : 'Error: ' + res.error;
+  }
+
+  async function startDownload(m) {
+    downloadProgress = { ...downloadProgress, [m.name]: 0 };
+    const res = await commands.downloadModel(m.url, m.name);
+    const { [m.name]: _removed, ...rest } = downloadProgress;
+    downloadProgress = rest;
+    if (res.status === 'error') {
+      modelsSaveMsg = 'Download failed: ' + res.error;
+      setTimeout(() => { modelsSaveMsg = ''; }, 5000);
+      return;
+    }
+    const path = res.data;
+    if (!cfgModels.includes(path)) {
+      cfgModels = [...cfgModels, path];
+      if (!cfgModel) cfgModel = path;
+    }
+    await saveModels();
+  }
+
+  async function selectModel(path) {
+    cfgModel = path;
+    await saveModels();
   }
 
   // ── Modes ─────────────────────────────────────────────────────────────────
@@ -246,13 +300,14 @@ Reply with only the single word, lowercase, no punctuation.
       commands.listAudioDevices(),
       commands.getLaunchAtLogin(),
     ]);
-    cfgBin         = cfg.whisper?.bin    ?? 'auto';
-    cfgDevice      = cfg.audio?.device   ?? 'default';
-    cfgHotkeyKey   = cfg.hotkey?.key     ?? 'right_option';
-    cfgHotkeyMode  = cfg.hotkey?.mode    ?? 'hold';
-    cfgLaunchLogin = launch;
-    audioDevices   = devs;
-    settingsSaveMsg = '';
+    cfgBin               = cfg.whisper?.bin          ?? 'auto';
+    cfgDevice            = cfg.audio?.device         ?? 'default';
+    cfgHotkeyKey         = cfg.hotkey?.key           ?? 'right_option';
+    cfgHotkeyMode        = cfg.hotkey?.mode          ?? 'hold';
+    cfgHistoryAutoDelete = cfg.history_auto_delete   ?? '10d';
+    cfgLaunchLogin       = launch;
+    audioDevices         = devs;
+    settingsSaveMsg      = '';
   }
 
   async function saveSettings() {
@@ -260,11 +315,12 @@ Reply with only the single word, lowercase, no punctuation.
     if (!cfg.whisper) cfg.whisper = { bin: 'auto', model: '', models: [] };
     if (!cfg.audio)   cfg.audio   = { device: 'default' };
     if (!cfg.hotkey)  cfg.hotkey  = { key: 'right_option', mode: 'hold' };
-    cfg.whisper.bin  = cfgBin;
-    cfg.audio.device = cfgDevice;
-    cfg.theme        = cfgTheme;
-    cfg.hotkey.key   = cfgHotkeyKey;
-    cfg.hotkey.mode  = cfgHotkeyMode;
+    cfg.whisper.bin          = cfgBin;
+    cfg.audio.device         = cfgDevice;
+    cfg.theme                = cfgTheme;
+    cfg.hotkey.key           = cfgHotkeyKey;
+    cfg.hotkey.mode          = cfgHotkeyMode;
+    cfg.history_auto_delete  = cfgHistoryAutoDelete;
     const saveRes = await commands.saveConfig(cfg);
     if (saveRes.status === 'error') {
       settingsSaveMsg = 'Error: ' + saveRes.error;
@@ -285,6 +341,13 @@ Reply with only the single word, lowercase, no punctuation.
       ));
       return;
     }
+    if (settingsH > 0) {
+      getCurrentWindow().setSize(new LogicalSize(
+        Math.ceil(WINDOW_W * zoom),
+        Math.ceil(settingsH * zoom),
+      ));
+      return;
+    }
     if (!outerEl) return;
     const { w, h } = contentSize();
     getCurrentWindow().setSize(new LogicalSize(w, h));
@@ -293,7 +356,10 @@ Reply with only the single word, lowercase, no punctuation.
   function switchTab(tab) {
     activeTab = tab;
     if (tab === 'models')   openModels().then(forceResize);
-    if (tab === 'modes')    openModes().then(forceResize);
+    if (tab === 'modes')    openModes().then(async () => {
+      await forceResize();
+      if (settingsH === 0 && outerEl) settingsH = outerEl.scrollHeight;
+    });
     if (tab === 'settings') openSettings().then(forceResize);
     if (tab === 'about')    forceResize();
   }
@@ -319,8 +385,12 @@ Reply with only the single word, lowercase, no punctuation.
     window.addEventListener('keydown', handleKeydown);
 
     const unlisteners = [];
-    listen('ptt-down',    () => { recording = true; }).then(u => unlisteners.push(u));
-    listen('ptt-up',      () => { recording = false; }).then(u => unlisteners.push(u));
+    listen('ptt-down',         () => { recording = true; }).then(u => unlisteners.push(u));
+    listen('ptt-up',           () => { recording = false; }).then(u => unlisteners.push(u));
+    listen('download-progress', (e) => {
+      const { name, pct } = e.payload;
+      downloadProgress = { ...downloadProgress, [name]: pct };
+    }).then(u => unlisteners.push(u));
     listen('transcript',  (e) => {
       const text = e.payload;
       if (text) {
@@ -396,7 +466,7 @@ Reply with only the single word, lowercase, no punctuation.
   });
 </script>
 
-<div bind:this={outerEl} class="flex flex-col bg-[var(--surface)] {activeTab === 'history' ? 'h-full overflow-hidden' : ''}"
+<div bind:this={outerEl} class="flex flex-col bg-[var(--surface)] {settingsH > 0 || activeTab === 'history' ? 'h-full overflow-hidden' : ''}"
 >
 
   <!-- ui-error toast stack — fixed top-center, dismissible -->
@@ -440,7 +510,7 @@ Reply with only the single word, lowercase, no punctuation.
 
     <!-- All tabs — absolutely centered in the full bar width -->
     <div class="absolute inset-0 flex items-end justify-center pointer-events-none">
-      {#each ['history', 'models', 'modes', 'settings', 'about'] as tab}
+      {#each ['history', 'models', 'modes', 'settings'] as tab}
         <button
           onclick={() => switchTab(tab)}
           class="relative px-3 h-full text-xs font-medium capitalize transition-colors pointer-events-auto
@@ -490,15 +560,21 @@ Reply with only the single word, lowercase, no punctuation.
         <div class="flex-1 min-h-0 overflow-y-auto px-3 py-2 flex flex-col gap-1">
           {#each history as item (item.ts)}
             <button
-              onclick={() => pasteHistoryItem(item)}
-              title="Click to paste"
+              onclick={() => copyHistoryItem(item)}
+              title="Click to copy"
               class="w-full text-left text-sm leading-relaxed px-2 py-1.5 rounded
                      transition-colors cursor-pointer select-text
                      border-b border-[var(--border,#2a2a2a)] last:border-0
                      hover:bg-[var(--surface-raised)]
-                     {pastedTs === item.ts ? 'text-[var(--accent)]' : 'text-[var(--text-primary)]'}"
+                     {copiedTs === item.ts ? 'text-[var(--accent)]' : 'text-[var(--text-primary)]'}"
             >
-              {pastedTs === item.ts ? 'Pasted!' : item.text}
+              {#if copiedTs === item.ts}
+                Copied!
+              {:else}
+                <span style="display: block; max-height: 4.875em; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 1.5em), transparent); mask-image: linear-gradient(to bottom, black calc(100% - 1.5em), transparent);">
+                  {item.text}
+                </span>
+              {/if}
             </button>
           {/each}
         </div>
@@ -508,59 +584,101 @@ Reply with only the single word, lowercase, no punctuation.
 
   <!-- Models tab -->
   {#if activeTab === 'models'}
-    <div class="flex flex-col gap-3 px-4 py-4">
+    <div class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 px-4 py-4">
 
-      <!-- Active model selector -->
-      <label class="flex flex-col gap-1">
-        <span class="text-[var(--text-secondary)] text-xs">Active model</span>
-        <select
-          bind:value={cfgModel}
-          class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
-                 rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
-                 focus:border-[var(--accent)]"
-        >
-          {#if cfgModels.length === 0}
-            <option value="">No models added</option>
-          {:else}
-            {#each cfgModels as m}
-              <option value={m}>{m.split('/').at(-1)}</option>
-            {/each}
-          {/if}
-        </select>
-      </label>
-
-      <!-- Model list -->
-      <div class="flex flex-col gap-1">
-        <span class="text-[var(--text-secondary)] text-xs">Installed models</span>
-
-        {#if cfgModels.length === 0}
-          <p class="text-[var(--text-tertiary,#666)] text-xs py-1">No models yet.</p>
-        {:else}
-          <div class="flex flex-col gap-0.5">
-            {#each cfgModels as m}
-              <div class="flex items-center gap-2 group">
-                <span class="flex-1 text-xs text-[var(--text-primary)] font-mono truncate
-                             py-1 px-2 rounded bg-[var(--surface-raised)]
-                             border border-[var(--border)]"
-                      title={m}>{m}</span>
-                <button
-                  onclick={() => removeModel(m)}
-                  class="shrink-0 w-5 h-5 flex items-center justify-center rounded
-                         text-[var(--text-tertiary,#666)] hover:text-red-400
-                         hover:bg-[var(--surface-raised)] transition-colors text-xs"
-                  title="Remove"
-                >×</button>
-              </div>
-            {/each}
+      <!-- Download catalog -->
+      <div class="flex flex-col gap-0.5">
+        <span class="text-[var(--text-secondary)] text-sm mb-0.5">Available models</span>
+        {#each MODEL_CATALOG as m}
+          {@const filename     = m.name + '.bin'}
+          {@const installedPath = cfgModels.find(p => p.endsWith(filename))}
+          {@const isInstalled  = !!installedPath}
+          {@const isSelected   = isInstalled && cfgModel === installedPath}
+          {@const isDownloading = m.name in downloadProgress}
+          {@const pct          = downloadProgress[m.name] ?? 0}
+          <div class="group flex items-center gap-2 py-1.5 border-b border-[var(--border,#2a2a2a)] last:border-0">
+            <div class="flex-1 min-w-0">
+              <span class="text-xs font-mono text-[var(--text-primary)]">{m.name}</span>
+              <span class="text-[10px] text-[var(--text-tertiary,#666)] ml-1.5">{m.size}</span>
+              <p class="text-[10px] text-[var(--text-tertiary,#666)] mt-0.5">{m.description}</p>
+            </div>
+            {#if isDownloading}
+              <span class="shrink-0 text-[10px] text-[var(--accent)] tabular-nums w-7 text-right">{pct}%</span>
+              <button disabled
+                class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap
+                       border-[var(--border)] text-[var(--text-tertiary,#666)] cursor-default"
+              >↓ …</button>
+            {:else if !isInstalled}
+              <button
+                onclick={() => startDownload(m)}
+                class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap transition-colors
+                       border-[var(--border)] bg-[var(--surface-raised)] text-[var(--text-secondary)]
+                       hover:text-[var(--text-primary)] hover:border-[var(--text-secondary)]"
+              >Download</button>
+            {:else if isSelected}
+              <button disabled
+                class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap
+                       border-green-500 bg-green-500/20 text-[var(--text-primary)] cursor-default"
+              >Selected</button>
+            {:else}
+              <button
+                onclick={() => removeModel(installedPath)}
+                title="Remove"
+                class="shrink-0 w-5 h-5 flex items-center justify-center rounded text-xs
+                       opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto
+                       transition-opacity text-red-400 hover:bg-red-500/15"
+              >×</button>
+              <button
+                onclick={() => selectModel(installedPath)}
+                class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap transition-colors
+                       border-[var(--accent)] bg-[var(--accent)]/20 text-[var(--text-primary)]
+                       hover:bg-[var(--accent)]/40"
+              >Install</button>
+            {/if}
           </div>
-        {/if}
+        {/each}
+      </div>
+
+      <!-- Custom models -->
+      <div class="flex flex-col gap-0.5">
+        <span class="text-[var(--text-secondary)] text-sm mb-0.5">Custom</span>
+        <div class="max-h-24 overflow-y-auto">
+        {#each customPaths as path}
+          {@const isSelected = cfgModel === path}
+          <div class="flex items-center gap-2 py-1.5 border-b border-[var(--border,#2a2a2a)]">
+            <span class="flex-1 text-xs font-mono text-[var(--text-primary)] truncate" title={path}>
+              {path.split('/').at(-1)}
+            </span>
+            {#if isSelected}
+              <button disabled
+                class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap
+                       border-green-500 bg-green-500/20 text-[var(--text-primary)] cursor-default"
+              >Selected</button>
+            {:else}
+              <button
+                onclick={() => selectModel(path)}
+                class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap transition-colors
+                       border-[var(--accent)] bg-[var(--accent)]/20 text-[var(--text-primary)]
+                       hover:bg-[var(--accent)]/40"
+              >Install</button>
+            {/if}
+            <button
+              onclick={() => removeModel(path)}
+              title="Remove"
+              class="shrink-0 w-5 h-5 flex items-center justify-center rounded
+                     text-[var(--text-tertiary,#666)] hover:text-red-400
+                     hover:bg-[var(--surface-raised)] transition-colors text-xs"
+            >×</button>
+          </div>
+        {/each}
+        </div>
 
         <!-- Add row -->
         <div class="flex items-center gap-2 mt-1">
           <input
             bind:value={newModelPath}
             onkeydown={(e) => e.key === 'Enter' && addModel()}
-            placeholder="Paste model path…"
+            placeholder="Paste path to .bin file…"
             class="flex-1 text-xs bg-[var(--surface-raised)] border border-[var(--border)]
                    rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
                    focus:border-[var(--accent)] placeholder:text-[var(--text-tertiary,#666)]"
@@ -571,33 +689,9 @@ Reply with only the single word, lowercase, no punctuation.
             class="shrink-0 w-6 h-6 flex items-center justify-center rounded
                    bg-[var(--accent)] text-white hover:opacity-90 transition-opacity
                    text-base leading-none"
-            title="Add model"
+            title="Add custom model"
           >+</button>
         </div>
-
-      </div>
-
-      <!-- Download catalog -->
-      <div class="flex flex-col gap-0.5">
-        <span class="text-[var(--text-secondary)] text-xs mb-0.5">Available models</span>
-        {#each MODEL_CATALOG as m}
-          {@const isInstalled = cfgModels.some(p => p.endsWith(m.name + '.bin'))}
-          <div class="flex items-center gap-2 py-1.5 border-b border-[var(--border,#2a2a2a)] last:border-0">
-            <div class="flex-1 min-w-0">
-              <span class="text-xs font-mono text-[var(--text-primary)]">{m.name}</span>
-              <span class="text-[10px] text-[var(--text-tertiary,#666)] ml-1.5">{m.size}</span>
-              <p class="text-[10px] text-[var(--text-tertiary,#666)] mt-0.5">{m.description}</p>
-            </div>
-            <button
-              onclick={() => { if (!isInstalled) open(m.url); }}
-              disabled={isInstalled}
-              class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap text-[var(--text-primary)] transition-colors
-                     {isInstalled
-                       ? 'border-green-500 bg-green-500/20 cursor-default'
-                       : 'border-[var(--accent)] bg-[var(--accent)]/20 hover:bg-[var(--accent)]/40'}"
-            >{isInstalled ? '✓ Installed' : '↓ Download'}</button>
-          </div>
-        {/each}
       </div>
 
       <!-- Footer: directory hint + refresh -->
@@ -616,30 +710,20 @@ Reply with only the single word, lowercase, no punctuation.
         >↻ Refresh</button>
       </div>
 
-      <div class="flex items-center gap-3 pt-1 pb-1">
-        <button
-          onclick={saveModels}
-          class="text-xs px-3 py-1.5 rounded bg-[var(--accent)] text-white
-                 hover:opacity-90 transition-opacity"
-        >Save</button>
-        {#if modelsSaveMsg}
-          <span class="text-xs text-[var(--text-secondary)]">{modelsSaveMsg}</span>
-        {/if}
-      </div>
     </div>
   {/if}
 
   <!-- Modes tab -->
   {#if activeTab === 'modes'}
-    <div class="flex flex-col gap-3 px-4 py-4">
+    <div class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 px-4 py-4">
 
       <!-- Post-processing segment control -->
       <div class="flex flex-col gap-1.5">
-        <span class="text-[var(--text-secondary)] text-xs">Post-processing</span>
+        <span class="text-[var(--text-secondary)] text-sm">Post-processing</span>
         <div class="flex rounded-lg overflow-hidden border border-[var(--border)]">
           {#each [['off','Off'],['regex','Regex'],['chaperone','Chaperone']] as [val, label]}
             <button
-              onclick={() => { cfgCleanupMode = val; }}
+              onclick={() => { cfgCleanupMode = val; saveModes(); }}
               class="flex-1 text-xs py-1.5 transition-colors
                      {cfgCleanupMode === val
                        ? 'bg-[var(--accent)] text-white'
@@ -657,9 +741,10 @@ Reply with only the single word, lowercase, no punctuation.
       {#if cfgCleanupMode === 'chaperone'}
 
         <label class="flex flex-col gap-1">
-          <span class="text-[var(--text-secondary)] text-xs">Ollama URL</span>
+          <span class="text-[var(--text-secondary)] text-sm">Ollama URL</span>
           <input
             bind:value={cfgOllamaUrl}
+            onchange={() => saveModes()}
             class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
                    rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
                    focus:border-[var(--accent)]"
@@ -668,9 +753,10 @@ Reply with only the single word, lowercase, no punctuation.
         </label>
 
         <label class="flex flex-col gap-1">
-          <span class="text-[var(--text-secondary)] text-xs">Classifier model</span>
+          <span class="text-[var(--text-secondary)] text-sm">Classifier model</span>
           <input
             bind:value={cfgLlmModel}
+            onchange={() => saveModes()}
             placeholder="llama3.2:3b"
             class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
                    rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
@@ -684,9 +770,10 @@ Reply with only the single word, lowercase, no punctuation.
 
         <!-- Custom vocabulary -->
         <label class="flex flex-col gap-1">
-          <span class="text-[var(--text-secondary)] text-xs">Custom vocabulary</span>
+          <span class="text-[var(--text-secondary)] text-sm">Custom vocabulary</span>
           <textarea
             bind:value={cfgVocabulary}
+            onchange={() => saveModes()}
             rows="4"
             placeholder={"One word or phrase per line…\nTurboTalk\nOllama\nggml-base"}
             class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
@@ -701,65 +788,49 @@ Reply with only the single word, lowercase, no punctuation.
         </label>
 
         <!-- Classifier prompt -->
-        <div class="flex flex-col gap-1">
-          <button
-            onclick={() => { showPromptEditor = !showPromptEditor; }}
-            class="text-left text-[10px] text-[var(--text-tertiary,#666)]
-                   hover:text-[var(--text-secondary)] transition-colors select-none"
-          >{showPromptEditor ? '▾ Classifier prompt' : '▸ Classifier prompt'}</button>
-
-          {#if showPromptEditor}
-            <textarea
-              bind:value={cfgClassifierPrompt}
-              rows="10"
-              class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
-                     rounded px-2 py-1.5 text-[var(--text-primary)] outline-none resize-none
-                     focus:border-[var(--accent)] font-mono w-full leading-relaxed"
-              spellcheck="false"
-            ></textarea>
-            <div class="flex items-center justify-between">
-              <span class="text-[var(--text-tertiary,#666)] text-[10px]">
-                <code class="font-mono">{'{text}'}</code> is replaced with the transcript,
-                wrapped in <code class="font-mono">&lt;transcript&gt;</code> tags
-                with <code class="font-mono">&lt;</code>/<code class="font-mono">&gt;</code>
-                escaped to prevent prompt injection.
-              </span>
-              <button
-                onclick={() => { cfgClassifierPrompt = DEFAULT_CLASSIFIER_PROMPT; }}
-                class="text-[10px] text-[var(--text-tertiary,#666)] hover:text-[var(--accent)]
-                       transition-colors"
-              >Reset to default</button>
-            </div>
-          {/if}
-        </div>
+        <label class="flex flex-col gap-1">
+          <span class="text-[var(--text-secondary)] text-sm">Classifier prompt</span>
+          <textarea
+            bind:value={cfgClassifierPrompt}
+            onchange={() => saveModes()}
+            rows="10"
+            class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
+                   rounded px-2 py-1.5 text-[var(--text-primary)] outline-none resize-none
+                   focus:border-[var(--accent)] font-mono w-full leading-relaxed"
+            spellcheck="false"
+          ></textarea>
+          <div class="flex items-center justify-between">
+            <span class="text-[var(--text-tertiary,#666)] text-[10px]">
+              <code class="font-mono">{'{text}'}</code> is replaced with the transcript,
+              wrapped in <code class="font-mono">&lt;transcript&gt;</code> tags
+              with <code class="font-mono">&lt;</code>/<code class="font-mono">&gt;</code>
+              escaped to prevent prompt injection.
+            </span>
+            <button
+              onclick={() => { cfgClassifierPrompt = DEFAULT_CLASSIFIER_PROMPT; }}
+              class="text-[10px] text-[var(--text-tertiary,#666)] hover:text-[var(--accent)]
+                     transition-colors"
+            >Reset to default</button>
+          </div>
+        </label>
 
       {/if}
 
-      <div class="flex items-center gap-3 pt-1 pb-1">
-        <button
-          onclick={saveModes}
-          class="text-xs px-3 py-1.5 rounded bg-[var(--accent)] text-white
-                 hover:opacity-90 transition-opacity"
-        >Save</button>
-        {#if modesSaveMsg}
-          <span class="text-xs text-[var(--text-secondary)]">{modesSaveMsg}</span>
-        {/if}
-      </div>
     </div>
   {/if}
 
   <!-- Settings tab -->
   {#if activeTab === 'settings'}
-    <div class="flex flex-col gap-3 px-4 py-4">
+    <div class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 px-4 py-4">
 
       <!-- Launch at login -->
       <label class="flex items-center justify-between gap-3 cursor-pointer">
-        <span class="text-[var(--text-secondary)] text-xs">Launch at login</span>
+        <span class="text-[var(--text-secondary)] text-sm">Launch at login</span>
         <button
           role="switch"
           aria-checked={cfgLaunchLogin}
           aria-label="Launch at login"
-          onclick={() => { cfgLaunchLogin = !cfgLaunchLogin; }}
+          onclick={() => { cfgLaunchLogin = !cfgLaunchLogin; saveSettings(); }}
           class="relative w-8 h-4 rounded-full transition-colors
                  {cfgLaunchLogin ? 'bg-[var(--accent)]' : 'bg-[var(--surface-raised)] border border-[var(--border)]'}"
         >
@@ -769,9 +840,10 @@ Reply with only the single word, lowercase, no punctuation.
       </label>
 
       <label class="flex flex-col gap-1">
-        <span class="text-[var(--text-secondary)] text-xs">Hotkey</span>
+        <span class="text-[var(--text-secondary)] text-sm">Hotkey</span>
         <select
           bind:value={cfgHotkeyKey}
+          onchange={() => saveSettings()}
           class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
                  rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
                  focus:border-[var(--accent)]"
@@ -784,9 +856,10 @@ Reply with only the single word, lowercase, no punctuation.
       </label>
 
       <label class="flex flex-col gap-1">
-        <span class="text-[var(--text-secondary)] text-xs">Hotkey mode</span>
+        <span class="text-[var(--text-secondary)] text-sm">Hotkey mode</span>
         <select
           bind:value={cfgHotkeyMode}
+          onchange={() => saveSettings()}
           class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
                  rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
                  focus:border-[var(--accent)]"
@@ -797,9 +870,10 @@ Reply with only the single word, lowercase, no punctuation.
       </label>
 
       <label class="flex flex-col gap-1">
-        <span class="text-[var(--text-secondary)] text-xs">Microphone</span>
+        <span class="text-[var(--text-secondary)] text-sm">Microphone</span>
         <select
           bind:value={cfgDevice}
+          onchange={() => saveSettings()}
           class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
                  rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
                  focus:border-[var(--accent)]"
@@ -812,9 +886,10 @@ Reply with only the single word, lowercase, no punctuation.
       </label>
 
       <label class="flex flex-col gap-1">
-        <span class="text-[var(--text-secondary)] text-xs">Theme</span>
+        <span class="text-[var(--text-secondary)] text-sm">Theme</span>
         <select
           bind:value={cfgTheme}
+          onchange={() => saveSettings()}
           class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
                  rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
                  focus:border-[var(--accent)]"
@@ -825,54 +900,44 @@ Reply with only the single word, lowercase, no punctuation.
         </select>
       </label>
 
-      <button
-        onclick={() => { showAdvanced = !showAdvanced; }}
-        class="w-full flex items-center justify-between px-3 py-2.5 rounded-lg
-               bg-[var(--surface-raised)] border border-[var(--border)]
-               hover:border-[var(--accent)] transition-colors select-none group"
-      >
-        <span class="text-xs font-medium text-[var(--text-secondary)]
-                     group-hover:text-[var(--text-primary)] transition-colors">
-          Advanced
-        </span>
-        <span class="text-[var(--text-tertiary,#666)] group-hover:text-[var(--accent)]
-                     transition-colors text-sm leading-none">
-          {showAdvanced ? '▾' : '▸'}
-        </span>
-      </button>
+      <label class="flex flex-col gap-1">
+        <span class="text-[var(--text-secondary)] text-sm">Auto-delete history</span>
+        <select
+          bind:value={cfgHistoryAutoDelete}
+          onchange={() => saveSettings()}
+          class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
+                 rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
+                 focus:border-[var(--accent)]"
+        >
+          <option value="restart">On app restart</option>
+          <option value="1d">After 1 day</option>
+          <option value="5d">After 5 days</option>
+          <option value="10d">After 10 days</option>
+          <option value="30d">After 30 days</option>
+        </select>
+      </label>
 
-      {#if showAdvanced}
-        <label class="flex flex-col gap-1">
-          <span class="text-[var(--text-secondary)] text-xs">Whisper binary</span>
-          <input
-            bind:value={cfgBin}
-            class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
-                   rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
-                   focus:border-[var(--accent)]"
-            spellcheck="false"
-          />
-          <span class="text-[var(--text-tertiary,#666)] text-[10px]">
-            Overrides the bundled sidecar. Leave as "auto" to use the default.
-          </span>
-        </label>
-      {/if}
+      <label class="flex flex-col gap-1">
+        <span class="text-[var(--text-secondary)] text-sm">Whisper binary</span>
+        <input
+          bind:value={cfgBin}
+          onchange={() => saveSettings()}
+          class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
+                 rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
+                 focus:border-[var(--accent)]"
+          spellcheck="false"
+        />
+        <span class="text-[var(--text-tertiary,#666)] text-[10px]">
+          Overrides the bundled sidecar. Leave as "auto" to use the default.
+        </span>
+      </label>
 
-      <div class="flex items-center gap-3 pt-1 pb-1">
-        <button
-          onclick={saveSettings}
-          class="text-xs px-3 py-1.5 rounded bg-[var(--accent)] text-white
-                 hover:opacity-90 transition-opacity"
-        >Save</button>
-        {#if settingsSaveMsg}
-          <span class="text-xs text-[var(--text-secondary)]">{settingsSaveMsg}</span>
-        {/if}
-      </div>
     </div>
   {/if}
 
   <!-- About tab -->
   {#if activeTab === 'about'}
-    <div class="flex flex-col items-center gap-4 px-6 py-8 text-center">
+    <div class="flex-1 min-h-0 overflow-y-auto flex flex-col items-center gap-4 px-6 py-8 text-center">
 
       <div class="flex flex-col items-center gap-1">
         <span class="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">TurboTalk</span>
@@ -894,29 +959,36 @@ Reply with only the single word, lowercase, no punctuation.
     </div>
   {/if}
 
-  <!-- Zoom controls — always visible, bottom right -->
-  <div class="shrink-0 h-7 flex items-center justify-end gap-1 px-2
+  <!-- Bottom bar — zoom left, about right -->
+  <div class="shrink-0 h-7 flex items-center justify-between px-2
               border-t border-[var(--border,#2a2a2a)] select-none">
+    <div class="flex items-center gap-1">
+      <button
+        onclick={zoomOut}
+        disabled={zoomIdx === 0}
+        class="w-5 h-5 flex items-center justify-center rounded text-xs
+               text-[var(--text-tertiary,#666)] hover:text-[var(--text-secondary)]
+               disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+      >−</button>
+      <button
+        onclick={() => { zoomIdx = 0; }}
+        title="Reset zoom"
+        class="text-[10px] w-8 text-center text-[var(--text-tertiary,#666)] tabular-nums
+               hover:text-[var(--text-secondary)] transition-colors"
+      >{ZOOM_LEVELS[zoomIdx]}%</button>
+      <button
+        onclick={zoomIn}
+        disabled={zoomIdx === ZOOM_LEVELS.length - 1}
+        class="w-5 h-5 flex items-center justify-center rounded text-xs
+               text-[var(--text-tertiary,#666)] hover:text-[var(--text-secondary)]
+               disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+      >+</button>
+    </div>
     <button
-      onclick={zoomOut}
-      disabled={zoomIdx === 0}
-      class="w-5 h-5 flex items-center justify-center rounded text-xs
-             text-[var(--text-tertiary,#666)] hover:text-[var(--text-secondary)]
-             disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-    >−</button>
-    <button
-      onclick={() => { zoomIdx = 0; }}
-      title="Reset zoom"
-      class="text-[10px] w-8 text-center text-[var(--text-tertiary,#666)] tabular-nums
-             hover:text-[var(--text-secondary)] transition-colors"
-    >{ZOOM_LEVELS[zoomIdx]}%</button>
-    <button
-      onclick={zoomIn}
-      disabled={zoomIdx === ZOOM_LEVELS.length - 1}
-      class="w-5 h-5 flex items-center justify-center rounded text-xs
-             text-[var(--text-tertiary,#666)] hover:text-[var(--text-secondary)]
-             disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-    >+</button>
+      onclick={() => switchTab('about')}
+      class="text-[10px] text-[var(--text-tertiary,#666)] hover:text-[var(--text-secondary)]
+             transition-colors {activeTab === 'about' ? 'text-[var(--text-primary)]' : ''}"
+    >about</button>
   </div>
 
 </div>

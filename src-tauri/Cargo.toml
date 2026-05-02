@@ -31,7 +31,7 @@ arboard         = "3"
 enigo           = "0.3"
 
 # Async
-tokio           = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync"] }
+tokio           = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "fs"] }
 
 # HTTP for local LLM (Ollama) calls in cleanup.rs
 reqwest         = { version = "0.12", features = ["json", "blocking", "rustls-tls"], default-features = false }

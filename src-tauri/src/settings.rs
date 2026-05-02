@@ -18,9 +18,14 @@ pub struct Config {
     pub hotkey: HotkeyConfig,
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// How long to keep history entries. "restart" clears on launch; "1d"/"5d"/"10d"/"30d"
+    /// removes entries older than N days. Default is "10d".
+    #[serde(default = "default_history_auto_delete")]
+    pub history_auto_delete: String,
 }
 
 fn default_theme() -> String { "auto".into() }
+fn default_history_auto_delete() -> String { "10d".into() }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct WhisperConfig {
@@ -131,8 +136,32 @@ impl Default for Config {
             audio: AudioConfig::default(),
             hotkey: HotkeyConfig::default(),
             theme: default_theme(),
+            history_auto_delete: default_history_auto_delete(),
         }
     }
+}
+
+/// Filter history entries according to the configured auto-delete policy.
+/// - `"restart"` → clear all entries on app launch
+/// - `"1d"` / `"5d"` / `"10d"` / `"30d"` → remove entries older than N days
+/// - unknown values → keep all (no-op)
+pub fn filter_history_by_policy(entries: Vec<HistoryEntry>, policy: &str) -> Vec<HistoryEntry> {
+    if policy == "restart" {
+        return vec![];
+    }
+    let days: u64 = match policy {
+        "1d"  => 1,
+        "5d"  => 5,
+        "10d" => 10,
+        "30d" => 30,
+        _     => return entries,
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let cutoff = now_ms.saturating_sub(days * 24 * 60 * 60 * 1000);
+    entries.into_iter().filter(|e| e.ts >= cutoff).collect()
 }
 
 fn config_path() -> PathBuf {
