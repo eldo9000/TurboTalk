@@ -128,10 +128,11 @@ pub fn run(wav: &Path) -> anyhow::Result<String> {
     let txt_path = PathBuf::from(format!("{}.txt", wav.display()));
 
     // Flags tuned for short-form push-to-talk dictation (not long-form transcription):
-    //   --no-context     don't condition on previous-segment text (stale across separate utterances)
+    //   -mc 0            max-context 0 = don't carry prior-segment text into decoding
+    //                    (whisper.cpp's equivalent of OpenAI Whisper's --no-context)
     //   --beam-size 5    moderate bump from default 1; better short-utterance accuracy
     //   --temperature 0  deterministic decoding; whisper.cpp still falls back internally on no-speech
-    //   --suppress-blank reduces silent-frame hallucinations (pairs with VAD)
+    //   --suppress-nst   suppress non-speech tokens (e.g. <|nospeech|>); pairs with VAD
     // The user-editable `cleanup.vocabulary` (already used by the Chaperone classifier) is
     // also fed to whisper as `--prompt` to bias spelling of names/jargon/identifiers.
     let mut args: Vec<String> = vec![
@@ -141,10 +142,10 @@ pub fn run(wav: &Path) -> anyhow::Result<String> {
         "-np".into(),
         "-nt".into(),
         "-l".into(), "en".into(),
-        "--no-context".into(),
+        "-mc".into(), "0".into(),
         "--beam-size".into(), "5".into(),
         "--temperature".into(), "0".into(),
-        "--suppress-blank".into(),
+        "--suppress-nst".into(),
     ];
     if !cfg.cleanup.vocabulary.is_empty() {
         args.push("--prompt".into());
@@ -155,13 +156,26 @@ pub fn run(wav: &Path) -> anyhow::Result<String> {
         .args(&args)
         .output()?;
 
+    // Even on exit-0, stderr can contain warnings ("argument not recognized") that
+    // explain why the .txt below is missing. Log it at debug; promote to warn if
+    // the next read fails.
+    if !output.stderr.is_empty() {
+        tracing::debug!("[transcribe] whisper-cli stderr: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("whisper-cli failed ({}): {}", output.status, stderr);
     }
 
-    let text = std::fs::read_to_string(&txt_path)
-        .map_err(|_| anyhow::anyhow!("whisper output file not found: {:?}", txt_path))?;
+    let text = std::fs::read_to_string(&txt_path).map_err(|_| {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::anyhow!(
+            "whisper output file not found: {:?}\n--- whisper-cli stderr ---\n{}",
+            txt_path,
+            stderr
+        )
+    })?;
     let _ = std::fs::remove_file(&txt_path);
 
     Ok(crate::cleanup::process(text.trim()))
