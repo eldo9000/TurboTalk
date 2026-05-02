@@ -1,8 +1,6 @@
 # TurboTalk
 
-Voice dictation for people who hate voice dictation software.
-
-Hold a key. Speak. Release. Done. It pastes into whatever app is focused — no clicks, no copy step, no window switching.
+Voice dictation for getting work done right now.
 
 ---
 
