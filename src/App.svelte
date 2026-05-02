@@ -331,6 +331,28 @@ Reply with only the single word, lowercase, no punctuation.
       recording = false;
       transcribing = false;
     }).then(u => unlisteners.push(u));
+    listen('recording-too-short', (e) => {
+      // More specific subtype of recording-discarded. The overlay is already
+      // cleared by the recording-discarded listener; here we surface a
+      // gentle, time-aware hint in the main-window banner so the user
+      // understands why nothing was pasted.
+      recording = false;
+      transcribing = false;
+      const ms = typeof e.payload === 'number' ? e.payload : 0;
+      transcriptError = ms > 0
+        ? `Too short (${ms} ms) — try holding the hotkey a bit longer.`
+        : 'Too short — try holding the hotkey a bit longer.';
+      setTimeout(() => { transcriptError = ''; }, 3500);
+    }).then(u => unlisteners.push(u));
+    listen('device-lost', () => {
+      // Active mic disappeared mid-recording (AirPods off, USB unplugged).
+      // Clear overlay state and surface a banner so the user knows why their
+      // recording was thrown away.
+      recording = false;
+      transcribing = false;
+      transcriptError = 'Microphone disconnected — pick a different device or reconnect.';
+      setTimeout(() => { transcriptError = ''; }, 5000);
+    }).then(u => unlisteners.push(u));
     listen('open-history', () => switchTab('history')).then(u => unlisteners.push(u));
 
     return () => {

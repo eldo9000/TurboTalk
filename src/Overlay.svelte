@@ -99,6 +99,20 @@
       draw();
     }).then(u => uns.push(u));
 
+    listen('recording-too-short', () => {
+      // Specific subtype of recording-discarded; same overlay behaviour —
+      // clear immediately. The main window owns the duration-aware toast.
+      mode = 'idle';
+      draw();
+    }).then(u => uns.push(u));
+
+    listen('device-lost', () => {
+      // Active mic went away mid-recording. Clear the overlay; the main
+      // window banner explains what happened and how to recover.
+      mode = 'idle';
+      draw();
+    }).then(u => uns.push(u));
+
     listen('paste-error', () => {
       // Transcription succeeded but paste failed — show the same brief
       // error pulse the overlay uses for transcript errors. The banner in

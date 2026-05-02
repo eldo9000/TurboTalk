@@ -165,10 +165,25 @@ pub fn run() {
             let recorder = Arc::new(recorder::Recorder::new()?);
 
             // Emit live audio level to the overlay at 20 Hz while recording.
+            // Same thread also services the device-lost edge: if the cpal
+            // error callback flagged it, we cancel the recorder, reset the
+            // tray, and emit `device-lost` to the frontend so the overlay
+            // clears and the main window can surface a banner.
             let level_rec = recorder.clone();
             let level_app = app.handle().clone();
+            let level_tray = tray_icon.clone();
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_millis(50));
+                if level_rec.device_lost() {
+                    tracing::warn!("[lib] observed device-lost flag — cancelling recorder");
+                    level_rec.cancel();
+                    let _ = level_tray.set_icon(Some(tray::make_icon(tray::TrayState::Idle)));
+                    let _ = level_app.emit("device-lost", ());
+                    // `recording-discarded` keeps the overlay's existing
+                    // catch-all listener happy without the frontend needing
+                    // to learn a new clear-overlay path.
+                    let _ = level_app.emit("recording-discarded", ());
+                }
                 if level_rec.is_recording() {
                     let _ = level_app.emit("audio-level", level_rec.level());
                 }
