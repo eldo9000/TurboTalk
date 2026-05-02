@@ -825,12 +825,12 @@ Reply with only the single word, lowercase, no punctuation.
         </span>
       </div>
 
-      {#if cfgCleanupMode === 'regex'}
+      {#if cfgCleanupMode !== 'off'}
         <div class="flex flex-col gap-2 pt-1">
           {#each [
-            ['strip_fillers',   cfgStripFillers,   (v) => { cfgStripFillers   = v; saveModes(); }, 'Strip filler words',        'Removes um, uh, er, hmm from the transcript.'],
-            ['append_period',   cfgAppendPeriod,   (v) => { cfgAppendPeriod   = v; saveModes(); }, 'Append period',             'Adds a period at the end if no punctuation is present.'],
-            ['strip_artifacts', cfgStripArtifacts, (v) => { cfgStripArtifacts = v; saveModes(); }, 'Strip Whisper artifacts',   'Removes trailing " ." and "..." Whisper adds on silence.'],
+            ['strip_fillers',   cfgStripFillers,   (v) => { cfgStripFillers   = v; saveModes(); }, 'Strip filler words',      'Removes um, uh, er, hmm from the transcript.'],
+            ['append_period',   cfgAppendPeriod,   (v) => { cfgAppendPeriod   = v; saveModes(); }, 'Append period',           'Adds a period at the end if no punctuation is present.'],
+            ['strip_artifacts', cfgStripArtifacts, (v) => { cfgStripArtifacts = v; saveModes(); }, 'Strip Whisper artifacts', 'Removes trailing " ." and "..." Whisper adds on silence.'],
           ] as [key, val, setter, label, desc]}
             <label class="flex items-start justify-between gap-3 cursor-pointer">
               <div class="flex flex-col gap-0.5">
