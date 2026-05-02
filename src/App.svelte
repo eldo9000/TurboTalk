@@ -94,14 +94,21 @@ Reply with only the single word, lowercase, no punctuation.
 
   const WINDOW_W  = 440;
 
+  // The window is "compact" (half the natural Modes-tab height) by default,
+  // and "expanded" (full natural height) only on the Modes tab with Advanced
+  // (Chaperone) selected — the only mode that genuinely needs the extra
+  // vertical room (Ollama URL + classifier model + vocabulary + prompt).
+  const COMPACT_HEIGHT_FACTOR = 0.5;
+
   $effect(() => {
     const zoom = ZOOM_LEVELS[zoomIdx] / 100;
-    if (settingsH > 0) {
-      getCurrentWindow().setSize(new LogicalSize(
-        Math.ceil(WINDOW_W * zoom),
-        Math.ceil(settingsH * zoom),
-      ));
-    }
+    if (settingsH === 0) return;
+    const isAdvanced = activeTab === 'modes' && cfgCleanupMode === 'chaperone';
+    const h = isAdvanced ? settingsH : Math.ceil(settingsH * COMPACT_HEIGHT_FACTOR);
+    getCurrentWindow().setSize(new LogicalSize(
+      Math.ceil(WINDOW_W * zoom),
+      Math.ceil(h * zoom),
+    ));
   });
 
   // ── Zoom ──────────────────────────────────────────────────────────────────
@@ -119,8 +126,7 @@ Reply with only the single word, lowercase, no punctuation.
   $effect(() => {
     document.documentElement.style.zoom = `${ZOOM_LEVELS[zoomIdx]}%`;
     localStorage.setItem('tt-zoom', String(zoomIdx));
-    // CSS zoom scales visuals but not layout metrics — re-fit the window
-    forceResize();
+    // The main sizing $effect re-runs on zoom change because it reads zoomIdx.
   });
 
   function zoomIn()  { if (zoomIdx < ZOOM_LEVELS.length - 1) zoomIdx++; }
@@ -325,26 +331,20 @@ Reply with only the single word, lowercase, no punctuation.
     settingsSaveMsg = launchRes.status === 'ok' ? 'Saved.' : 'Error: ' + launchRes.error;
   }
 
-  async function forceResize() {
-    await tick();
-    await new Promise(r => requestAnimationFrame(r));
-    if (settingsH === 0 || !outerEl) return;
-    const zoom = ZOOM_LEVELS[zoomIdx] / 100;
-    getCurrentWindow().setSize(new LogicalSize(
-      Math.ceil(WINDOW_W * zoom),
-      Math.ceil(settingsH * zoom),
-    ));
-  }
-
   function switchTab(tab) {
     activeTab = tab;
-    if (tab === 'models')   openModels().then(forceResize);
+    if (tab === 'models')   openModels();
     if (tab === 'modes')    openModes().then(async () => {
-      await forceResize();
-      if (settingsH === 0 && outerEl) settingsH = outerEl.scrollHeight;
+      // Fallback measurement: if the on-mount measure didn't run (e.g. user
+      // jumped to Modes before mount finished), capture the natural height
+      // here so the compact/expanded sizing has something to halve.
+      if (settingsH === 0 && outerEl) {
+        await tick();
+        await new Promise(r => requestAnimationFrame(r));
+        settingsH = outerEl.scrollHeight;
+      }
     });
-    if (tab === 'settings') openSettings().then(forceResize);
-    if (tab === 'about')    forceResize();
+    if (tab === 'settings') openSettings();
   }
 
   onMount(async () => {
@@ -358,13 +358,18 @@ Reply with only the single word, lowercase, no punctuation.
     cfgHotkeyMode = initialCfg.hotkey?.mode ?? 'hold';
     if (savedHistory.length) history = savedHistory;
 
-    // Measure the Modes tab while hidden to establish the permanent window height.
+    // Measure the Modes tab in Chaperone mode (the tallest layout — Ollama URL
+    // + classifier model + vocabulary + prompt) so the "expanded" window size
+    // always fits the largest content. Halved at runtime for every other view.
     document.documentElement.style.opacity = '0';
+    const savedMode = cfgCleanupMode;
     activeTab = 'modes';
     await openModes();
+    cfgCleanupMode = 'chaperone';
     await tick();
     await new Promise(r => requestAnimationFrame(r));
     if (outerEl) settingsH = outerEl.scrollHeight;
+    cfgCleanupMode = savedMode;
     activeTab = 'history';
     await tick();
     document.documentElement.style.opacity = '';
