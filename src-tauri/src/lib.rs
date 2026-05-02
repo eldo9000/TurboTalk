@@ -2,7 +2,8 @@
 //
 // Module map (see ARCHITECTURE.md):
 //   audio       mic capture (cpal)
-//   recorder    3-state machine: Ready / Recording / Transcribing
+//   recorder    Lifecycle: Ready → Recording → FinalizingAudio → Transcribing
+//                          → Cleaning → Pasting → Ready (one in-flight job)
 //   transcribe  whisper.cpp sidecar wrapper
 //   paste       active-app text injection
 //   hotkey      global push-to-talk binding (CGEventTap — Right Alt)

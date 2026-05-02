@@ -43,10 +43,23 @@ fn ptt_down(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
     let tray = tray_icon.clone();
     let app  = app.clone();
     std::thread::spawn(move || {
+        // One-in-flight policy: only `Ready` is allowed to start a new job.
+        // If the recorder is busy (anything from FinalizingAudio through
+        // Pasting still running from a prior press), report it as
+        // `dictation-busy` so the UI/user can observe the dropped press
+        // without us silently swallowing it.
+        let snapshot = rec.state();
+        if snapshot.is_busy() {
+            tracing::warn!("[hotkey] start ignored — recorder busy in {}", snapshot);
+            emit_critical(&app, "dictation-busy", snapshot.to_string());
+            return;
+        }
         if let Err(e) = rec.start() {
-            // Illegal transition or audio error — do NOT emit ptt-down, do NOT
-            // change tray icon. Frontend stays in its current state.
+            // Race: state moved out of Ready between our snapshot and the
+            // start() call (e.g. another press won the lock first), or audio
+            // backend failed. Do NOT emit ptt-down, do NOT change tray icon.
             tracing::warn!("[hotkey] start ignored: {}", e);
+            emit_critical(&app, "dictation-busy", rec.state().to_string());
             return;
         }
         let _ = tray.set_icon(Some(tray::make_icon(TrayState::Recording)));
@@ -59,17 +72,56 @@ fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
     let tray = tray_icon.clone();
     let app  = app.clone();
     std::thread::spawn(move || {
+        // Tray-state policy: Recording icon only during literal capture; the
+        // moment we enter FinalizingAudio (inside `rec.stop()`) the tray flips
+        // to Transcribing and stays that way through Cleaning + Pasting.
+        // Idle is restored exactly once at the end of the lifecycle.
         match rec.stop() {
             Ok(StopOutcome::Wav { path }) => {
+                // We are now in `FinalizingAudio` per recorder contract.
                 let _ = tray.set_icon(Some(tray::make_icon(TrayState::Transcribing)));
                 emit_critical(&app, "ptt-up", ());
+
                 // `path` is a tempfile::TempPath — its Drop deletes the WAV
                 // automatically whether we exit via the success arm, the
                 // error arm, or a panic. No explicit cleanup needed.
-                match crate::transcribe::run(&path) {
+
+                // FinalizingAudio → Transcribing
+                if let Err(e) = rec.begin_transcribing() {
+                    tracing::error!("[hotkey] begin_transcribing failed: {}", e);
+                    rec.finish();
+                    let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                    return;
+                }
+
+                let transcribe_result = crate::transcribe::run(&path);
+
+                // NOTE: TASK-15 will split the cleanup pass out of
+                // `transcribe::run` so the Cleaning state covers the cleanup
+                // call only. Today cleanup runs inside `transcribe::run`, so
+                // we walk Transcribing → Cleaning at the same instant —
+                // structure for the future, accuracy will follow.
+                if rec.begin_cleaning().is_err() {
+                    // Should be unreachable given begin_transcribing succeeded,
+                    // but if it does happen the recorder has been forced out
+                    // from under us (e.g. cancel). Bail cleanly.
+                    rec.finish();
+                    let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                    return;
+                }
+
+                match transcribe_result {
                     Ok(text) => {
                         tracing::info!("[transcribe] {:?}", text);
                         emit_critical(&app, "transcript", text.clone());
+
+                        // Cleaning → Pasting
+                        if rec.begin_pasting().is_err() {
+                            rec.finish();
+                            let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                            return;
+                        }
+
                         if let Err(e) = crate::paste::paste(&text) {
                             tracing::error!("[paste] {:?}", e);
                             // Surface to UI so the user knows the transcript
@@ -84,15 +136,20 @@ fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
                         emit_critical(&app, "transcript-error", msg);
                     }
                 }
+
+                // End of lifecycle — back to Ready regardless of which arm we
+                // took (success, transcribe error, or paste error).
+                rec.finish();
                 let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
                 // `path` drops here → WAV file deleted from /tmp.
             }
             Ok(StopOutcome::Discard(reason)) => {
-                // Recording was discarded before transcription. Tell the frontend
-                // to clear its overlay — otherwise it stays stuck on
-                // "Transcribing…". `recording-discarded` is the catch-all the
-                // overlay listens to; `recording-too-short` is the more specific
-                // subtype the main window uses to show a duration-aware toast.
+                // `rec.stop()` already returned us to Ready on the discard arm.
+                // Tell the frontend to clear its overlay — otherwise it stays
+                // stuck on "Transcribing…". `recording-discarded` is the
+                // catch-all the overlay listens to; `recording-too-short` is
+                // the more specific subtype the main window uses to show a
+                // duration-aware toast.
                 let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
                 if let DiscardReason::TooShort { duration_ms } = reason {
                     emit_critical(&app, "recording-too-short", duration_ms);
@@ -100,9 +157,12 @@ fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
                 emit_critical(&app, "recording-discarded", ());
             }
             Err(e) => {
-                // Illegal transition (e.g. stop while not Recording) — do NOT
-                // emit ptt-up or any other event. Frontend stays as-is.
+                // Illegal transition (e.g. stop while not Recording) or audio
+                // pipeline error. The recorder has already returned itself to
+                // Ready on the error arm. Do NOT emit ptt-up. Restore the tray
+                // defensively in case this was an audio failure mid-job.
                 tracing::warn!("[hotkey] stop ignored: {}", e);
+                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
             }
         }
     });
