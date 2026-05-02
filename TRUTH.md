@@ -56,6 +56,12 @@ Proof: `[audio] wrote 42240 samples` (1.76s voice), transcript landed in Notes.a
 - **Homebrew whisper-cpp** — Metal-accelerated, not bundled as Tauri sidecar yet (M2).
 - **ggml-base.en** — 141MB, ~130ms latency on M4. Tiny model rejected (stub weights in brew bundle).
 
+## Tauri config rationale
+
+- `macOSPrivateApi: true` (in `src-tauri/tauri.conf.json`) — required for
+  `CGEventTap` hotkey monitoring (`hotkey.rs`). Removing it disables global
+  push-to-talk.
+
 ## Promotion criteria
 
 TurboTalk is a personal-use tool, not a Libre product. Promotion happens only if:

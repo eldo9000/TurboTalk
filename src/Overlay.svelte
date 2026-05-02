@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
-  import { getCurrentWindow, primaryMonitor } from '@tauri-apps/api/window';
+  import { getCurrentWindow, primaryMonitor, monitorFromPoint, cursorPosition } from '@tauri-apps/api/window';
   import { LogicalPosition } from '@tauri-apps/api/dpi';
 
   let mode      = $state('idle'); // 'idle' | 'recording' | 'transcribing'
@@ -56,16 +56,31 @@
     canvasEl.height = CANVAS_H * dpr;
     draw();
 
-    const mon = await primaryMonitor();
-    if (mon) {
+    // Pick the monitor where the user's cursor lives — that's the screen
+    // the focused app is most likely on. Falls back to the primary monitor
+    // if the cursor query fails (early-boot, multi-user fast-switch, etc.).
+    // Position math is done in logical units relative to the chosen
+    // monitor's origin so the overlay lands on the correct screen on
+    // multi-display setups.
+    async function positionOverlay() {
+      let mon = null;
+      try {
+        const cur = await cursorPosition();
+        mon = await monitorFromPoint(cur.x, cur.y);
+      } catch (_) { /* fall through to primary */ }
+      if (!mon) mon = await primaryMonitor();
+      if (!mon) return;
       const sf = mon.scaleFactor;
       const mw = mon.size.width  / sf;
       const mh = mon.size.height / sf;
+      const ox = mon.position.x / sf;
+      const oy = mon.position.y / sf;
       await win.setPosition(new LogicalPosition(
-        Math.round((mw - WIN_W) / 2),
-        Math.round(mh - WIN_H - BOTTOM_GAP),
+        Math.round(ox + (mw - WIN_W) / 2),
+        Math.round(oy + mh - WIN_H - BOTTOM_GAP),
       ));
     }
+    await positionOverlay();
 
     const uns = [];
 
@@ -75,6 +90,10 @@
       wordCount = 0;
       mode = 'recording';
       draw();
+      // Move to the monitor the user is currently on — they may have
+      // dragged their focused app to a different screen since last time.
+      // Fire-and-forget so we don't delay the recording-start signal.
+      positionOverlay().catch(() => {});
     }).then(u => uns.push(u));
 
     listen('ptt-up', () => {
