@@ -20,9 +20,30 @@
 // returns an error, we log a warning and return `(0, samples.len())` —
 // i.e. degrade gracefully to "no trimming" rather than crashing or dropping
 // the whole recording.
+//
+// Session reuse (TASK-17): the heavy cost in `Vad::new` is ONNX session
+// construction (model parse, op graph build, allocator setup). Per-frame
+// `compute()` is cheap by comparison. Stage timings from TASK-13 bucket
+// init + 100×compute together as a single `vad=` number — fine for
+// pipeline debugging, useless for deciding whether to cache.
+//
+// The upstream `vad_rs::Vad` exposes a `reset()` method that zeros only
+// the LSTM hidden/cell tensors (`h_tensor`, `c_tensor`) — the per-stream
+// state. The ONNX `Session` itself is stateless across calls. So caching
+// one `Vad` for the process and `reset()`-ing it before each recording
+// is safe: prior audio cannot influence the next call. The smoothing
+// state (`in_speech`, `onset_counter`, `hangover_counter`,
+// `speech_start_frame`, `speech_end_frame`) lives in the per-call
+// `SmoothedVad` wrapper and is dropped between calls, so there is no
+// state leak path there either.
+//
+// We intentionally use one cached `Vad` behind a `Mutex` rather than a
+// pool — TurboTalk runs one in-flight dictation job at a time
+// (TASK-14), so there is never contention.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use std::time::Instant;
 
 use parking_lot::Mutex;
 use vad_rs::Vad;
@@ -45,6 +66,17 @@ const HANGOVER_FRAMES: usize = 15;
 /// reuse the path. Held in a `OnceLock` so concurrent first-callers
 /// coordinate without a race.
 static MODEL_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+
+/// Cached process-lifetime `Vad`. The heavy cost is `Vad::new` (ONNX
+/// session construction); `compute()` is cheap. We pay init exactly once
+/// per process and call `reset()` before each `trim()` to zero the LSTM
+/// h/c tensors so prior audio cannot influence the next recording. See
+/// the module-level reuse note for the safety argument.
+///
+/// `None` until first init. If `Vad::new` ever fails, we leave the cell
+/// `None` and fall back to "no trimming" via `trim()`'s graceful path —
+/// we do not poison the cache or panic.
+static VAD_CACHE: OnceLock<Mutex<Option<Vad>>> = OnceLock::new();
 
 fn ensure_model_on_disk() -> anyhow::Result<PathBuf> {
     let cell = MODEL_PATH.get_or_init(|| Mutex::new(None));
@@ -75,8 +107,12 @@ fn ensure_model_on_disk() -> anyhow::Result<PathBuf> {
 /// kept range for `HANGOVER_FRAMES` more frames before flipping back to
 /// silence. Catches trailing fricatives and short inter-word pauses that
 /// the model momentarily classifies as non-speech.
-struct SmoothedVad {
-    inner: Vad,
+/// Per-call smoothing state. Held only on the stack inside `trim()` —
+/// dropped between recordings, so there is no cross-call state leak from
+/// the smoothing layer. The shared `Vad` (LSTM tensors) is reset
+/// separately by the caller before pushing the first frame.
+struct SmoothedVad<'a> {
+    inner: &'a mut Vad,
     in_speech: bool,
     onset_counter: usize,
     hangover_counter: usize,
@@ -89,19 +125,16 @@ struct SmoothedVad {
     speech_end_frame: Option<usize>,
 }
 
-impl SmoothedVad {
-    fn new() -> anyhow::Result<Self> {
-        let path = ensure_model_on_disk()?;
-        let inner = Vad::new(&path, SAMPLE_RATE)
-            .map_err(|e| anyhow::anyhow!("Failed to create Silero VAD: {e}"))?;
-        Ok(Self {
+impl<'a> SmoothedVad<'a> {
+    fn new(inner: &'a mut Vad) -> Self {
+        Self {
             inner,
             in_speech: false,
             onset_counter: 0,
             hangover_counter: 0,
             speech_start_frame: None,
             speech_end_frame: None,
-        })
+        }
     }
 
     fn push_frame(&mut self, frame_idx: usize, frame: &[f32]) -> anyhow::Result<()> {
@@ -163,17 +196,60 @@ pub fn trim(samples: &[f32]) -> (usize, usize) {
         return (0, samples.len());
     }
 
-    let mut vad = match SmoothedVad::new() {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!("[vad] failed to initialize Silero — skipping trim: {e}");
-            return (0, samples.len());
+    // Acquire (and lazily initialize) the cached process-lifetime VAD.
+    // We hold the mutex for the duration of this call — the audio
+    // pipeline runs one in-flight job at a time (TASK-14), so there is
+    // no contention to lose to. Holding it also makes "reset → push
+    // frames" atomic w.r.t. any future caller, which matters because
+    // reset zeros the LSTM state the frames depend on.
+    let cell = VAD_CACHE.get_or_init(|| Mutex::new(None));
+    let mut guard = cell.lock();
+
+    // Lazy init on first call (or re-init if a previous init failed and
+    // the cell is still empty). We measure init separately from
+    // reset+compute so timing logs reveal whether we're actually
+    // benefiting from the cache.
+    let init_ms: f32;
+    if guard.is_none() {
+        let t_init = Instant::now();
+        let path = match ensure_model_on_disk() {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(
+                    "[vad] failed to materialize Silero model — skipping trim: {e}"
+                );
+                return (0, samples.len());
+            }
+        };
+        match Vad::new(&path, SAMPLE_RATE) {
+            Ok(v) => {
+                init_ms = t_init.elapsed().as_secs_f32() * 1000.0;
+                *guard = Some(v);
+            }
+            Err(e) => {
+                tracing::warn!("[vad] failed to initialize Silero — skipping trim: {e}");
+                return (0, samples.len());
+            }
         }
-    };
+    } else {
+        init_ms = 0.0;
+    }
+    let inner = guard.as_mut().expect("vad cache populated above");
+
+    // Zero the LSTM h/c tensors so prior audio cannot influence this
+    // recording. This is the documented `reset()` semantics in
+    // `vad-rs::Vad`. Reset is O(state-size), not O(model-size), so it's
+    // ~free compared to init.
+    let t_reset = Instant::now();
+    inner.reset();
+    let reset_ms = t_reset.elapsed().as_secs_f32() * 1000.0;
+
+    let mut vad = SmoothedVad::new(inner);
 
     let total_frames = samples.len().div_ceil(FRAME_SAMPLES);
     let mut frame_buf = [0.0f32; FRAME_SAMPLES];
 
+    let t_compute = Instant::now();
     for i in 0..total_frames {
         let start = i * FRAME_SAMPLES;
         let end = (start + FRAME_SAMPLES).min(samples.len());
@@ -190,6 +266,16 @@ pub fn trim(samples: &[f32]) -> (usize, usize) {
             return (0, samples.len());
         }
     }
+    let compute_ms = t_compute.elapsed().as_secs_f32() * 1000.0;
+
+    // Fine-grained breakdown so the cache benefit is visible separately
+    // from per-frame inference cost. `init_ms` is non-zero only on the
+    // very first call of the process; subsequent calls show
+    // `init=0.00` and the savings are real.
+    tracing::info!(
+        "[vad] timings (ms): init={:.2} reset={:.2} compute={:.2} frames={}",
+        init_ms, reset_ms, compute_ms, total_frames
+    );
 
     let (Some(start_frame), Some(end_frame)) = (vad.speech_start_frame, vad.speech_end_frame) else {
         // No speech detected. Mirror the old `trim_silence` "everything
@@ -288,5 +374,63 @@ mod tests {
     fn trim_sub_frame_buffer() {
         let buf = vec![0.0f32; 100]; // < FRAME_SAMPLES (480)
         assert_eq!(trim(&buf), (0, 100));
+    }
+
+    /// State-isolation contract for the cached VAD (TASK-17).
+    ///
+    /// The cached `Vad` is reused across calls but `reset()` is called
+    /// before each recording. We can't easily assert h/c-tensor zeroing
+    /// from out here, but we can assert the user-visible contract: a
+    /// pure-silence buffer must always fall through to the (0, len)
+    /// fallback regardless of what was processed before it.
+    ///
+    /// If state ever leaked across calls, a silence buffer following a
+    /// noisy buffer could pick up phantom "speech" frames from the LSTM
+    /// memory. This test would then either return a non-trivial
+    /// (start, end) range or, more subtly, return (0, len) for the
+    /// wrong reason. We assert the shape directly.
+    #[test]
+    fn trim_does_not_leak_state_between_calls() {
+        // First call: a buffer with non-trivial energy. We don't care
+        // what bounds it returns — only that it runs and primes the
+        // cached Vad's LSTM state with non-zero h/c.
+        const SR: usize = 16_000;
+        let mut noisy = vec![0.0f32; SR]; // 1 s
+        for (i, s) in noisy.iter_mut().enumerate() {
+            // Pseudo-random low-amplitude noise.
+            *s = ((i as f32 * 12.9898).sin() * 43758.5453).fract() * 0.2 - 0.1;
+        }
+        let _ = trim(&noisy);
+
+        // Second call: pure silence. With reset()-ing between calls,
+        // Silero must see this as silence end-to-end and we must hit
+        // the "no speech detected" fallback path, which returns
+        // (0, samples.len()).
+        let silence = vec![0.0f32; SR]; // 1 s of zeros
+        let (start, end) = trim(&silence);
+        assert_eq!(
+            (start, end),
+            (0, silence.len()),
+            "silence after noise must return full-range fallback, not inherit speech bounds"
+        );
+
+        // Third call: silence again, to assert the property is stable
+        // across repeated reuse of the cached session.
+        let (start, end) = trim(&silence);
+        assert_eq!(
+            (start, end),
+            (0, silence.len()),
+            "repeated silence calls must remain at full-range fallback"
+        );
+    }
+
+    /// Repeated calls with sub-frame inputs must not crash, must not
+    /// touch the cached Vad, and must return the trivial range each time.
+    #[test]
+    fn trim_repeated_sub_frame_calls_are_stable() {
+        for _ in 0..5 {
+            assert_eq!(trim(&vec![0.0f32; 100]), (0, 100));
+            assert_eq!(trim(&[]), (0, 0));
+        }
     }
 }
