@@ -250,7 +250,7 @@ use parking_lot::RwLock;
 type HotkeyState = Arc<RwLock<settings::HotkeyConfig>>;
 
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, WindowEvent,
 };
@@ -329,9 +329,11 @@ pub fn run() {
         ])
         .setup(|app| {
             // ── Tray icon ──────────────────────────────────────────────────
-            let show_item = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+            let show_item    = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;
+            let restart_item = MenuItem::with_id(app, "restart", "Restart", true, None::<&str>)?;
+            let quit_item    = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let separator    = PredefinedMenuItem::separator(app)?;
+            let menu = Menu::with_items(app, &[&show_item, &separator, &restart_item, &quit_item])?;
 
             let tray_icon: TrayIcon = TrayIconBuilder::new()
                 .icon(tray::make_icon(tray::TrayState::Idle))
@@ -361,7 +363,8 @@ pub fn run() {
                             let _ = win.set_focus();
                         }
                     }
-                    "quit" => app.exit(0),
+                    "restart" => app.restart(),
+                    "quit"    => app.exit(0),
                     _ => {}
                 })
                 .build(app)?;
