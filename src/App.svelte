@@ -65,13 +65,16 @@ Reply with only the single word, lowercase, no punctuation.
 
 <transcript>{text}</transcript>`;
 
-  let cfgCleanupMode      = $state('regex');
-  let cfgOllamaUrl        = $state('');
-  let cfgLlmModel         = $state('');
-  let cfgVocabulary       = $state('');
-  let cfgClassifierPrompt = $state('');
-  let showPromptEditor    = $state(false);
-  let modesSaveMsg        = $state('');
+  let cfgCleanupMode          = $state('regex');
+  let cfgStripFillers         = $state(true);
+  let cfgAppendPeriod         = $state(false);
+  let cfgStripArtifacts       = $state(true);
+  let cfgOllamaUrl            = $state('');
+  let cfgLlmModel             = $state('');
+  let cfgVocabulary           = $state('');
+  let cfgClassifierPrompt     = $state('');
+  let showPromptEditor        = $state(false);
+  let modesSaveMsg            = $state('');
 
   // Settings tab
   let cfgBin               = $state('');
@@ -89,39 +92,16 @@ Reply with only the single word, lowercase, no punctuation.
   // Ref to the outermost div — used to measure total natural content height.
   let outerEl = $state(null);
 
-  const HISTORY_H = 280;
   const WINDOW_W  = 440;
-
-  function contentSize() {
-    const zoom = ZOOM_LEVELS[zoomIdx] / 100;
-    const w = Math.ceil(WINDOW_W * zoom);
-    const h = Math.min(Math.ceil(outerEl.scrollHeight * zoom), Math.ceil(700 * zoom));
-    return { w, h };
-  }
 
   $effect(() => {
     const zoom = ZOOM_LEVELS[zoomIdx] / 100;
-    if (activeTab === 'history') {
-      getCurrentWindow().setSize(new LogicalSize(
-        Math.ceil(WINDOW_W * zoom),
-        Math.ceil(HISTORY_H * zoom),
-      ));
-      return;
-    }
     if (settingsH > 0) {
       getCurrentWindow().setSize(new LogicalSize(
         Math.ceil(WINDOW_W * zoom),
         Math.ceil(settingsH * zoom),
       ));
-      return;
     }
-    if (!outerEl) return;
-    const ro = new ResizeObserver(() => {
-      const { w, h } = contentSize();
-      getCurrentWindow().setSize(new LogicalSize(w, h));
-    });
-    ro.observe(outerEl);
-    return () => ro.disconnect();
   });
 
   // ── Zoom ──────────────────────────────────────────────────────────────────
@@ -148,6 +128,11 @@ Reply with only the single word, lowercase, no punctuation.
 
   // ── History ───────────────────────────────────────────────────────────────
 
+  async function clearHistory() {
+    history = [];
+    await commands.saveHistory([]);
+  }
+
   async function copyHistoryItem(item) {
     copiedTs = item.ts;
     const res = await commands.copyHistoryItem(item.text);
@@ -160,17 +145,20 @@ Reply with only the single word, lowercase, no punctuation.
 
   // ── Models ────────────────────────────────────────────────────────────────
 
+  // The default starter model. Surfaced in its own "Recommended" section
+  // above the rest of the catalog so first-time users don't have to choose.
+  const RECOMMENDED_MODEL = {
+    name: 'ggml-large-v3-turbo',
+    size: '1.6 GB',
+    description: 'Best accuracy for daily dictation · multilingual · fast',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin',
+  };
+
   const MODEL_CATALOG = [
-    {
-      name: 'ggml-small.en',
-      size: '466 MB',
-      description: 'Fast · English only',
-      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin',
-    },
     {
       name: 'ggml-large-v3-turbo-q5_0',
       size: '574 MB',
-      description: 'Recommended · multilingual · quantized · near-large quality',
+      description: 'Quantized turbo · same accuracy, lower RAM',
       url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin',
     },
     {
@@ -180,18 +168,15 @@ Reply with only the single word, lowercase, no punctuation.
       url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin',
     },
     {
-      name: 'ggml-large-v3-turbo',
-      size: '1.6 GB',
-      description: 'High accuracy · multilingual · ~6× faster than v3',
-      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin',
-    },
-    {
       name: 'ggml-large-v3',
       size: '3.1 GB',
       description: 'Maximum accuracy · multilingual · slowest',
       url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin',
     },
   ];
+
+  // Catalog filenames the "Custom" detector should treat as known.
+  const KNOWN_FILENAMES = [RECOMMENDED_MODEL, ...MODEL_CATALOG].map(m => m.name + '.bin');
 
   async function openModels() {
     const cfg = await commands.getConfig();
@@ -212,13 +197,13 @@ Reply with only the single word, lowercase, no punctuation.
 
   async function removeModel(path) {
     cfgModels = cfgModels.filter(m => m !== path);
-    if (cfgModel === path) cfgModel = cfgModels[0] ?? '';
+    if (cfgModel === path) cfgModel = '';
     await saveModels();
   }
 
-  // Custom = paths in cfgModels not matching any catalog filename.
+  // Custom = paths in cfgModels not matching any known catalog filename.
   const customPaths = $derived(
-    cfgModels.filter(p => !MODEL_CATALOG.some(m => p.endsWith(m.name + '.bin')))
+    cfgModels.filter(p => !KNOWN_FILENAMES.some(fn => p.endsWith(fn)))
   );
 
   async function refreshModels() {
@@ -264,11 +249,14 @@ Reply with only the single word, lowercase, no punctuation.
 
   async function openModes() {
     const cfg = await commands.getConfig();
-    cfgCleanupMode      = cfg.cleanup?.mode               ?? 'regex';
-    cfgOllamaUrl        = cfg.cleanup?.ollama_url         ?? '';
-    cfgLlmModel         = cfg.cleanup?.classifier_model   ?? '';
+    cfgCleanupMode      = cfg.cleanup?.mode                      ?? 'regex';
+    cfgStripFillers     = cfg.cleanup?.strip_fillers              ?? true;
+    cfgAppendPeriod     = cfg.cleanup?.append_period              ?? false;
+    cfgStripArtifacts   = cfg.cleanup?.strip_whisper_artifacts    ?? true;
+    cfgOllamaUrl        = cfg.cleanup?.ollama_url                 ?? '';
+    cfgLlmModel         = cfg.cleanup?.classifier_model           ?? '';
     cfgVocabulary       = (cfg.cleanup?.vocabulary ?? []).join('\n');
-    cfgClassifierPrompt = cfg.cleanup?.classifier_prompt  ?? DEFAULT_CLASSIFIER_PROMPT;
+    cfgClassifierPrompt = cfg.cleanup?.classifier_prompt          ?? DEFAULT_CLASSIFIER_PROMPT;
     modesSaveMsg = '';
   }
 
@@ -283,11 +271,14 @@ Reply with only the single word, lowercase, no punctuation.
         classifier_prompt: DEFAULT_CLASSIFIER_PROMPT,
       };
     }
-    cfg.cleanup.mode              = cfgCleanupMode;
-    cfg.cleanup.ollama_url        = cfgOllamaUrl;
-    cfg.cleanup.classifier_model  = cfgLlmModel;
-    cfg.cleanup.vocabulary        = cfgVocabulary.split('\n').map(s => s.trim()).filter(Boolean);
-    cfg.cleanup.classifier_prompt = cfgClassifierPrompt;
+    cfg.cleanup.mode                    = cfgCleanupMode;
+    cfg.cleanup.strip_fillers           = cfgStripFillers;
+    cfg.cleanup.append_period           = cfgAppendPeriod;
+    cfg.cleanup.strip_whisper_artifacts = cfgStripArtifacts;
+    cfg.cleanup.ollama_url              = cfgOllamaUrl;
+    cfg.cleanup.classifier_model        = cfgLlmModel;
+    cfg.cleanup.vocabulary              = cfgVocabulary.split('\n').map(s => s.trim()).filter(Boolean);
+    cfg.cleanup.classifier_prompt       = cfgClassifierPrompt;
     const res = await commands.saveConfig(cfg);
     modesSaveMsg = res.status === 'ok' ? 'Saved.' : 'Error: ' + res.error;
   }
@@ -333,24 +324,12 @@ Reply with only the single word, lowercase, no punctuation.
   async function forceResize() {
     await tick();
     await new Promise(r => requestAnimationFrame(r));
+    if (settingsH === 0 || !outerEl) return;
     const zoom = ZOOM_LEVELS[zoomIdx] / 100;
-    if (activeTab === 'history') {
-      getCurrentWindow().setSize(new LogicalSize(
-        Math.ceil(WINDOW_W * zoom),
-        Math.ceil(HISTORY_H * zoom),
-      ));
-      return;
-    }
-    if (settingsH > 0) {
-      getCurrentWindow().setSize(new LogicalSize(
-        Math.ceil(WINDOW_W * zoom),
-        Math.ceil(settingsH * zoom),
-      ));
-      return;
-    }
-    if (!outerEl) return;
-    const { w, h } = contentSize();
-    getCurrentWindow().setSize(new LogicalSize(w, h));
+    getCurrentWindow().setSize(new LogicalSize(
+      Math.ceil(WINDOW_W * zoom),
+      Math.ceil(settingsH * zoom),
+    ));
   }
 
   function switchTab(tab) {
@@ -374,6 +353,17 @@ Reply with only the single word, lowercase, no punctuation.
     cfgHotkeyKey  = initialCfg.hotkey?.key  ?? 'right_option';
     cfgHotkeyMode = initialCfg.hotkey?.mode ?? 'hold';
     if (savedHistory.length) history = savedHistory;
+
+    // Measure the Modes tab while hidden to establish the permanent window height.
+    document.documentElement.style.opacity = '0';
+    activeTab = 'modes';
+    await openModes();
+    await tick();
+    await new Promise(r => requestAnimationFrame(r));
+    if (outerEl) settingsH = outerEl.scrollHeight;
+    activeTab = 'history';
+    await tick();
+    document.documentElement.style.opacity = '';
 
     function handleKeydown(e) {
       if (e.metaKey || e.ctrlKey) {
@@ -578,64 +568,87 @@ Reply with only the single word, lowercase, no punctuation.
             </button>
           {/each}
         </div>
+        <div class="shrink-0 flex justify-center px-3 py-2 border-t border-[var(--border,#2a2a2a)]">
+          <button
+            onclick={clearHistory}
+            class="text-[10px] text-[var(--text-tertiary,#666)] hover:text-red-400 transition-colors"
+          >Clear all</button>
+        </div>
       {/if}
     </div>
   {/if}
+
+  {#snippet modelRow(m)}
+    {@const filename     = m.name + '.bin'}
+    {@const installedPath = cfgModels.find(p => p.endsWith(filename))}
+    {@const isInstalled  = !!installedPath}
+    {@const isSelected   = isInstalled && cfgModel === installedPath}
+    {@const isDownloading = m.name in downloadProgress}
+    {@const pct          = downloadProgress[m.name] ?? 0}
+    <div class="group flex items-center gap-2 py-1.5 border-b border-[var(--border,#2a2a2a)] last:border-0">
+      <div class="flex-1 min-w-0">
+        <span class="text-xs font-mono text-[var(--text-primary)]">{m.name}</span>
+        <span class="text-[10px] text-[var(--text-tertiary,#666)] ml-1.5">{m.size}</span>
+        <p class="text-[10px] text-[var(--text-tertiary,#666)] mt-0.5">{m.description}</p>
+      </div>
+      {#if isDownloading}
+        <span class="shrink-0 text-[10px] text-[var(--accent)] tabular-nums w-7 text-right">{pct}%</span>
+        <button disabled
+          class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap
+                 border-[var(--border)] text-[var(--text-tertiary,#666)] cursor-default"
+        >↓ …</button>
+      {:else if !isInstalled}
+        <button
+          onclick={() => startDownload(m)}
+          class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap transition-colors
+                 border-[var(--border)] bg-[var(--surface-raised)] text-[var(--text-secondary)]
+                 hover:text-[var(--text-primary)] hover:border-[var(--text-secondary)]"
+        >Download</button>
+      {:else if isSelected}
+        <button
+          onclick={() => removeModel(installedPath)}
+          title="Remove"
+          class="shrink-0 w-5 h-5 flex items-center justify-center rounded text-xs
+                 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto
+                 transition-opacity text-red-400 hover:bg-red-500/15"
+        >×</button>
+        <button disabled
+          class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap
+                 border-green-500 bg-green-500/20 text-[var(--text-primary)] cursor-default"
+        >Selected</button>
+      {:else}
+        <button
+          onclick={() => removeModel(installedPath)}
+          title="Remove"
+          class="shrink-0 w-5 h-5 flex items-center justify-center rounded text-xs
+                 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto
+                 transition-opacity text-red-400 hover:bg-red-500/15"
+        >×</button>
+        <button
+          onclick={() => selectModel(installedPath)}
+          class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap transition-colors
+                 border-[var(--accent)] bg-[var(--accent)]/20 text-[var(--text-primary)]
+                 hover:bg-[var(--accent)]/40"
+        >Install</button>
+      {/if}
+    </div>
+  {/snippet}
 
   <!-- Models tab -->
   {#if activeTab === 'models'}
     <div class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 px-4 py-4">
 
+      <!-- Recommended model -->
+      <div class="flex flex-col gap-0.5">
+        <span class="text-[var(--text-secondary)] text-sm mb-0.5">Recommended</span>
+        {@render modelRow(RECOMMENDED_MODEL)}
+      </div>
+
       <!-- Download catalog -->
       <div class="flex flex-col gap-0.5">
         <span class="text-[var(--text-secondary)] text-sm mb-0.5">Available models</span>
         {#each MODEL_CATALOG as m}
-          {@const filename     = m.name + '.bin'}
-          {@const installedPath = cfgModels.find(p => p.endsWith(filename))}
-          {@const isInstalled  = !!installedPath}
-          {@const isSelected   = isInstalled && cfgModel === installedPath}
-          {@const isDownloading = m.name in downloadProgress}
-          {@const pct          = downloadProgress[m.name] ?? 0}
-          <div class="group flex items-center gap-2 py-1.5 border-b border-[var(--border,#2a2a2a)] last:border-0">
-            <div class="flex-1 min-w-0">
-              <span class="text-xs font-mono text-[var(--text-primary)]">{m.name}</span>
-              <span class="text-[10px] text-[var(--text-tertiary,#666)] ml-1.5">{m.size}</span>
-              <p class="text-[10px] text-[var(--text-tertiary,#666)] mt-0.5">{m.description}</p>
-            </div>
-            {#if isDownloading}
-              <span class="shrink-0 text-[10px] text-[var(--accent)] tabular-nums w-7 text-right">{pct}%</span>
-              <button disabled
-                class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap
-                       border-[var(--border)] text-[var(--text-tertiary,#666)] cursor-default"
-              >↓ …</button>
-            {:else if !isInstalled}
-              <button
-                onclick={() => startDownload(m)}
-                class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap transition-colors
-                       border-[var(--border)] bg-[var(--surface-raised)] text-[var(--text-secondary)]
-                       hover:text-[var(--text-primary)] hover:border-[var(--text-secondary)]"
-              >Download</button>
-            {:else if isSelected}
-              <button disabled
-                class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap
-                       border-green-500 bg-green-500/20 text-[var(--text-primary)] cursor-default"
-              >Selected</button>
-            {:else}
-              <button
-                onclick={() => removeModel(installedPath)}
-                title="Remove"
-                class="shrink-0 w-5 h-5 flex items-center justify-center rounded text-xs
-                       opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto
-                       transition-opacity text-red-400 hover:bg-red-500/15"
-              >×</button>
-              <button
-                onclick={() => selectModel(installedPath)}
-                class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap transition-colors
-                       border-[var(--accent)] bg-[var(--accent)]/20 text-[var(--text-primary)]
-                       hover:bg-[var(--accent)]/40"
-              >Install</button>
-            {/if}
-          </div>
+          {@render modelRow(m)}
         {/each}
       </div>
 
@@ -694,6 +707,11 @@ Reply with only the single word, lowercase, no punctuation.
         </div>
       </div>
 
+      <!-- No model selected warning -->
+      {#if !cfgModel}
+        <p class="text-[11px] text-red-400 text-center">No model selected — transcription will fail.</p>
+      {/if}
+
       <!-- Footer: directory hint + refresh -->
       <div class="flex items-start gap-2 pt-0.5">
         <p class="flex-1 text-[var(--text-tertiary,#666)] text-[10px] leading-relaxed">
@@ -721,7 +739,7 @@ Reply with only the single word, lowercase, no punctuation.
       <div class="flex flex-col gap-1.5">
         <span class="text-[var(--text-secondary)] text-sm">Post-processing</span>
         <div class="flex rounded-lg overflow-hidden border border-[var(--border)]">
-          {#each [['off','Off'],['regex','Regex'],['chaperone','Chaperone']] as [val, label]}
+          {#each [['off','Off'],['regex','Simple'],['chaperone','Advanced']] as [val, label]}
             <button
               onclick={() => { cfgCleanupMode = val; saveModes(); }}
               class="flex-1 text-xs py-1.5 transition-colors
@@ -731,12 +749,43 @@ Reply with only the single word, lowercase, no punctuation.
             >{label}</button>
           {/each}
         </div>
-        <span class="text-[var(--text-tertiary,#666)] text-[10px]">
-          {#if cfgCleanupMode === 'off'}Paste raw Whisper output.
-          {:else if cfgCleanupMode === 'regex'}Capitalize and trim punctuation (default).
-          {:else}Route through a local LLM classifier via Ollama.{/if}
+        <span class="text-[var(--text-tertiary,#666)] text-[10px] leading-relaxed">
+          {#if cfgCleanupMode === 'off'}
+            Paste raw Whisper output exactly as transcribed — no formatting, no changes. Useful if you want full control downstream.
+          {:else if cfgCleanupMode === 'regex'}
+            Capitalizes the first letter of each transcript. Fast, deterministic, works offline. No model or network required.
+          {:else}
+            Sends the transcript to a local Ollama model, which classifies your intent — prose, code, or shell command — then applies the right formatting for each. Requires Ollama running locally.
+          {/if}
         </span>
       </div>
+
+      {#if cfgCleanupMode === 'regex'}
+        <div class="flex flex-col gap-2 pt-1">
+          {#each [
+            ['strip_fillers',   cfgStripFillers,   (v) => { cfgStripFillers   = v; saveModes(); }, 'Strip filler words',        'Removes um, uh, er, hmm from the transcript.'],
+            ['append_period',   cfgAppendPeriod,   (v) => { cfgAppendPeriod   = v; saveModes(); }, 'Append period',             'Adds a period at the end if no punctuation is present.'],
+            ['strip_artifacts', cfgStripArtifacts, (v) => { cfgStripArtifacts = v; saveModes(); }, 'Strip Whisper artifacts',   'Removes trailing " ." and "..." Whisper adds on silence.'],
+          ] as [key, val, setter, label, desc]}
+            <label class="flex items-start justify-between gap-3 cursor-pointer">
+              <div class="flex flex-col gap-0.5">
+                <span class="text-[var(--text-secondary)] text-xs">{label}</span>
+                <span class="text-[var(--text-tertiary,#666)] text-[10px] leading-relaxed">{desc}</span>
+              </div>
+              <button
+                role="switch"
+                aria-checked={val}
+                onclick={() => setter(!val)}
+                class="relative mt-0.5 shrink-0 w-8 h-4 rounded-full transition-colors
+                       {val ? 'bg-[var(--accent)]' : 'bg-[var(--surface-raised)] border border-[var(--border)]'}"
+              >
+                <span class="absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-all
+                             {val ? 'left-[18px]' : 'left-0.5'}"></span>
+              </button>
+            </label>
+          {/each}
+        </div>
+      {/if}
 
       {#if cfgCleanupMode === 'chaperone'}
 
