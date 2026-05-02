@@ -158,7 +158,8 @@ Reply with only the single word, lowercase, no punctuation.
     {
       name: 'ggml-large-v3-turbo-q5_0',
       size: '574 MB',
-      description: 'Quantized turbo · same accuracy, lower RAM',
+      description: 'Quantized turbo · lower accuracy, lower RAM',
+      warn: true,
       url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin',
     },
     {
@@ -592,7 +593,7 @@ Reply with only the single word, lowercase, no punctuation.
       <div class="flex-1 min-w-0">
         <span class="text-xs font-mono text-[var(--text-primary)]">{m.name}</span>
         <span class="text-[10px] text-[var(--text-tertiary,#666)] ml-1.5">{m.size}</span>
-        <p class="text-[10px] text-[var(--text-tertiary,#666)] mt-0.5">{m.description}</p>
+        <p class="text-[10px] mt-0.5 {m.warn ? 'text-yellow-400' : 'text-[var(--text-tertiary,#666)]'}">{m.description}</p>
       </div>
       {#if isDownloading}
         <span class="shrink-0 text-[10px] text-[var(--accent)] tabular-nums w-7 text-right">{pct}%</span>
