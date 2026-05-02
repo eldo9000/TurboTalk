@@ -127,15 +127,32 @@ pub fn run(wav: &Path) -> anyhow::Result<String> {
     // whisper-cli appends .txt to the full input filename: <wav>.wav.txt
     let txt_path = PathBuf::from(format!("{}.txt", wav.display()));
 
+    // Flags tuned for short-form push-to-talk dictation (not long-form transcription):
+    //   --no-context     don't condition on previous-segment text (stale across separate utterances)
+    //   --beam-size 5    moderate bump from default 1; better short-utterance accuracy
+    //   --temperature 0  deterministic decoding; whisper.cpp still falls back internally on no-speech
+    //   --suppress-blank reduces silent-frame hallucinations (pairs with VAD)
+    // The user-editable `cleanup.vocabulary` (already used by the Chaperone classifier) is
+    // also fed to whisper as `--prompt` to bias spelling of names/jargon/identifiers.
+    let mut args: Vec<String> = vec![
+        "-m".into(), model_str.to_string(),
+        "-f".into(), wav.to_str().unwrap().to_string(),
+        "-otxt".into(),
+        "-np".into(),
+        "-nt".into(),
+        "-l".into(), "en".into(),
+        "--no-context".into(),
+        "--beam-size".into(), "5".into(),
+        "--temperature".into(), "0".into(),
+        "--suppress-blank".into(),
+    ];
+    if !cfg.cleanup.vocabulary.is_empty() {
+        args.push("--prompt".into());
+        args.push(cfg.cleanup.vocabulary.join(", "));
+    }
+
     let output = std::process::Command::new(&bin)
-        .args([
-            "-m", model_str,
-            "-f", wav.to_str().unwrap(),
-            "-otxt",
-            "-np",
-            "-nt",
-            "-l", "en",
-        ])
+        .args(&args)
         .output()?;
 
     if !output.status.success() {
