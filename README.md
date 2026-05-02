@@ -4,12 +4,6 @@ Personal voice dictation.
 Optimised and laser fast.
 No bloat.
 
-2. **Launch TurboTalk.** The app lives in the menu bar.
-
-3. **Grant Accessibility.** On first use macOS will prompt — or go to System Settings → Privacy & Security → Accessibility and add TurboTalk manually. Restart the app after granting.
-
-4. **Hold your hotkey and speak.** Default is **Right Option ⌥**. Release to transcribe. The text pastes automatically.
-
 ## Features
 
 - **Global push-to-talk** — hold the hotkey to record, release to transcribe and paste. Or switch to toggle mode (press once to start, press again to stop).
