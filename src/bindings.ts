@@ -15,6 +15,14 @@ export const commands = {
 	setLaunchAtLogin: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_launch_at_login", { enabled })),
 	listAudioDevices: () => __TAURI_INVOKE<string[]>("list_audio_devices"),
 	downloadModel: (url: string, name: string) => typedError<string, string>(__TAURI_INVOKE("download_model", { url, name })),
+	/**
+	 *  Best-effort delete of a model `.bin` file from the canonical models
+	 *  directory. Returns `Ok(true)` if the file was actually deleted,
+	 *  `Ok(false)` for safe skips (file gone, custom path outside the models
+	 *  dir, or models dir doesn't exist), and `Err` only for genuine failures
+	 *  (permission denied, .bin extension check failed, etc).
+	 */
+	deleteModelFile: (path: string) => typedError<boolean, string>(__TAURI_INVOKE("delete_model_file", { path })),
 	loadHistory: () => __TAURI_INVOKE<HistoryEntry[]>("load_history"),
 	saveHistory: (entries: HistoryEntry[]) => typedError<null, string>(__TAURI_INVOKE("save_history", { entries })),
 	copyHistoryItem: (text: string) => typedError<null, string>(__TAURI_INVOKE("copy_history_item", { text })),
@@ -37,6 +45,12 @@ export type CleanupConfig = {
 	 *  user's spoken text cannot be misread as classifier instructions.
 	 */
 	classifier_prompt?: string,
+	// Simple mode: strip common filler words (um, uh, er, hmm).
+	strip_fillers?: boolean,
+	// Simple mode: append a period if the transcript ends without punctuation.
+	append_period?: boolean,
+	// Simple mode: remove trailing Whisper artifacts like " ." and " ...".
+	strip_whisper_artifacts?: boolean,
 };
 
 /**

@@ -93,6 +93,32 @@ fn copy_history_item(text: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Best-effort delete of a model `.bin` file from the canonical models
+/// directory. Returns `Ok(true)` if the file was actually deleted,
+/// `Ok(false)` for safe skips (file gone, custom path outside the models
+/// dir, or models dir doesn't exist), and `Err` only for genuine failures
+/// (permission denied, .bin extension check failed, etc).
+#[tauri::command]
+#[specta::specta]
+fn delete_model_file(path: String) -> Result<bool, String> {
+    let Some(canon_models_dir) = settings::canonical_models_dir() else {
+        return Ok(false);
+    };
+    let canon = match std::path::PathBuf::from(&path).canonicalize() {
+        Ok(c) => c,
+        Err(_) => return Ok(false),
+    };
+    if !canon.starts_with(&canon_models_dir) {
+        return Ok(false);
+    }
+    if !canon.extension().is_some_and(|e| e == "bin") {
+        return Err(format!("refusing to delete non-.bin file: {}", path));
+    }
+    std::fs::remove_file(&canon).map_err(|e| format!("delete failed: {}", e))?;
+    tracing::info!("[models] deleted {}", canon.display());
+    Ok(true)
+}
+
 #[tauri::command]
 #[specta::specta]
 fn load_history(app: tauri::AppHandle) -> Vec<settings::HistoryEntry> {
@@ -259,6 +285,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         set_launch_at_login,
         list_audio_devices,
         download_model,
+        delete_model_file,
         load_history,
         save_history,
         copy_history_item,
@@ -297,7 +324,7 @@ pub fn run() {
             get_theme, get_accent,
             get_config, save_config, scan_models_dir,
             get_launch_at_login, set_launch_at_login, list_audio_devices,
-            download_model,
+            download_model, delete_model_file,
             load_history, save_history, copy_history_item
         ])
         .setup(|app| {
