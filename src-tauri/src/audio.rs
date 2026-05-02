@@ -9,6 +9,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempPath;
 
+/// Peak target ≈ -1 dBFS — leaves 1 dB of headroom so the i16 conversion
+/// can't clip even on the loudest inter-sample peaks. Matches Handy and
+/// other reference dictation apps.
+const NORMALIZE_PEAK: f32 = 0.89;
+
 struct ActiveStream {
     _stream:     cpal::Stream,
     sample_rate: u32,
@@ -180,6 +185,22 @@ fn resample_to_16k(buf: &[f32], src_rate: u32) -> anyhow::Result<Vec<f32>> {
         out.truncate(ideal_len);
     }
     Ok(out)
+}
+
+/// Peak-normalize a buffer of f32 samples to the given target peak.
+/// One-way: boosts quiet input; never attenuates loud input. Built-in
+/// MacBook microphones typically peak between -25 and -18 dBFS, well below
+/// what whisper.cpp was trained on — boosting before transcription
+/// measurably reduces hallucinations on quiet audio (see
+/// https://arxiv.org/html/2505.12969v1 and faster-whisper#183).
+fn peak_normalize(samples: &mut [f32], target: f32) {
+    let peak = samples.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
+    if peak > 0.0 && peak < target {
+        let gain = target / peak;
+        for s in samples.iter_mut() {
+            *s = (*s * gain).clamp(-1.0, 1.0);
+        }
+    }
 }
 
 /// Strips leading/trailing silence below `THRESHOLD`. Returns the slice indices.
@@ -391,7 +412,7 @@ impl AudioCapture {
                 return Ok(StopOutcome::Discard(DiscardReason::Silent));
             }
         };
-        let trimmed = &buf[start..end];
+        let mut trimmed: Vec<f32> = buf[start..end].to_vec();
 
         let min_samples = sample_rate as usize / 10;
         if trimmed.len() < min_samples {
@@ -402,6 +423,11 @@ impl AudioCapture {
             );
             return Ok(StopOutcome::Discard(DiscardReason::TooShort { duration_ms }));
         }
+
+        // Peak-normalize quiet recordings up to ~-1 dBFS before WAV write.
+        // One-way: only boosts when below target, never attenuates. Loud
+        // recordings pass through unchanged.
+        peak_normalize(&mut trimmed, NORMALIZE_PEAK);
 
         // tempfile::Builder gives us a 0600-perm file with a random suffix in
         // the system temp dir. Persisting via `into_temp_path()` keeps the
@@ -485,5 +511,29 @@ mod tests {
         let buf: Vec<f32> = vec![0.1, -0.2, 0.3, -0.4];
         let out = downmix_to_mono(&buf, 1);
         assert_eq!(out, buf);
+    }
+
+    /// Quiet buffer (peak 0.1) must be boosted to ~target peak (0.89).
+    #[test]
+    fn peak_normalize_boosts_quiet_buffer() {
+        let mut buf: Vec<f32> = vec![0.05, -0.1, 0.08, -0.07, 0.1, -0.02];
+        peak_normalize(&mut buf, 0.89);
+        let peak = buf.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
+        assert!(
+            (0.88..=0.90).contains(&peak),
+            "expected peak in [0.88, 0.90] after boost, got {}",
+            peak
+        );
+    }
+
+    /// Buffer already louder than target (peak 0.95) must pass through unchanged.
+    #[test]
+    fn peak_normalize_leaves_loud_buffer_alone() {
+        let original: Vec<f32> = vec![0.2, -0.5, 0.95, -0.8, 0.3];
+        let mut buf = original.clone();
+        peak_normalize(&mut buf, 0.89);
+        assert_eq!(buf, original, "loud buffer must not be attenuated");
+        let peak = buf.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
+        assert!((peak - 0.95).abs() < f32::EPSILON, "peak should remain 0.95, got {}", peak);
     }
 }
