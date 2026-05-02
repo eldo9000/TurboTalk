@@ -1,6 +1,5 @@
-use crate::audio::AudioCapture;
+use crate::audio::{AudioCapture, StopOutcome};
 use parking_lot::Mutex;
-use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +71,13 @@ impl Recorder {
         self.capture.level()
     }
 
-    pub fn stop(&self) -> Result<Option<PathBuf>, RecorderError> {
+    /// Edge-triggered: true exactly once when the cpal error callback flagged
+    /// the device as gone. The level-broadcast thread polls this every tick.
+    pub fn device_lost(&self) -> bool {
+        self.capture.device_lost()
+    }
+
+    pub fn stop(&self) -> Result<StopOutcome, RecorderError> {
         let mut s = self.state.lock();
         if !matches!(*s, State::Recording) {
             return Err(RecorderError::IllegalTransition {
@@ -83,9 +88,26 @@ impl Recorder {
         *s = State::Transcribing;
         drop(s);
         tracing::info!("[recorder] Recording → Transcribing");
-        let path_opt = self.capture.stop()?;
+        let outcome = self.capture.stop()?;
         *self.state.lock() = State::Ready;
         tracing::info!("[recorder] Transcribing → Ready");
-        Ok(path_opt)
+        Ok(outcome)
+    }
+
+    /// Force the recorder back to Ready without producing a WAV. Used by the
+    /// level-broadcast thread when device loss is detected — there's no
+    /// hotkey-up coming, so we synthesize the cleanup ourselves.
+    ///
+    /// Idempotent: calling cancel() while in Ready is a no-op.
+    pub fn cancel(&self) {
+        let mut s = self.state.lock();
+        match *s {
+            State::Ready => (),
+            State::Recording | State::Transcribing => {
+                self.capture.cancel();
+                *s = State::Ready;
+                tracing::info!("[recorder] cancelled → Ready");
+            }
+        }
     }
 }

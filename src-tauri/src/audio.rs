@@ -4,10 +4,10 @@
 // This lets the device change (built-in ↔ AirPods) without restarting the app.
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use parking_lot::Mutex;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+use tempfile::TempPath;
 
 struct ActiveStream {
     _stream:     cpal::Stream,
@@ -19,7 +19,30 @@ pub struct AudioCapture {
     samples:      Arc<Mutex<Vec<f32>>>,
     level:        Arc<AtomicU32>, // current RMS as f32 bits
     is_recording: Arc<AtomicBool>,
+    /// Set by the cpal error callback when CoreAudio reports the device went
+    /// away mid-recording (e.g. AirPods disconnected). Read edge-triggered by
+    /// `device_lost()` — swap-to-false on read so a single device-loss event
+    /// surfaces exactly once.
+    device_lost:  Arc<AtomicBool>,
     active:       Mutex<Option<ActiveStream>>,
+}
+
+/// Why a recording was thrown away instead of returning a WAV path.
+#[derive(Debug, Clone, Copy)]
+pub enum DiscardReason {
+    /// Recording was below the minimum length (after silence trim).
+    TooShort { duration_ms: u32 },
+    /// Whole recording was below the silence threshold.
+    Silent,
+    /// `stop()` was called with no active stream.
+    NoStream,
+}
+
+/// Result of a `stop()` call. The `Wav` variant carries a `TempPath` whose
+/// `Drop` removes the on-disk WAV — callers don't need to clean up.
+pub enum StopOutcome {
+    Wav { path: TempPath },
+    Discard(DiscardReason),
 }
 
 // SAFETY (Send + Sync for AudioCapture, Send for ActiveStream):
@@ -98,6 +121,7 @@ impl AudioCapture {
             samples:      Arc::new(Mutex::new(Vec::new())),
             level:        Arc::new(AtomicU32::new(0)),
             is_recording: Arc::new(AtomicBool::new(false)),
+            device_lost:  Arc::new(AtomicBool::new(false)),
             active:       Mutex::new(None),
         })
     }
@@ -126,7 +150,28 @@ impl AudioCapture {
         let rec = self.is_recording.clone();
         let smp = self.samples.clone();
         let lvl = self.level.clone();
-        let err_fn = |e| tracing::error!("[audio] stream error: {:?}", e);
+
+        // Error callback runs on cpal's audio thread. We *cannot* safely call
+        // into Tauri (no AppHandle here) — so we set an atomic flag and let
+        // the level-broadcast thread (which already polls every 50 ms and has
+        // the AppHandle) surface the event to the frontend.
+        let dev_lost = self.device_lost.clone();
+        let rec_for_err = self.is_recording.clone();
+        let err_fn = move |e: cpal::StreamError| {
+            match &e {
+                cpal::StreamError::DeviceNotAvailable => {
+                    tracing::warn!("[audio] device became unavailable mid-stream — flagging device-lost");
+                    dev_lost.store(true, Ordering::SeqCst);
+                    // Stop accumulating samples. The active stream will be
+                    // dropped by the broadcast thread when it observes the
+                    // flag and calls `recorder.cancel()`.
+                    rec_for_err.store(false, Ordering::SeqCst);
+                }
+                cpal::StreamError::BackendSpecific { err } => {
+                    tracing::error!("[audio] backend stream error: {}", err);
+                }
+            }
+        };
 
         let stream = match sample_format {
             cpal::SampleFormat::F32 => {
@@ -184,9 +229,18 @@ impl AudioCapture {
         f32::from_bits(self.level.load(Ordering::Relaxed))
     }
 
+    /// Edge-triggered read: returns true once when the cpal error callback
+    /// flagged the device as gone, then resets so the next caller sees false.
+    pub fn device_lost(&self) -> bool {
+        self.device_lost.swap(false, Ordering::SeqCst)
+    }
+
     pub fn start(&self) -> anyhow::Result<()> {
         self.samples.lock().clear();
         self.level.store(0_f32.to_bits(), Ordering::Relaxed);
+        // Clear any stale device-lost flag from a previous session so a fresh
+        // recording doesn't immediately trigger the loss path.
+        self.device_lost.store(false, Ordering::SeqCst);
 
         // Always read device from config so changes take effect without restart.
         let want = crate::settings::load().audio.device;
@@ -198,7 +252,17 @@ impl AudioCapture {
         Ok(())
     }
 
-    pub fn stop(&self) -> anyhow::Result<Option<PathBuf>> {
+    /// Drop the active stream and clear the sample buffer without producing a
+    /// WAV. Called by the level-broadcast thread when device loss is detected.
+    pub fn cancel(&self) {
+        self.is_recording.store(false, Ordering::SeqCst);
+        *self.active.lock() = None;
+        self.samples.lock().clear();
+        self.level.store(0_f32.to_bits(), Ordering::Relaxed);
+        tracing::info!("[audio] recording cancelled");
+    }
+
+    pub fn stop(&self) -> anyhow::Result<StopOutcome> {
         self.is_recording.store(false, Ordering::SeqCst);
         // Let the last in-flight callback finish (CoreAudio buffer ≈ 10ms)
         std::thread::sleep(Duration::from_millis(25));
@@ -207,7 +271,7 @@ impl AudioCapture {
             let active = self.active.lock();
             match active.as_ref() {
                 Some(a) => (a.sample_rate, a.channels),
-                None    => return Ok(None),
+                None    => return Ok(StopOutcome::Discard(DiscardReason::NoStream)),
             }
         };
         *self.active.lock() = None; // drop stream
@@ -219,36 +283,45 @@ impl AudioCapture {
             Some(range) => range,
             None => {
                 tracing::info!("[audio] silent recording — skipping transcription");
-                return Ok(None);
+                return Ok(StopOutcome::Discard(DiscardReason::Silent));
             }
         };
         let trimmed = &buf[start..end];
 
         let min_samples = sample_rate as usize / 10;
         if trimmed.len() < min_samples {
-            tracing::info!("[audio] recording too short after trim ({} samples) — skipping", trimmed.len());
-            return Ok(None);
+            let duration_ms = (trimmed.len() as u64 * 1000 / sample_rate as u64) as u32;
+            tracing::info!(
+                "[audio] recording too short after trim ({} samples, {} ms) — skipping",
+                trimmed.len(), duration_ms
+            );
+            return Ok(StopOutcome::Discard(DiscardReason::TooShort { duration_ms }));
         }
 
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!("turbotalk-{}.wav", stamp));
+        // tempfile::Builder gives us a 0600-perm file with a random suffix in
+        // the system temp dir. Persisting via `into_temp_path()` keeps the
+        // RAII delete-on-drop guarantee while letting us hand the path off.
+        let named = tempfile::Builder::new()
+            .prefix("turbotalk-")
+            .suffix(".wav")
+            .tempfile()?;
+        let temp_path: TempPath = named.into_temp_path();
+        let path_buf = temp_path.to_path_buf();
+
         let spec = hound::WavSpec {
             channels,
             sample_rate,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
-        let mut writer = hound::WavWriter::create(&path, spec)?;
+        let mut writer = hound::WavWriter::create(&path_buf, spec)?;
         for &s in trimmed.iter() {
             let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
             writer.write_sample(v)?;
         }
         writer.finalize()?;
         tracing::info!("[audio] wrote {} samples ({:.2}s trimmed) → {:?}",
-            trimmed.len(), trimmed.len() as f32 / sample_rate as f32, path);
-        Ok(Some(path))
+            trimmed.len(), trimmed.len() as f32 / sample_rate as f32, path_buf);
+        Ok(StopOutcome::Wav { path: temp_path })
     }
 }

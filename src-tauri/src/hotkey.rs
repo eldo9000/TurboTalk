@@ -1,3 +1,4 @@
+use crate::audio::{DiscardReason, StopOutcome};
 use crate::recorder::Recorder;
 use crate::tray::{self, TrayState};
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
@@ -39,13 +40,16 @@ fn ptt_down(recorder: &Recorder, tray_icon: &TrayIcon, app: &AppHandle) {
 
 fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
     match recorder.stop() {
-        Ok(Some(path)) => {
+        Ok(StopOutcome::Wav { path }) => {
             let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Transcribing)));
             emit_critical(app, "ptt-up", ());
             let app2  = app.clone();
             let tray2 = tray_icon.clone();
             let rec2  = recorder.clone();
             std::thread::spawn(move || {
+                // `path` is a tempfile::TempPath — its Drop deletes the WAV
+                // automatically whether we exit this thread via the success
+                // arm, the error arm, or a panic. No explicit cleanup needed.
                 match crate::transcribe::run(&path) {
                     Ok(text) => {
                         tracing::info!("[transcribe] {:?}", text);
@@ -67,12 +71,21 @@ fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
                 }
                 let _ = tray2.set_icon(Some(tray::make_icon(TrayState::Idle)));
                 drop(rec2);
+                // `path` drops here → WAV file deleted from /tmp.
             });
         }
-        Ok(None) => {
-            // Silence trim discarded all samples. Tell the frontend to clear
-            // its overlay — otherwise it stays stuck on "Transcribing…".
+        Ok(StopOutcome::Discard(reason)) => {
+            // Recording was discarded before transcription. Tell the frontend
+            // to clear its overlay — otherwise it stays stuck on
+            // "Transcribing…". `recording-discarded` is the catch-all the
+            // overlay listens to; `recording-too-short` is the more specific
+            // subtype that the main window uses to show a duration-aware
+            // toast. The frontend should listen to both: the overlay clears
+            // on either, and the main window prefers the more specific one.
             let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Idle)));
+            if let DiscardReason::TooShort { duration_ms } = reason {
+                emit_critical(app, "recording-too-short", duration_ms);
+            }
             emit_critical(app, "recording-discarded", ());
         }
         Err(e) => {
