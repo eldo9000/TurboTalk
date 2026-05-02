@@ -34,6 +34,12 @@
   let pastedTs        = $state(null);
   let transcriptError = $state('');
 
+  // Unified backend error channel. Any `ui-error` event arriving from Rust is
+  // pushed here and rendered in a small dismissible toast stack. Auto-dismisses
+  // after 5s; click to dismiss early.
+  let uiErrors  = $state([]);
+  let uiErrorId = 0;
+
   // Models tab
   let cfgModels      = $state([]);
   let cfgModel       = $state('');
@@ -310,9 +316,29 @@ Reply with only the single word, lowercase, no punctuation.
     listen('transcript',  (e) => {
       const text = e.payload;
       if (text) {
-        history = [{ text, ts: Date.now() }, ...history].slice(0, 50);
-        invoke('save_history', { entries: history });
+        // Backend enforces the 50-entry on-disk cap; the frontend keeps the
+        // full in-memory list. `await` so save failures surface — the backend
+        // also emits a `ui-error` event, this catch is belt-and-suspenders.
+        history = [{ text, ts: Date.now() }, ...history];
+        (async () => {
+          try {
+            await invoke('save_history', { entries: history });
+          } catch (_) { /* ui-error already emitted by backend */ }
+        })();
       }
+    }).then(u => unlisteners.push(u));
+    listen('ui-error', (e) => {
+      const id = ++uiErrorId;
+      const payload = e.payload || {};
+      uiErrors = [...uiErrors, {
+        id,
+        kind: payload.kind || 'unknown',
+        message: payload.message || 'An error occurred',
+        recoverable: payload.recoverable !== false,
+      }];
+      setTimeout(() => {
+        uiErrors = uiErrors.filter(x => x.id !== id);
+      }, 5000);
     }).then(u => unlisteners.push(u));
     listen('transcript-error', (e) => {
       recording = false;
@@ -364,6 +390,26 @@ Reply with only the single word, lowercase, no punctuation.
 
 <div bind:this={outerEl} class="flex flex-col bg-[var(--surface)] {activeTab === 'history' ? 'h-full overflow-hidden' : ''}"
 >
+
+  <!-- ui-error toast stack — fixed top-center, dismissible -->
+  {#if uiErrors.length > 0}
+    <div class="fixed top-12 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-1.5 pointer-events-none w-[calc(100%-1.5rem)] max-w-[400px]">
+      {#each uiErrors as err (err.id)}
+        <button
+          onclick={() => { uiErrors = uiErrors.filter(x => x.id !== err.id); }}
+          class="pointer-events-auto px-3 py-2 rounded-lg flex items-center justify-between gap-2 text-left
+                 bg-red-500/10 border border-red-500/25 backdrop-blur-sm
+                 hover:bg-red-500/15 transition-colors cursor-pointer"
+        >
+          <div class="flex flex-col gap-0.5 min-w-0">
+            <span class="text-[10px] uppercase tracking-wide text-red-400/70 font-mono">{err.kind}</span>
+            <span class="text-[11px] text-red-400 leading-snug">{err.message}</span>
+          </div>
+          <span class="shrink-0 text-red-400/60 hover:text-red-400 text-base leading-none">×</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
 
   <!-- Titlebar -->
   <div data-tauri-drag-region class="relative h-10 shrink-0 flex items-end select-none border-b border-[var(--border,#2a2a2a)]">

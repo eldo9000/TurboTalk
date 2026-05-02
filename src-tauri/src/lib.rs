@@ -21,6 +21,29 @@ pub mod tray;
 
 pub use theme::{get_accent, get_theme};
 
+/// Unified error channel for the frontend. Any backend error path that the
+/// user should see (failed save, malformed config, dropped history entry, etc.)
+/// goes through here so the frontend has a single listener and uniform UX.
+///
+/// Payload shape is intentionally simple:
+///   { kind: String, message: String, recoverable: bool }
+pub fn emit_ui_error(
+    app: &tauri::AppHandle,
+    kind: &str,
+    message: impl Into<String>,
+    recoverable: bool,
+) {
+    use tauri::Emitter;
+    let payload = serde_json::json!({
+        "kind": kind,
+        "message": message.into(),
+        "recoverable": recoverable,
+    });
+    if let Err(e) = app.emit("ui-error", payload) {
+        tracing::warn!("[ui-error] failed to emit {}: {}", kind, e);
+    }
+}
+
 #[tauri::command]
 fn get_config() -> settings::Config {
     settings::load()
@@ -66,13 +89,38 @@ fn paste_history_item(text: String, app: tauri::AppHandle) -> Result<(), String>
 }
 
 #[tauri::command]
-fn load_history() -> Vec<settings::HistoryEntry> {
-    settings::load_history()
+fn load_history(app: tauri::AppHandle) -> Vec<settings::HistoryEntry> {
+    let result = settings::load_history_detailed();
+    if result.dropped > 0 {
+        emit_ui_error(
+            &app,
+            "history-load-malformed",
+            format!("{} history entr{} skipped (malformed)",
+                result.dropped,
+                if result.dropped == 1 { "y was" } else { "ies were" },
+            ),
+            true,
+        );
+    }
+    result.entries
 }
 
 #[tauri::command]
-fn save_history(entries: Vec<settings::HistoryEntry>) -> Result<(), String> {
-    settings::save_history(&entries).map_err(|e| e.to_string())
+fn save_history(
+    entries: Vec<settings::HistoryEntry>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    if let Err(e) = settings::save_history(&entries) {
+        let msg = e.to_string();
+        emit_ui_error(
+            &app,
+            "history-save",
+            format!("Couldn't save history: {}", msg),
+            true,
+        );
+        return Err(msg);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -145,7 +193,16 @@ pub fn run() {
                 .build(app)?;
 
             // ── Config (write defaults on first run) ───────────────────────
-            let cfg = settings::load();
+            let cfg_result = settings::load_detailed();
+            let cfg = cfg_result.config;
+            if let Some(err_msg) = cfg_result.parse_error {
+                emit_ui_error(
+                    &app.handle().clone(),
+                    "config-parse",
+                    err_msg,
+                    true,
+                );
+            }
             if let Err(e) = settings::save(&cfg) {
                 tracing::warn!("[settings] could not write config: {:?}", e);
             }
