@@ -1,20 +1,8 @@
 # TurboTalk
 
-Personal voice dictation for macOS. Hold a key → speak → text pastes into whatever app has focus. Runs entirely on-device.
-
-## Requirements
-
-- macOS (Apple Silicon / arm64)
-- **Accessibility permission** — System Settings → Privacy & Security → Accessibility → TurboTalk (required for the global hotkey and paste injection)
-- A whisper model file (see below)
-
-## Getting Started
-
-1. **Download a model.** Drop a `.bin` file from [ggerganov/whisper.cpp](https://github.com/ggerganov/whisper.cpp/tree/master/models) into:
-   ```
-   ~/.config/librewin/turbotalk/models/
-   ```
-   `ggml-small.en.bin` is a good starting point (~150 MB, fast on Apple Silicon).
+Personal voice dictation.
+Optimised and laser fast.
+No bloat.
 
 2. **Launch TurboTalk.** The app lives in the menu bar.
 
@@ -37,16 +25,6 @@ Personal voice dictation for macOS. Hold a key → speak → text pastes into wh
 ## No Cloud, No Telemetry
 
 Everything runs locally. No account, no network calls, no data leaves your machine.
-
-## Building from Source
-
-```bash
-# Prerequisites: Rust (stable), Node 20+, Xcode Command Line Tools
-npm install
-npm run tauri dev
-```
-
-The whisper sidecar binary is bundled in `src-tauri/binaries/`. If you want to swap it for a locally compiled build, update the path under **Settings → Advanced**.
 
 ## License
 
