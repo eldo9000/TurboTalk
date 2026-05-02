@@ -69,9 +69,9 @@ pub fn process(raw: &str) -> String {
     let cfg = crate::settings::load();
     match cfg.cleanup.mode {
         crate::settings::CleanupMode::Off => handle_raw(trimmed),
-        crate::settings::CleanupMode::Regex => handle_prose(trimmed),
+        crate::settings::CleanupMode::Regex => handle_prose(trimmed, &cfg.cleanup),
         crate::settings::CleanupMode::Chaperone => match classify_blocking(trimmed, &cfg.cleanup) {
-            Ok(mode) => route(trimmed, mode),
+            Ok(mode) => route(trimmed, mode, &cfg.cleanup),
             Err(e) => {
                 tracing::warn!(
                     "[chaperone] classify failed, falling back to raw transcript: {e}"
@@ -96,9 +96,9 @@ fn detect_voice_command(text: &str) -> VoiceCommand {
 
 // ── Mode routing ──────────────────────────────────────────────────────────────
 
-fn route(text: &str, mode: Mode) -> String {
+fn route(text: &str, mode: Mode, cfg: &crate::settings::CleanupConfig) -> String {
     match mode {
-        Mode::Prose => handle_prose(text),
+        Mode::Prose => handle_prose(text, cfg),
         Mode::Code => handle_code(text),
         Mode::Command => handle_command(text),
         Mode::Raw => handle_raw(text),
@@ -107,8 +107,45 @@ fn route(text: &str, mode: Mode) -> String {
 
 // ── Deterministic handlers ────────────────────────────────────────────────────
 
-fn handle_prose(text: &str) -> String {
-    capitalize_first(text)
+const FILLER_WORDS: &[&str] = &["um", "uh", "er", "hmm", "hm"];
+
+fn handle_prose(text: &str, cfg: &crate::settings::CleanupConfig) -> String {
+    let mut s = text.to_string();
+    if cfg.strip_whisper_artifacts { s = strip_whisper_artifacts(&s); }
+    if cfg.strip_fillers           { s = strip_filler_words(&s); }
+    s = capitalize_first(&s);
+    if cfg.append_period           { s = append_period(s); }
+    s
+}
+
+fn strip_whisper_artifacts(text: &str) -> String {
+    let s = text.trim();
+    // Trailing ellipsis variants Whisper emits on silence/cutoff
+    let s = s.trim_end_matches("...");
+    let s = s.trim_end_matches(" ...");
+    let s = s.trim_end_matches(" .");
+    s.trim().to_string()
+}
+
+fn strip_filler_words(text: &str) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let filtered: Vec<&str> = words
+        .into_iter()
+        .filter(|w| {
+            // Strip surrounding punctuation to get the bare word for comparison
+            let bare = w.trim_matches(|c: char| !c.is_alphabetic()).to_lowercase();
+            !FILLER_WORDS.contains(&bare.as_str())
+        })
+        .collect();
+    filtered.join(" ")
+}
+
+fn append_period(mut s: String) -> String {
+    if s.is_empty() { return s; }
+    if !matches!(s.chars().last().unwrap(), '.' | '!' | '?' | ':' | ';') {
+        s.push('.');
+    }
+    s
 }
 
 fn handle_code(text: &str) -> String {
@@ -268,8 +305,55 @@ mod tests {
 
     #[test]
     fn prose_handler() {
-        assert_eq!(handle_prose("hello world"), "Hello world");
-        assert_eq!(handle_prose("already capitalized"), "Already capitalized");
+        let cfg = crate::settings::CleanupConfig {
+            strip_fillers: false,
+            append_period: false,
+            strip_whisper_artifacts: false,
+            ..Default::default()
+        };
+        assert_eq!(handle_prose("hello world", &cfg), "Hello world");
+        assert_eq!(handle_prose("already capitalized", &cfg), "Already capitalized");
+    }
+
+    #[test]
+    fn prose_strip_fillers() {
+        let cfg = crate::settings::CleanupConfig {
+            strip_fillers: true,
+            append_period: false,
+            strip_whisper_artifacts: false,
+            ..Default::default()
+        };
+        assert_eq!(handle_prose("um hello world", &cfg), "Hello world");
+        assert_eq!(handle_prose("hello uh world", &cfg), "Hello world");
+        assert_eq!(handle_prose("hello world er", &cfg), "Hello world");
+        // "umbrella" must not be stripped — only bare filler tokens
+        assert_eq!(handle_prose("umbrella", &cfg), "Umbrella");
+    }
+
+    #[test]
+    fn prose_strip_whisper_artifacts() {
+        let cfg = crate::settings::CleanupConfig {
+            strip_fillers: false,
+            append_period: false,
+            strip_whisper_artifacts: true,
+            ..Default::default()
+        };
+        assert_eq!(handle_prose("hello world .", &cfg), "Hello world");
+        assert_eq!(handle_prose("hello world...", &cfg), "Hello world");
+        assert_eq!(handle_prose("hello world ...", &cfg), "Hello world");
+    }
+
+    #[test]
+    fn prose_append_period() {
+        let cfg = crate::settings::CleanupConfig {
+            strip_fillers: false,
+            append_period: true,
+            strip_whisper_artifacts: false,
+            ..Default::default()
+        };
+        assert_eq!(handle_prose("hello world", &cfg), "Hello world.");
+        assert_eq!(handle_prose("hello world!", &cfg), "Hello world!");
+        assert_eq!(handle_prose("hello world.", &cfg), "Hello world.");
     }
 
     #[test]
