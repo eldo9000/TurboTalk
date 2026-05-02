@@ -27,73 +27,85 @@ fn emit_critical<P: serde::Serialize + Clone>(app: &AppHandle, event: &str, payl
     }
 }
 
-fn ptt_down(recorder: &Recorder, tray_icon: &TrayIcon, app: &AppHandle) {
-    if let Err(e) = recorder.start() {
-        // Illegal transition or audio error — do NOT emit ptt-down, do NOT
-        // change tray icon. Frontend stays in its current state.
-        tracing::warn!("[hotkey] start ignored: {}", e);
-        return;
-    }
-    let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Recording)));
-    emit_critical(app, "ptt-down", ());
+// All work that touches the audio pipeline must run off the CGEventTap thread.
+// macOS disables event taps whose callback exceeds the per-event timeout, and
+// `recorder.start()` (cpal stream open) plus `recorder.stop()` (downmix +
+// resample + Silero VAD inference + WAV write) can take hundreds of ms to
+// several seconds — well over the timeout. Synchronous calls in the tap
+// callback led to the tap being disabled after 1-2 recordings, after which
+// no key event reaches our code at all (silent dead hotkey).
+//
+// Both ptt_down and ptt_up therefore spawn a worker thread and return
+// immediately. The tap callback finishes in microseconds.
+
+fn ptt_down(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
+    let rec  = recorder.clone();
+    let tray = tray_icon.clone();
+    let app  = app.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = rec.start() {
+            // Illegal transition or audio error — do NOT emit ptt-down, do NOT
+            // change tray icon. Frontend stays in its current state.
+            tracing::warn!("[hotkey] start ignored: {}", e);
+            return;
+        }
+        let _ = tray.set_icon(Some(tray::make_icon(TrayState::Recording)));
+        emit_critical(&app, "ptt-down", ());
+    });
 }
 
 fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
-    match recorder.stop() {
-        Ok(StopOutcome::Wav { path }) => {
-            let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Transcribing)));
-            emit_critical(app, "ptt-up", ());
-            let app2  = app.clone();
-            let tray2 = tray_icon.clone();
-            let rec2  = recorder.clone();
-            std::thread::spawn(move || {
+    let rec  = recorder.clone();
+    let tray = tray_icon.clone();
+    let app  = app.clone();
+    std::thread::spawn(move || {
+        match rec.stop() {
+            Ok(StopOutcome::Wav { path }) => {
+                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Transcribing)));
+                emit_critical(&app, "ptt-up", ());
                 // `path` is a tempfile::TempPath — its Drop deletes the WAV
-                // automatically whether we exit this thread via the success
-                // arm, the error arm, or a panic. No explicit cleanup needed.
+                // automatically whether we exit via the success arm, the
+                // error arm, or a panic. No explicit cleanup needed.
                 match crate::transcribe::run(&path) {
                     Ok(text) => {
                         tracing::info!("[transcribe] {:?}", text);
-                        emit_critical(&app2, "transcript", text.clone());
+                        emit_critical(&app, "transcript", text.clone());
                         if let Err(e) = crate::paste::paste(&text) {
                             tracing::error!("[paste] {:?}", e);
                             // Surface to UI so the user knows the transcript
                             // was processed but never reached the focused app.
-                            // Keep the message short and actionable.
                             let msg = "Couldn't paste — check Accessibility permission".to_string();
-                            emit_critical(&app2, "paste-error", msg);
+                            emit_critical(&app, "paste-error", msg);
                         }
                     }
                     Err(e) => {
                         tracing::error!("[transcribe] {:?}", e);
                         let msg = format!("{}", e);
-                        emit_critical(&app2, "transcript-error", msg);
+                        emit_critical(&app, "transcript-error", msg);
                     }
                 }
-                let _ = tray2.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                drop(rec2);
+                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
                 // `path` drops here → WAV file deleted from /tmp.
-            });
-        }
-        Ok(StopOutcome::Discard(reason)) => {
-            // Recording was discarded before transcription. Tell the frontend
-            // to clear its overlay — otherwise it stays stuck on
-            // "Transcribing…". `recording-discarded` is the catch-all the
-            // overlay listens to; `recording-too-short` is the more specific
-            // subtype that the main window uses to show a duration-aware
-            // toast. The frontend should listen to both: the overlay clears
-            // on either, and the main window prefers the more specific one.
-            let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Idle)));
-            if let DiscardReason::TooShort { duration_ms } = reason {
-                emit_critical(app, "recording-too-short", duration_ms);
             }
-            emit_critical(app, "recording-discarded", ());
+            Ok(StopOutcome::Discard(reason)) => {
+                // Recording was discarded before transcription. Tell the frontend
+                // to clear its overlay — otherwise it stays stuck on
+                // "Transcribing…". `recording-discarded` is the catch-all the
+                // overlay listens to; `recording-too-short` is the more specific
+                // subtype the main window uses to show a duration-aware toast.
+                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                if let DiscardReason::TooShort { duration_ms } = reason {
+                    emit_critical(&app, "recording-too-short", duration_ms);
+                }
+                emit_critical(&app, "recording-discarded", ());
+            }
+            Err(e) => {
+                // Illegal transition (e.g. stop while not Recording) — do NOT
+                // emit ptt-up or any other event. Frontend stays as-is.
+                tracing::warn!("[hotkey] stop ignored: {}", e);
+            }
         }
-        Err(e) => {
-            // Illegal transition (e.g. stop while not Recording) — do NOT
-            // emit ptt-up or any other event. Frontend stays as-is.
-            tracing::warn!("[hotkey] stop ignored: {}", e);
-        }
-    }
+    });
 }
 
 pub fn spawn(
