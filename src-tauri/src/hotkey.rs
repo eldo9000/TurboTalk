@@ -36,6 +36,27 @@ fn emit_stage(app: &AppHandle, job_id: u64, stage: &'static str) {
     emit_critical(app, "dictation-stage", DictationStage { job_id, stage });
 }
 
+/// Payload for the additive `focus-changed-before-paste` event introduced
+/// in TASK-16. Emitted only when the frontmost-app identifier captured at
+/// recording start differs from the one captured immediately before paste.
+/// Both fields may be `None` if the macOS query failed at either capture
+/// site — see `paste::frontmost_app`. Default policy is "paste anyway,
+/// observe the change"; the frontend uses this to surface a gentle banner.
+#[derive(Clone, serde::Serialize)]
+struct FocusChangedBeforePaste {
+    job_id: u64,
+    focus_at_start: Option<String>,
+    focus_at_paste: Option<String>,
+}
+
+/// Cell shared between `ptt_down` and `ptt_up` so the upstroke worker can
+/// recover the frontmost-app identifier captured when this recording
+/// started. Holds `None` when no recording is in flight; the inner
+/// `Option<String>` may itself be `None` if the macOS query failed.
+/// Guarded by `parking_lot::Mutex`; the critical section is one load/store.
+static FOCUS_AT_START: parking_lot::Mutex<Option<Option<String>>> =
+    parking_lot::Mutex::new(None);
+
 fn key_for_name(name: &str) -> (i64, CGEventFlags) {
     match name {
         "right_control" => (0x3E, CGEventFlags::CGEventFlagControl),
@@ -98,7 +119,17 @@ fn ptt_down(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
         // Recording was accepted — allocate this job's id.
         let job_id = next_job_id();
         *CURRENT_JOB_ID.lock() = Some(job_id);
-        tracing::info!("[hotkey job_id={}] recording started", job_id);
+
+        // Capture the frontmost app at recording start (best-effort; may be
+        // `None` if osascript fails). Stored under its own mutex so the
+        // upstroke worker can recover it without entangling JOB_ID's lock.
+        // Logged with the job_id so a single grep gives the full lifecycle.
+        let focus_start = crate::paste::frontmost_app();
+        *FOCUS_AT_START.lock() = Some(focus_start.clone());
+        tracing::info!(
+            "[hotkey job_id={}] recording started focus_at_start={:?}",
+            job_id, focus_start
+        );
 
         let _ = tray.set_icon(Some(tray::make_icon(TrayState::Recording)));
         emit_critical(&app, "ptt-down", ());
@@ -115,6 +146,11 @@ fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
         // upstroke arrives without a matching downstroke (no in-flight job),
         // we still call `rec.stop()` defensively but skip stage emissions.
         let job_id_opt = CURRENT_JOB_ID.lock().take();
+        // Recover the focus identity captured at recording start. Outer
+        // `Option` = "was a recording in flight"; inner `Option<String>` =
+        // "did the macOS query succeed". We only compare-and-emit later if
+        // we actually have a job and reach the paste stage.
+        let focus_at_start: Option<String> = FOCUS_AT_START.lock().take().flatten();
 
         // Tray-state policy: Recording icon only during literal capture; the
         // moment we enter FinalizingAudio (inside `rec.stop()`) the tray flips
@@ -199,6 +235,37 @@ fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
                         }
 
                         // Stage 3: paste into the focused app.
+                        //
+                        // Focus policy (TASK-16): we paste into whatever app
+                        // is frontmost *at this moment*, not at recording
+                        // start. Capture the current frontmost app first so
+                        // we can log and surface focus changes to the UI
+                        // without blocking the paste itself. See
+                        // ARCHITECTURE.md → "Paste Target Policy".
+                        let focus_at_paste = crate::paste::frontmost_app();
+                        tracing::info!(
+                            "[paste job_id={:?}] focus_at_start={:?} focus_at_paste={:?}",
+                            job_id_opt, focus_at_start, focus_at_paste
+                        );
+                        if let (Some(job_id), Some(start), Some(now)) =
+                            (job_id_opt, focus_at_start.as_ref(), focus_at_paste.as_ref())
+                        {
+                            if start != now {
+                                tracing::warn!(
+                                    "[paste job_id={}] focus changed before paste: {:?} → {:?}",
+                                    job_id, start, now
+                                );
+                                emit_critical(
+                                    &app,
+                                    "focus-changed-before-paste",
+                                    FocusChangedBeforePaste {
+                                        job_id,
+                                        focus_at_start: Some(start.clone()),
+                                        focus_at_paste: Some(now.clone()),
+                                    },
+                                );
+                            }
+                        }
                         if let Err(e) = crate::paste::paste(&final_text) {
                             tracing::error!("[paste job_id={:?}] {:?}", job_id_opt, e);
                             // Surface to UI so the user knows the transcript

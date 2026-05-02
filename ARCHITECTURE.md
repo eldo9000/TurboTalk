@@ -104,6 +104,48 @@ the evidence base for later persistent-Whisper / cached-VAD work; do
 not regress the log line without replacing it with something at least
 as detailed.
 
+## Paste Target Policy
+
+`paste.rs` injects text into whichever app is **frontmost at the moment Cmd+V
+is sent**, not the app that was frontmost when recording started. For a
+personal one-in-flight push-to-talk tool, "wherever I am now" matches user
+expectation more reliably than "wherever I was 1–3 seconds ago" — the user
+has, by then, often deliberately switched to where they want the text to
+land.
+
+**Observability.** `paste::frontmost_app()` is a best-effort macOS helper
+that captures a coarse identifier (frontmost process name via osascript +
+System Events) at two points:
+
+1. Recording start — captured in `hotkey::ptt_down`, stored alongside the
+   `job_id` in the `FOCUS_AT_START` mutex.
+2. Immediately before paste — captured in `hotkey::ptt_up`'s pasting stage.
+
+Both values are logged on a single `tracing::info!` line keyed by `job_id`:
+
+```
+[paste job_id=Some(7)] focus_at_start=Some("TextEdit") focus_at_paste=Some("Notes")
+```
+
+If they differ, an additive `focus-changed-before-paste` event is emitted
+with `{ job_id, focus_at_start, focus_at_paste }`. The frontend renders a
+short banner so the user knows the destination drifted. Either field may
+be `None` if the macOS query failed at that capture site; missing data is
+treated as "unknown" and never blocks paste.
+
+**What this is not.** The current default is "paste anyway, surface the
+change." We do *not* skip paste on focus mismatch, do *not* warn before
+paste, and do *not* try to refocus the original app. These are deliberate
+non-features for the personal-use scope.
+
+**Future queueing must revisit this.** As soon as we allow more than one
+in-flight dictation job (queue or pipeline), pasting into the current focus
+becomes dangerous: a job that finishes minutes after recording could land
+its output in a totally unrelated app. When that work begins, this section
+must be rewritten before the queue is enabled — at minimum: per-job
+target-app capture, opt-in "paste only into recorded focus" mode, or a
+visible review-then-paste step.
+
 ## State Machine (recorder.rs)
 
 ```
