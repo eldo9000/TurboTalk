@@ -61,7 +61,18 @@ pub struct CleanupConfig {
     /// user's spoken text cannot be misread as classifier instructions.
     #[serde(default = "default_classifier_prompt")]
     pub classifier_prompt: String,
+    /// Simple mode: strip common filler words (um, uh, er, hmm).
+    #[serde(default = "default_true")]
+    pub strip_fillers: bool,
+    /// Simple mode: append a period if the transcript ends without punctuation.
+    #[serde(default)]
+    pub append_period: bool,
+    /// Simple mode: remove trailing Whisper artifacts like " ." and " ...".
+    #[serde(default = "default_true")]
+    pub strip_whisper_artifacts: bool,
 }
+
+fn default_true() -> bool { true }
 
 pub fn default_classifier_prompt() -> String {
     "You are a classifier. The user's transcript is enclosed in <transcript> tags below. \
@@ -101,6 +112,9 @@ impl Default for CleanupConfig {
             classifier_model: "llama3.2:3b".into(),
             vocabulary: vec![],
             classifier_prompt: default_classifier_prompt(),
+            strip_fillers: true,
+            append_period: false,
+            strip_whisper_artifacts: true,
         }
     }
 }
