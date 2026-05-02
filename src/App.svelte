@@ -639,15 +639,15 @@ Reply with only the single word, lowercase, no punctuation.
 
   <!-- Models tab -->
   {#if activeTab === 'models'}
+    {@const rmFilename     = RECOMMENDED_MODEL.name + '.bin'}
+    {@const rmInstalledPath = cfgModels.find(p => p.endsWith(rmFilename))}
+    {@const rmIsInstalled  = !!rmInstalledPath}
+    {@const rmIsSelected   = rmIsInstalled && cfgModel === rmInstalledPath}
+    {@const rmIsDownloading = RECOMMENDED_MODEL.name in downloadProgress}
+    {@const rmPct          = downloadProgress[RECOMMENDED_MODEL.name] ?? 0}
     <div class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 px-4 py-4">
 
       <!-- Recommended model — hero tile so first-time users have a clear default -->
-      {@const rmFilename     = RECOMMENDED_MODEL.name + '.bin'}
-      {@const rmInstalledPath = cfgModels.find(p => p.endsWith(rmFilename))}
-      {@const rmIsInstalled  = !!rmInstalledPath}
-      {@const rmIsSelected   = rmIsInstalled && cfgModel === rmInstalledPath}
-      {@const rmIsDownloading = RECOMMENDED_MODEL.name in downloadProgress}
-      {@const rmPct          = downloadProgress[RECOMMENDED_MODEL.name] ?? 0}
       <div
         class="group rounded-xl p-3.5 border-2 transition-colors
                {rmIsSelected
