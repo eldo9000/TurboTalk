@@ -1,7 +1,8 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-05-01
-**Current state:** M1 complete. Full dictation loop proven end-to-end.
+**Current state:** Multi-agent code review hardening sprint complete. 8/8 tasks landed.
+Full dictation loop intact; security and architecture findings closed.
 
 ## Where We Are
 
@@ -29,6 +30,23 @@ None.
 2. Basic text cleanup — capitalize first word, strip trailing whitespace.
 3. Config persistence — `~/.config/librewin/turbotalk/config.toml` via `settings.rs`.
 4. Settings window — surface model path and hotkey to user.
+
+## Hardening Sprint (2026-05-01) — closed
+
+Multi-agent code review (security + architecture) → 8 tasks dispatched + landed.
+All commits on main; tasks/done/ has the archived task files.
+
+- `0b4d606` fix(security): CSP enabled in Tauri config (closes XSS class)
+- `a8a75cd` fix(security): canonicalize subprocess paths (closes path traversal)
+- `62243c7` docs(audio): SAFETY argument for unsafe Send/Sync on AudioCapture
+- `d78abd4` refactor(cleanup): typed mode, URL allowlist, prompt isolation, 2s timeout
+- `882ebdd` fix(recorder): type-enforce state transitions; paste-error/discarded events
+- `4a0b654` fix(audio): RAII temp files, device-loss detection, recording-too-short
+- `3526050` fix(history): backend-owned 50-entry limit, awaited save, ui-error channel
+- `1a1ebed` chore(types): tauri-specta typed contract + multi-monitor overlay + SAFETY/TRUTH
+
+Reports archived at `/tmp/static-analysis-main-20260501-1200.md` and
+`/tmp/code-analysis-concern-based-main-20260501.md`.
 
 ## Recent Decisions
 
