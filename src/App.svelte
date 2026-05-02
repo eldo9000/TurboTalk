@@ -162,12 +162,6 @@ Reply with only the single word, lowercase, no punctuation.
       url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin',
     },
     {
-      name: 'ggml-medium.en',
-      size: '1.5 GB',
-      description: 'High accuracy · English only',
-      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin',
-    },
-    {
       name: 'ggml-large-v3',
       size: '3.1 GB',
       description: 'Maximum accuracy · multilingual · slowest',
