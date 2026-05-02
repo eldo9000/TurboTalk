@@ -14,9 +14,10 @@ export const commands = {
 	getLaunchAtLogin: () => __TAURI_INVOKE<boolean>("get_launch_at_login"),
 	setLaunchAtLogin: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_launch_at_login", { enabled })),
 	listAudioDevices: () => __TAURI_INVOKE<string[]>("list_audio_devices"),
+	downloadModel: (url: string, name: string) => typedError<string, string>(__TAURI_INVOKE("download_model", { url, name })),
 	loadHistory: () => __TAURI_INVOKE<HistoryEntry[]>("load_history"),
 	saveHistory: (entries: HistoryEntry[]) => typedError<null, string>(__TAURI_INVOKE("save_history", { entries })),
-	pasteHistoryItem: (text: string) => typedError<null, string>(__TAURI_INVOKE("paste_history_item", { text })),
+	copyHistoryItem: (text: string) => typedError<null, string>(__TAURI_INVOKE("copy_history_item", { text })),
 };
 
 /* Types */
@@ -52,6 +53,11 @@ export type Config = {
 	audio?: AudioConfig,
 	hotkey?: HotkeyConfig,
 	theme?: string,
+	/**
+	 *  How long to keep history entries. "restart" clears on launch; "1d"/"5d"/"10d"/"30d"
+	 *  removes entries older than N days. Default is "10d".
+	 */
+	history_auto_delete?: string,
 };
 
 export type HistoryEntry = {

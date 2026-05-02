@@ -85,13 +85,11 @@ fn set_launch_at_login(app: tauri::AppHandle, enabled: bool) -> Result<(), Strin
 
 #[tauri::command]
 #[specta::specta]
-fn paste_history_item(text: String, app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window("main") {
-        let _ = win.hide();
-    }
-    // Give the previously-focused app time to regain focus before the keystroke.
-    std::thread::sleep(std::time::Duration::from_millis(150));
-    crate::paste::paste(&text).map_err(|e| e.to_string())
+fn copy_history_item(text: String) -> Result<(), String> {
+    use arboard::Clipboard;
+    let mut cb = Clipboard::new().map_err(|e| e.to_string())?;
+    cb.set_text(text).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -109,7 +107,13 @@ fn load_history(app: tauri::AppHandle) -> Vec<settings::HistoryEntry> {
             true,
         );
     }
-    result.entries
+    let cfg = settings::load();
+    let original_len = result.entries.len();
+    let filtered = settings::filter_history_by_policy(result.entries, &cfg.history_auto_delete);
+    if filtered.len() < original_len {
+        let _ = settings::save_history(&filtered);
+    }
+    filtered
 }
 
 #[tauri::command]
@@ -129,6 +133,75 @@ fn save_history(
         return Err(msg);
     }
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn download_model(
+    url: String,
+    name: String,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    use tokio::io::AsyncWriteExt;
+
+    // Build the destination path — create the directory if it doesn't exist yet.
+    // (canonical_models_dir() requires the dir to already exist, so we build manually.)
+    let mut dir = dirs::home_dir()
+        .ok_or_else(|| "Could not locate home directory".to_string())?;
+    dir.push(".config/librewin/turbotalk/models");
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+    let dest = dir.join(format!("{}.bin", name));
+
+    let client = reqwest::Client::builder()
+        .user_agent("TurboTalk/0.0.1")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+
+    let total = resp.content_length();
+    let mut downloaded: u64 = 0;
+    let mut file = tokio::fs::File::create(&dest).await.map_err(|e| e.to_string())?;
+
+    let _ = app.emit("download-progress", serde_json::json!({ "name": &name, "pct": 0u8 }));
+
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                if let Err(e) = file.write_all(&chunk).await {
+                    drop(file);
+                    let _ = tokio::fs::remove_file(&dest).await;
+                    return Err(e.to_string());
+                }
+                downloaded += chunk.len() as u64;
+                let pct = total
+                    .filter(|&t| t > 0)
+                    .map(|t| ((downloaded * 100) / t).min(99) as u8)
+                    .unwrap_or(0);
+                let _ = app.emit("download-progress", serde_json::json!({ "name": &name, "pct": pct }));
+            }
+            Ok(None) => break,
+            Err(e) => {
+                drop(file);
+                let _ = tokio::fs::remove_file(&dest).await;
+                return Err(format!("Download interrupted: {}", e));
+            }
+        }
+    }
+
+    file.flush().await.map_err(|e| e.to_string())?;
+    drop(file);
+
+    let canonical = dest.canonicalize().map_err(|e| e.to_string())?;
+    Ok(canonical.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -155,6 +228,24 @@ use tauri::{
     Emitter, Manager, WindowEvent,
 };
 
+/// Position `win` centered horizontally, just below the macOS menu bar.
+fn center_top(win: &tauri::WebviewWindow) {
+    let monitor = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| win.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else { return };
+    let scale = monitor.scale_factor();
+    let screen_w = monitor.size().width as f64 / scale;
+    let win_w = win
+        .outer_size()
+        .map(|s| s.width as f64 / scale)
+        .unwrap_or(440.0);
+    let x = (screen_w - win_w) / 2.0;
+    let _ = win.set_position(tauri::LogicalPosition::new(x, 28.0));
+}
+
 /// Build the tauri-specta type-export descriptor. Lives in its own function
 /// so the `#[test]` regenerator below can call it without standing up the
 /// full Tauri runtime.
@@ -166,9 +257,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         get_launch_at_login,
         set_launch_at_login,
         list_audio_devices,
+        download_model,
         load_history,
         save_history,
-        paste_history_item,
+        copy_history_item,
     ])
 }
 
@@ -204,7 +296,8 @@ pub fn run() {
             get_theme, get_accent,
             get_config, save_config, scan_models_dir,
             get_launch_at_login, set_launch_at_login, list_audio_devices,
-            load_history, save_history, paste_history_item
+            download_model,
+            load_history, save_history, copy_history_item
         ])
         .setup(|app| {
             // ── Tray icon ──────────────────────────────────────────────────
@@ -226,6 +319,7 @@ pub fn run() {
                     {
                         let app = tray.app_handle();
                         if let Some(win) = app.get_webview_window("main") {
+                            center_top(&win);
                             let _ = win.show();
                             let _ = win.set_focus();
                         }
