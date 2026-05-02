@@ -196,6 +196,15 @@ Reply with only the single word, lowercase, no punctuation.
   }
 
   async function removeModel(path) {
+    // Best-effort file delete. Backend skips silently for safe cases (file
+    // gone, custom path outside models dir); only genuine failures (permission,
+    // bad extension) come back as errors. Either way we still drop the entry
+    // from the user's config so the row disappears from the UI.
+    const res = await commands.deleteModelFile(path);
+    if (res.status === 'error') {
+      modelsSaveMsg = 'Could not delete file: ' + res.error;
+      setTimeout(() => { modelsSaveMsg = ''; }, 5000);
+    }
     cfgModels = cfgModels.filter(m => m !== path);
     if (cfgModel === path) cfgModel = '';
     await saveModels();
@@ -638,10 +647,71 @@ Reply with only the single word, lowercase, no punctuation.
   {#if activeTab === 'models'}
     <div class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 px-4 py-4">
 
-      <!-- Recommended model -->
-      <div class="flex flex-col gap-0.5">
-        <span class="text-[var(--text-secondary)] text-sm mb-0.5">Recommended</span>
-        {@render modelRow(RECOMMENDED_MODEL)}
+      <!-- Recommended model — hero tile so first-time users have a clear default -->
+      {@const rmFilename     = RECOMMENDED_MODEL.name + '.bin'}
+      {@const rmInstalledPath = cfgModels.find(p => p.endsWith(rmFilename))}
+      {@const rmIsInstalled  = !!rmInstalledPath}
+      {@const rmIsSelected   = rmIsInstalled && cfgModel === rmInstalledPath}
+      {@const rmIsDownloading = RECOMMENDED_MODEL.name in downloadProgress}
+      {@const rmPct          = downloadProgress[RECOMMENDED_MODEL.name] ?? 0}
+      <div
+        class="group rounded-xl p-3.5 border-2 transition-colors
+               {rmIsSelected
+                 ? 'bg-green-500/10 border-green-500/40'
+                 : 'bg-[var(--accent)]/8 border-[var(--accent)]/40 hover:border-[var(--accent)]/60'}"
+      >
+        <div class="flex items-center gap-1.5 mb-1.5">
+          <span class="text-[var(--accent)] text-xs leading-none">★</span>
+          <span class="text-[10px] uppercase tracking-wider font-semibold text-[var(--accent)]">Recommended</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <div class="flex-1 min-w-0">
+            <div class="flex items-baseline gap-2">
+              <span class="text-sm font-mono font-semibold text-[var(--text-primary)]">{RECOMMENDED_MODEL.name}</span>
+              <span class="text-[10px] text-[var(--text-tertiary,#666)]">{RECOMMENDED_MODEL.size}</span>
+            </div>
+            <p class="text-[11px] text-[var(--text-secondary)] mt-1 leading-snug">{RECOMMENDED_MODEL.description}</p>
+          </div>
+          {#if rmIsDownloading}
+            <span class="shrink-0 text-xs text-[var(--accent)] tabular-nums w-9 text-right">{rmPct}%</span>
+            <button disabled
+              class="shrink-0 text-xs px-3 py-1.5 rounded-md border whitespace-nowrap
+                     border-[var(--border)] text-[var(--text-tertiary,#666)] cursor-default"
+            >↓ …</button>
+          {:else if !rmIsInstalled}
+            <button
+              onclick={() => startDownload(RECOMMENDED_MODEL)}
+              class="shrink-0 text-xs font-medium px-4 py-2 rounded-md whitespace-nowrap transition-opacity
+                     bg-[var(--accent)] text-white hover:opacity-90"
+            >Download</button>
+          {:else if rmIsSelected}
+            <button
+              onclick={() => removeModel(rmInstalledPath)}
+              title="Remove"
+              class="shrink-0 w-6 h-6 flex items-center justify-center rounded text-sm
+                     opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto
+                     transition-opacity text-red-400 hover:bg-red-500/15"
+            >×</button>
+            <button disabled
+              class="shrink-0 text-xs font-medium px-3 py-1.5 rounded-md border whitespace-nowrap
+                     border-green-500 bg-green-500/20 text-[var(--text-primary)] cursor-default"
+            >Selected</button>
+          {:else}
+            <button
+              onclick={() => removeModel(rmInstalledPath)}
+              title="Remove"
+              class="shrink-0 w-6 h-6 flex items-center justify-center rounded text-sm
+                     opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto
+                     transition-opacity text-red-400 hover:bg-red-500/15"
+            >×</button>
+            <button
+              onclick={() => selectModel(rmInstalledPath)}
+              class="shrink-0 text-xs font-medium px-3 py-1.5 rounded-md border whitespace-nowrap transition-colors
+                     border-[var(--accent)] bg-[var(--accent)]/20 text-[var(--text-primary)]
+                     hover:bg-[var(--accent)]/40"
+            >Install</button>
+          {/if}
+        </div>
       </div>
 
       <!-- Download catalog -->
