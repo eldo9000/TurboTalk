@@ -428,6 +428,18 @@ Reply with only the single word, lowercase, no punctuation.
       transcriptError = e.payload || "Couldn't paste — check Accessibility permission";
       setTimeout(() => { transcriptError = ''; }, 5000);
     }).then(u => unlisteners.push(u));
+    listen('focus-changed-before-paste', (e) => {
+      // TASK-16: gentle, recoverable banner when the frontmost app at
+      // recording start differs from the one at paste time. Default policy
+      // is "paste anyway, observe the change" — the paste already happened
+      // by the time this event arrives, so the banner is informational, not
+      // an error. Shorter dwell than transcript errors.
+      const p     = e.payload || {};
+      const start = p.focus_at_start ?? 'unknown';
+      const now   = p.focus_at_paste ?? 'unknown';
+      transcriptError = `Focus changed: pasted into ${now} (started in ${start}).`;
+      setTimeout(() => { transcriptError = ''; }, 4000);
+    }).then(u => unlisteners.push(u));
     listen('recording-discarded', () => {
       // Recording was too quiet/short — silently reset the overlay state.
       // No banner: this is a normal outcome, not an error.
