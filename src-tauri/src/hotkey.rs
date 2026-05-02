@@ -152,6 +152,9 @@ pub fn spawn(
             .mach_port
             .create_runloop_source(0)
             .expect("[hotkey] create_runloop_source failed");
+        // SAFETY: kCFRunLoopCommonModes is a static CFStringRef constant exported by
+        // core-foundation. Reading it requires unsafe because the binding is a static
+        // extern, but the value is immutable and thread-safe to read.
         CFRunLoop::get_current().add_source(&source, unsafe { kCFRunLoopCommonModes });
         tap.enable();
         CFRunLoop::run_current();

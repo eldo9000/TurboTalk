@@ -6,6 +6,11 @@
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { open } from '@tauri-apps/plugin-shell';
   import { initTheme } from '@libre/ui/src/theme.js';
+  // Typed Rust↔TS contract — see TASK-8. `commands.*` are wrappers around
+  // `invoke()` whose argument and return shapes are derived from the Rust
+  // structs in `src-tauri/src/settings.rs`. Adding/removing/renaming a field
+  // there produces a TypeScript error here.
+  import { commands } from './bindings.ts';
 
   // Theme — override OS setting with user preference
   let cfgTheme = $state('auto');
@@ -133,10 +138,9 @@ Reply with only the single word, lowercase, no punctuation.
 
   async function pasteHistoryItem(item) {
     pastedTs = item.ts;
-    try {
-      await invoke('paste_history_item', { text: item.text });
-    } catch (e) {
-      transcriptError = 'Paste failed: ' + e;
+    const res = await commands.pasteHistoryItem(item.text);
+    if (res.status === 'error') {
+      transcriptError = 'Paste failed: ' + res.error;
       setTimeout(() => { transcriptError = ''; }, 4000);
     }
     setTimeout(() => { if (pastedTs === item.ts) pastedTs = null; }, 1500);
@@ -166,9 +170,9 @@ Reply with only the single word, lowercase, no punctuation.
   ];
 
   async function openModels() {
-    const cfg = await invoke('get_config');
-    cfgModel  = cfg.whisper.model;
-    cfgModels = cfg.whisper.models ?? [];
+    const cfg = await commands.getConfig();
+    cfgModel  = cfg.whisper?.model ?? '';
+    cfgModels = cfg.whisper?.models ?? [];
     if (cfgModels.length === 0 && cfgModel) cfgModels = [cfgModel];
     modelsSaveMsg = '';
   }
@@ -187,83 +191,87 @@ Reply with only the single word, lowercase, no punctuation.
   }
 
   async function refreshModels() {
-    const found = await invoke('scan_models_dir');
+    const found = await commands.scanModelsDir();
     const merged = [...new Set([...cfgModels, ...found])];
     cfgModels = merged;
     if (!cfgModel && merged.length > 0) cfgModel = merged[0];
   }
 
   async function saveModels() {
-    const cfg = await invoke('get_config');
+    const cfg = await commands.getConfig();
+    if (!cfg.whisper) cfg.whisper = { bin: 'auto', model: '', models: [] };
     cfg.whisper.model  = cfgModel;
     cfg.whisper.models = cfgModels;
-    try {
-      await invoke('save_config', { cfg });
-      modelsSaveMsg = 'Saved.';
-    } catch (e) {
-      modelsSaveMsg = 'Error: ' + e;
-    }
+    const res = await commands.saveConfig(cfg);
+    modelsSaveMsg = res.status === 'ok' ? 'Saved.' : 'Error: ' + res.error;
   }
 
   // ── Modes ─────────────────────────────────────────────────────────────────
 
   async function openModes() {
-    const cfg = await invoke('get_config');
-    cfgCleanupMode      = cfg.cleanup.mode;
-    cfgOllamaUrl        = cfg.cleanup.ollama_url;
-    cfgLlmModel         = cfg.cleanup.classifier_model;
-    cfgVocabulary       = (cfg.cleanup.vocabulary ?? []).join('\n');
-    cfgClassifierPrompt = cfg.cleanup.classifier_prompt || DEFAULT_CLASSIFIER_PROMPT;
+    const cfg = await commands.getConfig();
+    cfgCleanupMode      = cfg.cleanup?.mode               ?? 'regex';
+    cfgOllamaUrl        = cfg.cleanup?.ollama_url         ?? '';
+    cfgLlmModel         = cfg.cleanup?.classifier_model   ?? '';
+    cfgVocabulary       = (cfg.cleanup?.vocabulary ?? []).join('\n');
+    cfgClassifierPrompt = cfg.cleanup?.classifier_prompt  ?? DEFAULT_CLASSIFIER_PROMPT;
     modesSaveMsg = '';
   }
 
   async function saveModes() {
-    const cfg = await invoke('get_config');
-    cfg.cleanup.mode             = cfgCleanupMode;
-    cfg.cleanup.ollama_url       = cfgOllamaUrl;
-    cfg.cleanup.classifier_model = cfgLlmModel;
-    cfg.cleanup.vocabulary       = cfgVocabulary.split('\n').map(s => s.trim()).filter(Boolean);
-    cfg.cleanup.classifier_prompt = cfgClassifierPrompt;
-    try {
-      await invoke('save_config', { cfg });
-      modesSaveMsg = 'Saved.';
-    } catch (e) {
-      modesSaveMsg = 'Error: ' + e;
+    const cfg = await commands.getConfig();
+    if (!cfg.cleanup) {
+      cfg.cleanup = {
+        mode: 'regex',
+        ollama_url: 'http://localhost:11434',
+        classifier_model: 'llama3.2:3b',
+        vocabulary: [],
+        classifier_prompt: DEFAULT_CLASSIFIER_PROMPT,
+      };
     }
+    cfg.cleanup.mode              = cfgCleanupMode;
+    cfg.cleanup.ollama_url        = cfgOllamaUrl;
+    cfg.cleanup.classifier_model  = cfgLlmModel;
+    cfg.cleanup.vocabulary        = cfgVocabulary.split('\n').map(s => s.trim()).filter(Boolean);
+    cfg.cleanup.classifier_prompt = cfgClassifierPrompt;
+    const res = await commands.saveConfig(cfg);
+    modesSaveMsg = res.status === 'ok' ? 'Saved.' : 'Error: ' + res.error;
   }
 
   // ── Settings ──────────────────────────────────────────────────────────────
 
   async function openSettings() {
     const [cfg, devs, launch] = await Promise.all([
-      invoke('get_config'),
-      invoke('list_audio_devices'),
-      invoke('get_launch_at_login'),
+      commands.getConfig(),
+      commands.listAudioDevices(),
+      commands.getLaunchAtLogin(),
     ]);
-    cfgBin        = cfg.whisper.bin;
-    cfgDevice     = cfg.audio.device;
-    cfgHotkeyKey  = cfg.hotkey?.key  ?? 'right_option';
-    cfgHotkeyMode = cfg.hotkey?.mode ?? 'hold';
+    cfgBin         = cfg.whisper?.bin    ?? 'auto';
+    cfgDevice      = cfg.audio?.device   ?? 'default';
+    cfgHotkeyKey   = cfg.hotkey?.key     ?? 'right_option';
+    cfgHotkeyMode  = cfg.hotkey?.mode    ?? 'hold';
     cfgLaunchLogin = launch;
     audioDevices   = devs;
     settingsSaveMsg = '';
   }
 
   async function saveSettings() {
-    const cfg = await invoke('get_config');
+    const cfg = await commands.getConfig();
+    if (!cfg.whisper) cfg.whisper = { bin: 'auto', model: '', models: [] };
+    if (!cfg.audio)   cfg.audio   = { device: 'default' };
+    if (!cfg.hotkey)  cfg.hotkey  = { key: 'right_option', mode: 'hold' };
     cfg.whisper.bin  = cfgBin;
     cfg.audio.device = cfgDevice;
     cfg.theme        = cfgTheme;
-    if (!cfg.hotkey) cfg.hotkey = {};
-    cfg.hotkey.key  = cfgHotkeyKey;
-    cfg.hotkey.mode = cfgHotkeyMode;
-    try {
-      await invoke('save_config', { cfg });
-      await invoke('set_launch_at_login', { enabled: cfgLaunchLogin });
-      settingsSaveMsg = 'Saved.';
-    } catch (e) {
-      settingsSaveMsg = 'Error: ' + e;
+    cfg.hotkey.key   = cfgHotkeyKey;
+    cfg.hotkey.mode  = cfgHotkeyMode;
+    const saveRes = await commands.saveConfig(cfg);
+    if (saveRes.status === 'error') {
+      settingsSaveMsg = 'Error: ' + saveRes.error;
+      return;
     }
+    const launchRes = await commands.setLaunchAtLogin(cfgLaunchLogin);
+    settingsSaveMsg = launchRes.status === 'ok' ? 'Saved.' : 'Error: ' + launchRes.error;
   }
 
   async function forceResize() {
@@ -293,8 +301,8 @@ Reply with only the single word, lowercase, no punctuation.
   onMount(async () => {
     // Load saved theme + history before anything renders
     const [initialCfg, savedHistory] = await Promise.all([
-      invoke('get_config'),
-      invoke('load_history'),
+      commands.getConfig(),
+      commands.loadHistory(),
     ]);
     cfgTheme      = initialCfg.theme        ?? 'auto';
     cfgHotkeyKey  = initialCfg.hotkey?.key  ?? 'right_option';
@@ -321,9 +329,9 @@ Reply with only the single word, lowercase, no punctuation.
         // also emits a `ui-error` event, this catch is belt-and-suspenders.
         history = [{ text, ts: Date.now() }, ...history];
         (async () => {
-          try {
-            await invoke('save_history', { entries: history });
-          } catch (_) { /* ui-error already emitted by backend */ }
+          // ui-error already emitted by backend on failure; we ignore the
+          // result here (belt-and-suspenders).
+          await commands.saveHistory(history);
         })();
       }
     }).then(u => unlisteners.push(u));

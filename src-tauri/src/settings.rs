@@ -6,7 +6,7 @@ use std::path::PathBuf;
 /// `save_history` so the frontend can't accidentally grow the file unboundedly.
 pub const HISTORY_LIMIT: usize = 50;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct Config {
     #[serde(default)]
     pub whisper: WhisperConfig,
@@ -22,7 +22,7 @@ pub struct Config {
 
 fn default_theme() -> String { "auto".into() }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct WhisperConfig {
     pub bin: String,
     pub model: String,
@@ -34,7 +34,7 @@ pub struct WhisperConfig {
 ///
 /// Typed so a typo in config.toml fails to deserialize rather than silently
 /// degrading to a default behavior.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum CleanupMode {
     Off,
@@ -43,7 +43,7 @@ pub enum CleanupMode {
     Chaperone,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct CleanupConfig {
     pub mode: CleanupMode,
     pub ollama_url: String,
@@ -72,7 +72,7 @@ pub fn default_classifier_prompt() -> String {
         .to_string()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct AudioConfig {
     pub device: String,
 }
@@ -108,7 +108,7 @@ impl Default for AudioConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct HotkeyConfig {
     pub key: String,  // "right_option" | "right_control" | "right_command" | "right_shift"
     pub mode: String, // "hold" | "toggle"
@@ -147,7 +147,7 @@ fn history_path() -> PathBuf {
     p
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct HistoryEntry {
     pub text: String,
     pub ts: u64,
