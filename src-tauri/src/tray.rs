@@ -20,7 +20,9 @@ pub fn make_icon(state: TrayState) -> Image<'static> {
 }
 
 // ── Pixel helpers ─────────────────────────────────────────────────────────────
+// Pixel-buffer plotters take RGBA + position + size — naturally many args.
 
+#[allow(clippy::too_many_arguments)]
 fn set(px: &mut [u8], w: u32, x: u32, y: u32, r: u8, g: u8, b: u8, a: u8) {
     if x < w && y < w {
         let i = ((y * w + x) * 4) as usize;
@@ -28,6 +30,7 @@ fn set(px: &mut [u8], w: u32, x: u32, y: u32, r: u8, g: u8, b: u8, a: u8) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rect(px: &mut [u8], w: u32, x: u32, y: u32, rw: u32, rh: u32, r: u8, g: u8, b: u8) {
     for row in y..y+rh { for col in x..x+rw {
         set(px, w, col, row, r, g, b, 255);
