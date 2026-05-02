@@ -1,6 +1,6 @@
 # TurboTalk
 
-Voice dictation for getting work done right now.
+Voice dictation for getting work done.
 
 ---
 
