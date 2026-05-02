@@ -95,6 +95,93 @@ fn rms(data: &[f32]) -> f32 {
     (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt()
 }
 
+/// Average interleaved multi-channel frames down to mono. cpal hands us samples
+/// as `[L0, R0, L1, R1, ...]` for stereo; whisper wants a single channel.
+fn downmix_to_mono(buf: &[f32], channels: u16) -> Vec<f32> {
+    if channels <= 1 {
+        return buf.to_vec();
+    }
+    let ch = channels as usize;
+    let frames = buf.len() / ch;
+    let inv = 1.0 / ch as f32;
+    let mut out = Vec::with_capacity(frames);
+    for i in 0..frames {
+        let start = i * ch;
+        let mut acc = 0.0_f32;
+        for c in 0..ch {
+            acc += buf[start + c];
+        }
+        out.push(acc * inv);
+    }
+    out
+}
+
+/// Resample mono `f32` PCM at `src_rate` to 16 kHz using `rubato::FftFixedIn`.
+/// Whisper expects 16 kHz; doing the conversion ourselves with proper
+/// anti-aliasing (FFT-based) measurably improves quality vs. letting whisper's
+/// front-end resample on the fly, especially from 44.1/48 kHz Bluetooth devices.
+///
+/// `rubato` is a fixed-chunk-in resampler, so we feed `RESAMPLER_CHUNK_SIZE`-
+/// sample chunks and pad the trailing remainder with zeros. The FFT pipeline
+/// adds a small amount of latency-padding to the output; we estimate the ideal
+/// output length from the rate ratio and truncate to that — this keeps the
+/// downstream `trim_silence` window logic honest about timing.
+fn resample_to_16k(buf: &[f32], src_rate: u32) -> anyhow::Result<Vec<f32>> {
+    use rubato::{FftFixedIn, Resampler};
+
+    const TARGET_RATE: usize = 16_000;
+    const CHUNK_IN: usize = 1024;
+
+    if src_rate as usize == TARGET_RATE {
+        return Ok(buf.to_vec());
+    }
+    if buf.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut resampler = FftFixedIn::<f32>::new(
+        src_rate as usize,
+        TARGET_RATE,
+        CHUNK_IN,
+        /* sub_chunks  */ 2,
+        /* nbr_channels*/ 1,
+    )?;
+
+    // FftFixedIn carries a fixed `output_delay` of zero-padding at the start of
+    // the stream — drop it so output[0] corresponds to input[0]. We also need
+    // to feed extra zero-padding past the end of the real input so the filter
+    // tail flushes the last `output_delay` samples of useful output.
+    let delay = resampler.output_delay();
+
+    let mut out: Vec<f32> = Vec::with_capacity(
+        (buf.len() as u64 * TARGET_RATE as u64 / src_rate as u64) as usize + CHUNK_IN,
+    );
+
+    let ideal_len = (buf.len() as u64 * TARGET_RATE as u64 / src_rate as u64) as usize;
+    let target_total = ideal_len + delay; // pre-skip
+    let mut i = 0;
+    while out.len() < target_total {
+        let mut chunk_buf: [f32; CHUNK_IN] = [0.0; CHUNK_IN];
+        let take = CHUNK_IN.min(buf.len().saturating_sub(i));
+        if take > 0 {
+            chunk_buf[..take].copy_from_slice(&buf[i..i + take]);
+            i += take;
+        }
+        let processed = resampler.process(&[&chunk_buf[..]], None)?;
+        out.extend_from_slice(&processed[0]);
+    }
+
+    // Drop the resampler's leading delay so output is time-aligned to input,
+    // then truncate to the ideal output length.
+    if delay > 0 && out.len() > delay {
+        out.drain(..delay);
+    }
+    if out.len() > ideal_len {
+        out.truncate(ideal_len);
+    }
+    Ok(out)
+}
+
 /// Strips leading/trailing silence below `THRESHOLD`. Returns the slice indices.
 /// Leaves ~40 ms of padding on each side so speech onset isn't clipped.
 /// Returns `None` when the whole recording is below threshold (accidental press).
@@ -277,7 +364,25 @@ impl AudioCapture {
         *self.active.lock() = None; // drop stream
 
         let buf = self.samples.lock().clone();
-        tracing::info!("[audio] {} samples captured", buf.len());
+        tracing::info!(
+            "[audio] {} samples captured ({} Hz, {} ch — pre-resample)",
+            buf.len(), sample_rate, channels
+        );
+
+        // Downmix to mono and resample to 16 kHz before any silence/length math.
+        // cpal stays at the device's native rate so AirPods/Bluetooth/aggregate
+        // devices keep working; we do the conversion once, here, after the
+        // recording is finished. From this point on, `sample_rate` is 16_000
+        // and `channels` is 1 — both `trim_silence` and the WAV writer rely on
+        // those values.
+        let buf = downmix_to_mono(&buf, channels);
+        let buf = resample_to_16k(&buf, sample_rate)?;
+        let sample_rate: u32 = 16_000;
+        let channels: u16 = 1;
+        tracing::info!(
+            "[audio] {} samples after resample ({} Hz, {} ch)",
+            buf.len(), sample_rate, channels
+        );
 
         let (start, end) = match trim_silence(&buf, sample_rate) {
             Some(range) => range,
@@ -309,8 +414,8 @@ impl AudioCapture {
         let path_buf = temp_path.to_path_buf();
 
         let spec = hound::WavSpec {
-            channels,
-            sample_rate,
+            channels: 1,
+            sample_rate: 16_000,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
@@ -323,5 +428,62 @@ impl AudioCapture {
         tracing::info!("[audio] wrote {} samples ({:.2}s trimmed) → {:?}",
             trimmed.len(), trimmed.len() as f32 / sample_rate as f32, path_buf);
         Ok(StopOutcome::Wav { path: temp_path })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Synthetic stereo 48 kHz buffer → downmix to mono → resample to 16 kHz.
+    /// Verifies the output length is approximately `input_frames * 16000 / 48000`
+    /// (within ±32 samples for FFT resampler latency / chunk padding).
+    #[test]
+    fn resample_stereo_48k_to_mono_16k() {
+        const SRC_RATE: u32 = 48_000;
+        const FRAMES: usize = 48_000; // 1 second
+        const CHANNELS: u16 = 2;
+
+        // Interleaved stereo: 1 kHz sine on the left, silence on the right.
+        let mut stereo = Vec::with_capacity(FRAMES * CHANNELS as usize);
+        for i in 0..FRAMES {
+            let t = i as f32 / SRC_RATE as f32;
+            let s = (2.0 * std::f32::consts::PI * 1_000.0 * t).sin() * 0.5;
+            stereo.push(s);   // L
+            stereo.push(0.0); // R
+        }
+
+        let mono = downmix_to_mono(&stereo, CHANNELS);
+        assert_eq!(mono.len(), FRAMES, "downmix must preserve frame count");
+        // Right channel is silence so mono = left/2.
+        for i in 0..FRAMES {
+            assert!((mono[i] - stereo[i * 2] * 0.5).abs() < 1e-6);
+        }
+
+        let resampled = resample_to_16k(&mono, SRC_RATE).expect("resample ok");
+        let ideal = FRAMES * 16_000 / SRC_RATE as usize; // 16_000
+        let diff = (resampled.len() as isize - ideal as isize).abs();
+        assert!(
+            diff <= 32,
+            "resampled length {} differs from ideal {} by more than 32 samples",
+            resampled.len(), ideal
+        );
+    }
+
+    /// Mono 16 kHz input must be returned unchanged (fast path).
+    #[test]
+    fn resample_passthrough_at_target_rate() {
+        let buf: Vec<f32> = (0..16_000).map(|i| (i as f32) * 0.0001).collect();
+        let out = resample_to_16k(&buf, 16_000).expect("resample ok");
+        assert_eq!(out.len(), buf.len());
+        assert_eq!(out, buf);
+    }
+
+    /// Mono input is returned as a copy with `channels = 1`.
+    #[test]
+    fn downmix_mono_is_identity() {
+        let buf: Vec<f32> = vec![0.1, -0.2, 0.3, -0.4];
+        let out = downmix_to_mono(&buf, 1);
+        assert_eq!(out, buf);
     }
 }
