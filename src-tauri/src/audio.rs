@@ -6,13 +6,35 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::TempPath;
 
 /// Peak target ≈ -1 dBFS — leaves 1 dB of headroom so the i16 conversion
 /// can't clip even on the loudest inter-sample peaks. Matches Handy and
 /// other reference dictation apps.
 const NORMALIZE_PEAK: f32 = 0.89;
+
+// ---- Audio pipeline contract (post-release stages) -----------------------
+// The on-disk handoff to whisper-cli is *always* the spec below: 16 kHz mono
+// 16-bit PCM WAV, no compression. These constants are the single source of
+// truth for the resampler target, the VAD/min-duration math, and the WAV
+// writer spec. Do not hardcode 16_000 / 1 / 16 in stop(); use these.
+//
+// See ARCHITECTURE.md → "Audio Pipeline Contract" for the full ordering and
+// the reason silence trimming happens *after* resample (Silero requires
+// 16 kHz mono f32 input).
+/// Target sample rate handed to whisper-cli. Whisper expects 16 kHz; doing
+/// the conversion here with a proper anti-aliased FFT resampler measurably
+/// improves quality vs. letting whisper's front-end resample on the fly.
+const TARGET_SAMPLE_RATE: u32 = 16_000;
+/// Whisper is a mono ASR model; we always downmix.
+const TARGET_CHANNELS: u16 = 1;
+/// 16-bit PCM is whisper-cli's preferred WAV format and keeps file size
+/// trivial (256 kbps ≈ 32 KB/s) — no need for a compressed codec.
+const TARGET_BITS_PER_SAMPLE: u16 = 16;
+/// Recordings shorter than this after VAD trim are discarded as noise /
+/// accidental key-taps. 100 ms ≈ 1600 samples at 16 kHz.
+const MIN_RECORDING_MS: u32 = 100;
 
 struct ActiveStream {
     _stream:     cpal::Stream,
@@ -134,7 +156,7 @@ fn downmix_to_mono(buf: &[f32], channels: u16) -> Vec<f32> {
 fn resample_to_16k(buf: &[f32], src_rate: u32) -> anyhow::Result<Vec<f32>> {
     use rubato::{FftFixedIn, Resampler};
 
-    const TARGET_RATE: usize = 16_000;
+    const TARGET_RATE: usize = TARGET_SAMPLE_RATE as usize;
     const CHUNK_IN: usize = 1024;
 
     if src_rate as usize == TARGET_RATE {
@@ -193,6 +215,18 @@ fn resample_to_16k(buf: &[f32], src_rate: u32) -> anyhow::Result<Vec<f32>> {
 /// what whisper.cpp was trained on — boosting before transcription
 /// measurably reduces hallucinations on quiet audio (see
 /// https://arxiv.org/html/2505.12969v1 and faster-whisper#183).
+/// Build the `hound::WavSpec` for the on-disk handoff to whisper-cli. Pulled
+/// out so a unit test can pin the exact contract (16 kHz mono 16-bit PCM int)
+/// and so `stop()` doesn't grow another magic-number block.
+fn whisper_wav_spec() -> hound::WavSpec {
+    hound::WavSpec {
+        channels: TARGET_CHANNELS,
+        sample_rate: TARGET_SAMPLE_RATE,
+        bits_per_sample: TARGET_BITS_PER_SAMPLE,
+        sample_format: hound::SampleFormat::Int,
+    }
+}
+
 fn peak_normalize(samples: &mut [f32], target: f32) {
     let peak = samples.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
     if peak > 0.0 && peak < target {
@@ -351,11 +385,20 @@ impl AudioCapture {
     }
 
     pub fn stop(&self) -> anyhow::Result<StopOutcome> {
+        // Stage timing — see ARCHITECTURE.md "Audio Pipeline Contract".
+        // We log a single compact line at the end of finalization so later
+        // optimization work (TASK-17 / TASK-18) is grounded in measurements
+        // instead of vibes. Per-stage `Instant` reads are nanosecond-cheap
+        // compared to the work they bracket (downmix/resample/VAD/normalize/
+        // WAV write each take milliseconds at minimum).
+        let t_total_start = Instant::now();
+
         self.is_recording.store(false, Ordering::SeqCst);
         // Let the last in-flight callback finish (CoreAudio buffer ≈ 10ms)
         std::thread::sleep(Duration::from_millis(25));
 
-        let (sample_rate, channels) = {
+        let t_capture_clone_start = Instant::now();
+        let (src_sample_rate, src_channels) = {
             let active = self.active.lock();
             match active.as_ref() {
                 Some(a) => (a.sample_rate, a.channels),
@@ -363,26 +406,31 @@ impl AudioCapture {
             }
         };
         *self.active.lock() = None; // drop stream
-
         let buf = self.samples.lock().clone();
+        let capture_clone_ms = t_capture_clone_start.elapsed().as_secs_f32() * 1000.0;
+
         tracing::info!(
             "[audio] {} samples captured ({} Hz, {} ch — pre-resample)",
-            buf.len(), sample_rate, channels
+            buf.len(), src_sample_rate, src_channels
         );
 
-        // Downmix to mono and resample to 16 kHz before any silence/length math.
-        // cpal stays at the device's native rate so AirPods/Bluetooth/aggregate
-        // devices keep working; we do the conversion once, here, after the
-        // recording is finished. From this point on, `sample_rate` is 16_000
-        // and `channels` is 1 — both `vad::trim` and the WAV writer rely on
-        // those values.
-        let buf = downmix_to_mono(&buf, channels);
-        let buf = resample_to_16k(&buf, sample_rate)?;
-        let sample_rate: u32 = 16_000;
-        let channels: u16 = 1;
+        // Downmix to mono and resample to TARGET_SAMPLE_RATE before any
+        // silence/length math. cpal stays at the device's native rate so
+        // AirPods/Bluetooth/aggregate devices keep working; we do the
+        // conversion once, here, after the recording is finished. From this
+        // point on, the buffer is `TARGET_SAMPLE_RATE` Hz / `TARGET_CHANNELS`
+        // ch — both `vad::trim` and the WAV writer rely on those values.
+        let t_downmix_start = Instant::now();
+        let buf = downmix_to_mono(&buf, src_channels);
+        let downmix_ms = t_downmix_start.elapsed().as_secs_f32() * 1000.0;
+
+        let t_resample_start = Instant::now();
+        let buf = resample_to_16k(&buf, src_sample_rate)?;
+        let resample_ms = t_resample_start.elapsed().as_secs_f32() * 1000.0;
+
         tracing::info!(
             "[audio] {} samples after resample ({} Hz, {} ch)",
-            buf.len(), sample_rate, channels
+            buf.len(), TARGET_SAMPLE_RATE, TARGET_CHANNELS
         );
 
         // Silero v4 + onset/hangover smoothing — see vad.rs. On model
@@ -390,15 +438,25 @@ impl AudioCapture {
         // a recording to a VAD bug; downstream `min_samples` still catches
         // genuinely empty input. The old fixed-RMS gate (`trim_silence`)
         // was removed in TASK-11.
+        let t_vad_start = Instant::now();
         let (start, end) = crate::vad::trim(&buf);
         let mut trimmed: Vec<f32> = buf[start..end].to_vec();
+        let vad_ms = t_vad_start.elapsed().as_secs_f32() * 1000.0;
 
-        let min_samples = sample_rate as usize / 10;
+        // MIN_RECORDING_MS → samples at the (now-fixed) target rate.
+        let min_samples =
+            (TARGET_SAMPLE_RATE as u64 * MIN_RECORDING_MS as u64 / 1000) as usize;
         if trimmed.len() < min_samples {
-            let duration_ms = (trimmed.len() as u64 * 1000 / sample_rate as u64) as u32;
+            let duration_ms =
+                (trimmed.len() as u64 * 1000 / TARGET_SAMPLE_RATE as u64) as u32;
+            let total_ms = t_total_start.elapsed().as_secs_f32() * 1000.0;
             tracing::info!(
                 "[audio] recording too short after trim ({} samples, {} ms) — skipping",
                 trimmed.len(), duration_ms
+            );
+            tracing::info!(
+                "[audio] stage timings (ms): capture_clone={:.2} downmix={:.2} resample={:.2} vad={:.2} normalize=0.00 wav_write=0.00 total={:.2} (discarded: too_short)",
+                capture_clone_ms, downmix_ms, resample_ms, vad_ms, total_ms
             );
             return Ok(StopOutcome::Discard(DiscardReason::TooShort { duration_ms }));
         }
@@ -406,11 +464,14 @@ impl AudioCapture {
         // Peak-normalize quiet recordings up to ~-1 dBFS before WAV write.
         // One-way: only boosts when below target, never attenuates. Loud
         // recordings pass through unchanged.
+        let t_normalize_start = Instant::now();
         peak_normalize(&mut trimmed, NORMALIZE_PEAK);
+        let normalize_ms = t_normalize_start.elapsed().as_secs_f32() * 1000.0;
 
         // tempfile::Builder gives us a 0600-perm file with a random suffix in
         // the system temp dir. Persisting via `into_temp_path()` keeps the
         // RAII delete-on-drop guarantee while letting us hand the path off.
+        let t_wav_start = Instant::now();
         let named = tempfile::Builder::new()
             .prefix("turbotalk-")
             .suffix(".wav")
@@ -418,20 +479,26 @@ impl AudioCapture {
         let temp_path: TempPath = named.into_temp_path();
         let path_buf = temp_path.to_path_buf();
 
-        let spec = hound::WavSpec {
-            channels: 1,
-            sample_rate: 16_000,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
+        let spec = whisper_wav_spec();
         let mut writer = hound::WavWriter::create(&path_buf, spec)?;
         for &s in trimmed.iter() {
             let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
             writer.write_sample(v)?;
         }
         writer.finalize()?;
-        tracing::info!("[audio] wrote {} samples ({:.2}s trimmed) → {:?}",
-            trimmed.len(), trimmed.len() as f32 / sample_rate as f32, path_buf);
+        let wav_write_ms = t_wav_start.elapsed().as_secs_f32() * 1000.0;
+
+        let total_ms = t_total_start.elapsed().as_secs_f32() * 1000.0;
+        tracing::info!(
+            "[audio] wrote {} samples ({:.2}s trimmed) → {:?}",
+            trimmed.len(),
+            trimmed.len() as f32 / TARGET_SAMPLE_RATE as f32,
+            path_buf,
+        );
+        tracing::info!(
+            "[audio] stage timings (ms): capture_clone={:.2} downmix={:.2} resample={:.2} vad={:.2} normalize={:.2} wav_write={:.2} total={:.2}",
+            capture_clone_ms, downmix_ms, resample_ms, vad_ms, normalize_ms, wav_write_ms, total_ms
+        );
         Ok(StopOutcome::Wav { path: temp_path })
     }
 }
@@ -503,6 +570,32 @@ mod tests {
             "expected peak in [0.88, 0.90] after boost, got {}",
             peak
         );
+    }
+
+    /// The on-disk handoff to whisper-cli must always be 16 kHz mono 16-bit
+    /// PCM int. Pin that contract so an accidental edit to the constants or
+    /// the spec helper trips the test suite. TASK-13 success signal.
+    #[test]
+    fn whisper_wav_spec_is_16k_mono_16bit_int() {
+        let spec = whisper_wav_spec();
+        assert_eq!(spec.sample_rate, 16_000);
+        assert_eq!(spec.channels, 1);
+        assert_eq!(spec.bits_per_sample, 16);
+        assert!(matches!(spec.sample_format, hound::SampleFormat::Int));
+        // The constants must agree with the spec — these are the single
+        // source of truth referenced throughout `stop()`.
+        assert_eq!(TARGET_SAMPLE_RATE, spec.sample_rate);
+        assert_eq!(TARGET_CHANNELS, spec.channels);
+        assert_eq!(TARGET_BITS_PER_SAMPLE, spec.bits_per_sample);
+    }
+
+    /// `MIN_RECORDING_MS = 100` at 16 kHz must be exactly 1600 samples.
+    /// Stop() relies on this for the TooShort discard check.
+    #[test]
+    fn min_recording_ms_in_samples_at_target_rate() {
+        let min_samples =
+            (TARGET_SAMPLE_RATE as u64 * MIN_RECORDING_MS as u64 / 1000) as usize;
+        assert_eq!(min_samples, 1600);
     }
 
     /// Buffer already louder than target (peak 0.95) must pass through unchanged.

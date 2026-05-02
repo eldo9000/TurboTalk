@@ -56,6 +56,54 @@
 | `paste.rs` | Inject text into focused app via macOS clipboard + Cmd+V (or enigo on Win/Linux) | `arboard`, `enigo` |
 | `settings.rs` | Read/write `~/.config/librewin/turbotalk/config.toml` | `serde`, `toml` |
 
+## Audio Pipeline Contract
+
+`audio.rs` follows a fixed, quality-first sequence after the push-to-talk
+hotkey is released. Order is load-bearing and the constants in `audio.rs`
+(`TARGET_SAMPLE_RATE`, `TARGET_CHANNELS`, `TARGET_BITS_PER_SAMPLE`,
+`MIN_RECORDING_MS`) are the single source of truth.
+
+```
+native mic capture (cpal, device-native rate / channels / format)
+        │  no work in the cpal callback beyond append + RMS update
+        ▼
+downmix to mono            (TARGET_CHANNELS = 1)
+        ▼
+resample to 16 kHz         (TARGET_SAMPLE_RATE, rubato FftFixedIn)
+        ▼
+Silero VAD trim            (silence trim happens *after* resample because
+                            Silero v4 expects 16 kHz mono f32 frames)
+        ▼
+min-duration reject        (MIN_RECORDING_MS, drop with DiscardReason)
+        ▼
+peak normalize             (NORMALIZE_PEAK ≈ -1 dBFS, one-way boost only)
+        ▼
+write 16 kHz mono 16-bit PCM WAV  → handed to whisper-cli sidecar
+```
+
+**Disk handoff format.** The temporary file passed to `whisper-cli` is
+*always* 16 kHz mono 16-bit PCM WAV. Compressed codecs (MP3, AAC, Opus,
+FLAC) are intentionally not used: at 16 kHz mono 16-bit the file is
+~32 KB/s, the WAV header is trivial, and whisper-cli's preferred input
+format is uncompressed PCM. Adding a codec would add encode latency,
+decode latency on whisper's side, and a quality loss for no real-world
+size win.
+
+**Why VAD runs after resample.** Silero v4 ships its weights for 16 kHz
+mono f32 input and expects fixed-size frames at that rate. Running VAD
+*before* resample would either (a) require a second Silero model variant
+per device sample rate, or (b) silently degrade detection quality on
+44.1 / 48 kHz Bluetooth devices. Doing one well-anti-aliased FFT
+resample first keeps Silero on its happy path and keeps frame indexing
+honest about timing.
+
+**Stage timing evidence.** `stop()` instruments each post-release stage
+(capture clone, downmix, resample, VAD, normalize, WAV write, total) and
+emits a single compact `tracing::info!` line per finalization. This is
+the evidence base for later persistent-Whisper / cached-VAD work; do
+not regress the log line without replacing it with something at least
+as detailed.
+
 ## State Machine (recorder.rs)
 
 ```
