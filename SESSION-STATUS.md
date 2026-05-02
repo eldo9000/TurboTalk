@@ -1,6 +1,6 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-05-01
+**Last updated:** 2026-05-02
 **Current state:** Dictation-quality sprint complete. 4/4 tasks landed.
 Hardening sprint already closed (8/8). Audio pipeline now does explicit
 16 kHz mono resampling, peak-normalization, Silero VAD, and tuned
@@ -20,18 +20,24 @@ Commits this session:
 
 ## Active Focus
 
-Roadmap M2 — Configurable.
+Optimization planning for the dictation pipeline.
+
+## Current Planning Output
+
+Created ordered task files TASK-13 through TASK-19 in `tasks/`.
+They cover audio/codec invariants, one-in-flight lifecycle, stage separation
+with job ids, paste focus policy, VAD reuse, persistent Whisper, and optional
+streaming finalization.
 
 ## Blockers
 
 None.
 
-## Next Session Should
+## Next action
 
-1. Tray icon — hide window to menu bar, show/hide on click.
-2. Basic text cleanup — capitalize first word, strip trailing whitespace.
-3. Config persistence — `~/.config/librewin/turbotalk/config.toml` via `settings.rs`.
-4. Settings window — surface model path and hotkey to user.
+Dispatch `tasks/TASK-13-audio-pipeline-contract-and-stage-timings.md`;
+success signal is a normal dictation plus timing logs for each audio
+finalization stage.
 
 ## Hardening Sprint (2026-05-01) — closed
 
@@ -78,3 +84,36 @@ Tasks archived at `tasks/done/TASK-09..TASK-12.md`.
 - **ggml-base.en** — 141MB, ~130ms on M4 via Metal. Adequate for M1.
 - **Window: 380×280** — no custom titlebar, native macOS traffic lights only.
 - **Reference, not fork** — built from scratch. Handy/typr/sagascript as references.
+
+## TASK-19 (streaming audio finalizer) — deferred 2026-05-02
+
+Deferred this sprint. Documentation-only completion; no source changes.
+
+**Reason.** TASK-19 explicitly gates on Whisper-vs-finalization timing
+evidence ("If Whisper still dominates and audio finalization is small, do
+not implement this task"). Two facts make the gate fail-closed right now:
+
+1. TASK-18 (persistent warm Whisper worker) was the dominant-latency
+   target this sprint and was itself deferred — `whisper-rs` cmake build
+   hangs on macOS 26.x. See `tasks/done/TASK-18-...`. So Whisper still
+   dominates per-recording latency by definition.
+2. No runtime data has been collected against the TASK-13 stage-timing
+   instrumentation (no audio device available to the dispatcher/workers
+   this sprint). The `[audio] stage timings (ms): capture_clone=… downmix=…
+   resample=… vad=… normalize=… wav_write=… total=…` line in `audio.rs`
+   `stop()` exists and is correctly wired, but has not been exercised
+   end-to-end with a real microphone.
+
+Optimizing audio finalization before either of those is doubly premature
+and would add streaming-pipeline complexity with no measured payoff.
+
+**Re-attempt condition.** Two gates, both required:
+- Collect TASK-13 stage timings under realistic recording — at minimum
+  one short push-to-talk dictation and one long recording with several
+  seconds of leading + trailing silence.
+- Only implement TASK-19 if `downmix + resample + vad + normalize +
+  wav_write` exceeds Whisper transcription time on the long recording.
+  Otherwise re-defer.
+
+Task file moves to `tasks/done/TASK-19-…` with this deferral note as the
+proof-of-completion.
