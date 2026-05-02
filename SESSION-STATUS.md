@@ -1,8 +1,10 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-05-01
-**Current state:** Multi-agent code review hardening sprint complete. 8/8 tasks landed.
-Full dictation loop intact; security and architecture findings closed.
+**Current state:** Dictation-quality sprint complete. 4/4 tasks landed.
+Hardening sprint already closed (8/8). Audio pipeline now does explicit
+16 kHz mono resampling, peak-normalization, Silero VAD, and tuned
+whisper-cli flags — addresses the "mic not sensitive enough" complaint.
 
 ## Where We Are
 
@@ -47,6 +49,26 @@ All commits on main; tasks/done/ has the archived task files.
 
 Reports archived at `/tmp/static-analysis-main-20260501-1200.md` and
 `/tmp/code-analysis-concern-based-main-20260501.md`.
+
+## Dictation-quality sprint (2026-05-01) — closed
+
+Research synthesized from cjpais/Handy reference impl, whisper.cpp issue
+threads, and DSP literature → 4 tasks dispatched + landed via /triage-dispatch.
+User-reported symptom: "mic not sensitive enough, output much worse than other
+dictation apps." Root cause was zero audio preprocessing between cpal and
+whisper.cpp — every comparable app does at least normalization + VAD.
+
+- `2c08406` chore(tray): silence too_many_arguments on pixel helpers (prep)
+- `9cbbffd` feat(audio): resample mic input to 16 kHz mono (rubato FftFixedIn)
+- `6363ded` feat(audio): peak-normalize buffer to ~-1 dBFS (one-way boost only)
+- `bbf5834` feat(audio): replace RMS trimmer with Silero VAD + hangover smoothing
+- `55cfa21` feat(transcribe): tune whisper flags (--no-context, beam=5, temp=0,
+            --suppress-blank) + wire cleanup.vocabulary into --prompt
+
+Binary size +18.9 MB (statically-linked ort runtime + 1.8 MB Silero v4 ONNX
+model). `cargo clippy -D warnings` clean across all five commits.
+
+Tasks archived at `tasks/done/TASK-09..TASK-12.md`.
 
 ## Recent Decisions
 
