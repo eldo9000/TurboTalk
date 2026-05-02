@@ -88,10 +88,15 @@ impl Recorder {
         *s = State::Transcribing;
         drop(s);
         tracing::info!("[recorder] Recording → Transcribing");
-        let outcome = self.capture.stop()?;
+
+        // Always transition back to Ready, even if the capture-stop pipeline
+        // (resample / VAD / normalize / WAV-write) errored. Otherwise a
+        // transient audio failure pins the recorder in Transcribing forever
+        // and every subsequent hotkey press is rejected as IllegalTransition.
+        let outcome = self.capture.stop();
         *self.state.lock() = State::Ready;
         tracing::info!("[recorder] Transcribing → Ready");
-        Ok(outcome)
+        outcome.map_err(Into::into)
     }
 
     /// Force the recorder back to Ready without producing a WAV. Used by the
