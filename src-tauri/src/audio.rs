@@ -130,7 +130,7 @@ fn downmix_to_mono(buf: &[f32], channels: u16) -> Vec<f32> {
 /// sample chunks and pad the trailing remainder with zeros. The FFT pipeline
 /// adds a small amount of latency-padding to the output; we estimate the ideal
 /// output length from the rate ratio and truncate to that — this keeps the
-/// downstream `trim_silence` window logic honest about timing.
+/// downstream VAD frame indexing honest about timing.
 fn resample_to_16k(buf: &[f32], src_rate: u32) -> anyhow::Result<Vec<f32>> {
     use rubato::{FftFixedIn, Resampler};
 
@@ -201,26 +201,6 @@ fn peak_normalize(samples: &mut [f32], target: f32) {
             *s = (*s * gain).clamp(-1.0, 1.0);
         }
     }
-}
-
-/// Strips leading/trailing silence below `THRESHOLD`. Returns the slice indices.
-/// Leaves ~40 ms of padding on each side so speech onset isn't clipped.
-/// Returns `None` when the whole recording is below threshold (accidental press).
-fn trim_silence(samples: &[f32], sample_rate: u32) -> Option<(usize, usize)> {
-    const THRESHOLD: f32 = 0.008; // ~-42 dBFS — separates ambient from speech
-    const PAD: usize = 2;         // 20 ms chunks of padding each side
-
-    let chunk = (sample_rate as usize) / 50; // 20 ms
-    if chunk == 0 { return Some((0, samples.len())); }
-
-    let levels: Vec<f32> = samples.chunks(chunk).map(rms).collect();
-
-    let first = levels.iter().position(|&r| r > THRESHOLD)?;
-    let last  = levels.iter().rposition(|&r| r > THRESHOLD)?;
-
-    let start = first.saturating_sub(PAD) * chunk;
-    let end   = ((last + 1 + PAD) * chunk).min(samples.len());
-    Some((start, end))
 }
 
 impl AudioCapture {
@@ -394,7 +374,7 @@ impl AudioCapture {
         // cpal stays at the device's native rate so AirPods/Bluetooth/aggregate
         // devices keep working; we do the conversion once, here, after the
         // recording is finished. From this point on, `sample_rate` is 16_000
-        // and `channels` is 1 — both `trim_silence` and the WAV writer rely on
+        // and `channels` is 1 — both `vad::trim` and the WAV writer rely on
         // those values.
         let buf = downmix_to_mono(&buf, channels);
         let buf = resample_to_16k(&buf, sample_rate)?;
@@ -405,13 +385,12 @@ impl AudioCapture {
             buf.len(), sample_rate, channels
         );
 
-        let (start, end) = match trim_silence(&buf, sample_rate) {
-            Some(range) => range,
-            None => {
-                tracing::info!("[audio] silent recording — skipping transcription");
-                return Ok(StopOutcome::Discard(DiscardReason::Silent));
-            }
-        };
+        // Silero v4 + onset/hangover smoothing — see vad.rs. On model
+        // failure this gracefully returns (0, buf.len()) so we never lose
+        // a recording to a VAD bug; downstream `min_samples` still catches
+        // genuinely empty input. The old fixed-RMS gate (`trim_silence`)
+        // was removed in TASK-11.
+        let (start, end) = crate::vad::trim(&buf);
         let mut trimmed: Vec<f32> = buf[start..end].to_vec();
 
         let min_samples = sample_rate as usize / 10;

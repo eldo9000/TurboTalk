@@ -18,6 +18,7 @@ pub mod settings;
 pub mod theme;
 pub mod transcribe;
 pub mod tray;
+pub mod vad;
 
 pub use theme::{get_accent, get_theme};
 

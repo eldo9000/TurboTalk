@@ -27,6 +27,21 @@ cpal            = "0.15"
 hound           = "3.5"
 rubato          = "0.15"
 
+# VAD: Silero v4 ONNX model wrapped via vad-rs. The transitive `ort` crate pulls
+# the onnxruntime native lib at build time via its `download-binaries` default
+# feature, so the resulting binary is self-contained — no system onnxruntime
+# install required. We disable vad-rs's `helpers` feature (ebur128 + samplerate)
+# because we already do our own resampling/normalization in audio.rs.
+#
+# `ort-sys` is pinned to the same rc.9 release as `ort` (vad-rs's transitive
+# `=2.0.0-rc.9` constraint). Cargo's default resolver prefers the newest
+# semver-compatible ort-sys, which lands on rc.12 — but rc.12 introduced a
+# mandatory TLS-feature compile_error! that the old rc.9 ort wrapper can't
+# satisfy. Pinning ort-sys to rc.9 here keeps the build self-contained and
+# the ABI matched with ort's expectations.
+vad-rs          = { version = "0.1.5", default-features = false }
+ort-sys         = "=2.0.0-rc.9"
+
 # Clipboard / paste injection
 arboard         = "3"
 enigo           = "0.3"
