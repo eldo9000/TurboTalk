@@ -223,3 +223,114 @@ When you hit a step that does not match the Expected behavior:
 2. In TurboTalk, open **Settings → Copy diagnostics** (or equivalent) and paste the copied text into your bug report. This includes version info, model path, and recent log lines.
 3. If the app crashed, open Console.app, filter by "TurboTalk", and copy the crash entry.
 4. Send the test number, what you actually saw, and the diagnostics text to the developer.
+
+---
+
+## Installed-artifact smoke test
+
+Run this section after every release build (signed + notarized DMG) and **before publishing** the release. The 7 dev-build tests above catch code regressions; this section catches packaging-layer regressions that only appear once the app is installed from a real DMG. It covers Gatekeeper acceptance, the macOS permission prompt flow when launched from `/Applications`, one end-to-end dictation, and the documented uninstall + data cleanup path. Skipping this section is how broken DMGs reach users.
+
+### Prerequisites
+
+- A signed and notarized DMG sitting in `dist-artifacts/` (per `BUILD.md` and `RELEASING.md`), along with its matching `.sha256` file. The DMG must be the actual artifact you intend to publish — not an unsigned local build.
+- **A clean macOS user account with no prior TurboTalk install.** Either:
+  - (a) A fresh macOS VM, or
+  - (b) A new local user account on the maintainer's Mac (System Settings → Users & Groups → Add Account), then log into that account before starting.
+
+> **Do not run this on the maintainer's daily-driver account.** That account already has Microphone and Accessibility grants for TurboTalk cached, and may have stale data under `~/.config/librewin/turbotalk/` or `~/Library/Application Support/`. Running the test there silently passes the failures it is designed to catch.
+
+### Steps
+
+1. **Verify checksum before installing.**
+
+   **Action:** In Terminal, `cd` into `dist-artifacts/` (or wherever the DMG and its `.sha256` sit together) and run:
+
+   ```
+   shasum -a 256 -c TurboTalk-<version>-macos-arm64.dmg.sha256
+   ```
+
+   **Expected:** `TurboTalk-<version>-macos-arm64.dmg: OK`. Anything else (`FAILED`, missing file, wrong digest) means the DMG is corrupt or mismatched — stop here and do not install.
+
+2. **Verify Gatekeeper acceptance.**
+
+   **Action:** From Terminal, run:
+
+   ```
+   spctl -a -t open --context context:primary-signature -v TurboTalk-<version>-macos-arm64.dmg
+   ```
+
+   **Expected:** Output ends with `accepted` and the developer name on the `source=` line (for a notarized release, `source=Notarized Developer ID`). Any `rejected` result means Gatekeeper will block the install on a real user's machine — stop and re-check signing/notarization in `BUILD.md`.
+
+3. **Mount and install.**
+
+   **Action:** Double-click the DMG to mount it. Drag `Turbo Talk.app` into `/Applications`. Eject the DMG from Finder.
+
+   **Expected:** `Turbo Talk.app` appears in `/Applications` and is launchable from Finder or Spotlight.
+
+4. **First launch.**
+
+   **Action:** Open `/Applications/Turbo Talk.app` (double-click in Finder, or via Spotlight).
+
+   **Expected:** The app window appears. **No** Gatekeeper warning dialog. Specifically, a dialog reading "Turbo Talk cannot be opened because the developer cannot be verified" or "macOS cannot verify that this app is free from malware" is a **FAIL** — stop, and treat the notarization as broken.
+
+5. **Microphone permission prompt.**
+
+   **Action:** Hold the push-to-talk hotkey (Right Option by default) and speak briefly.
+
+   **Expected:** macOS shows a system permission prompt requesting Microphone access for TurboTalk. Click "Allow." If no prompt appears and recording also does not work, this is a FAIL — the entitlement or `Info.plist` `NSMicrophoneUsageDescription` is missing from the bundle.
+
+6. **Accessibility permission prompt.**
+
+   **Action:** TurboTalk should either prompt for Accessibility / Input Monitoring on its own or display a clear in-app message explaining that it is required and how to grant it. Open System Settings → Privacy & Security → Accessibility, find TurboTalk in the list, and toggle it on. Quit and relaunch TurboTalk if the in-app guidance asks you to.
+
+   **Expected:** TurboTalk appears in the Accessibility list and can be toggled on. After granting and (if needed) relaunching, TurboTalk no longer surfaces the "Accessibility required" message.
+
+7. **End-to-end dictation.**
+
+   **Action:** Open TextEdit (or any text-editable field), click into the document so it has focus, hold the push-to-talk hotkey, say "hello world" clearly, and release.
+
+   **Expected:** The text "hello world" (or very close) appears at the cursor position in TextEdit within roughly 2 seconds of releasing the key. The app returns to idle.
+
+8. **Verify local data path.**
+
+   **Action:** In Terminal, run:
+
+   ```
+   ls ~/.config/librewin/turbotalk/
+   ```
+
+   **Expected:** The directory exists and contains the expected config file (`settings.json`) and, if history is enabled, a `history/` directory — matching the paths documented in `PRIVACY.md` → "How to delete everything." If the directory is missing entirely after a successful dictation, settings persistence is broken when launched from `/Applications`.
+
+9. **Quit and relaunch.**
+
+   **Action:** Quit TurboTalk completely (menu bar icon → Quit). Wait a few seconds, then relaunch from `/Applications/Turbo Talk.app`.
+
+   **Expected:** App launches clean. Settings are still present (model path, hotkey, etc.). Microphone and Accessibility permissions are **not** re-prompted. The app reaches idle/ready state without any first-run prompts.
+
+10. **Uninstall.**
+
+    **Action:** Drag `/Applications/Turbo Talk.app` to the Trash. Empty the Trash if you want to fully complete the removal.
+
+    **Expected:** `Turbo Talk.app` is gone from `/Applications`.
+
+11. **Verify data cleanup path.**
+
+    **Action:** Follow `PRIVACY.md` → "How to delete everything." Specifically:
+
+    - If you enabled autostart at any point, run `launchctl unload ~/Library/LaunchAgents/com.librewin.turbotalk.plist` and then delete that plist file.
+    - Delete `~/.config/librewin/turbotalk/settings.json`.
+    - Delete `~/.config/librewin/turbotalk/history/` (entire directory).
+    - Delete `~/.config/librewin/turbotalk/models/` (entire directory, or whichever model path you configured).
+
+    Then verify nothing remains:
+
+    ```
+    ls ~/.config/librewin/turbotalk/ 2>/dev/null
+    ls ~/Library/LaunchAgents/com.librewin.turbotalk.plist 2>/dev/null
+    ```
+
+    **Expected:** Both commands report no such file or directory. Every path PRIVACY.md lists is gone after running its documented commands. If any path remains that PRIVACY.md does not mention, that is a documentation gap — note it for follow-up.
+
+### Pass/fail recording
+
+Record the outcome of this run in `SESSION-STATUS.md` under the release entry. On pass, note the macOS version you tested against (e.g., "Installed-artifact smoke test: PASS on macOS 14.5"). On fail, note **which numbered step failed** and **what you actually observed**, not just "failed" — that observation is what the next debugging session starts from.
