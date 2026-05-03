@@ -282,12 +282,16 @@ impl AudioCapture {
         let host = cpal::default_host();
         let device = if want == "default" || want.is_empty() {
             host.default_input_device()
-                .ok_or_else(|| anyhow::anyhow!("no default input device"))?
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Microphone access denied — grant permission in System Settings → Privacy → Microphone, then relaunch."
+                ))?
         } else {
             host.input_devices()?
                 .find(|d| d.name().ok().as_deref() == Some(want))
                 .or_else(|| host.default_input_device())
-                .ok_or_else(|| anyhow::anyhow!("no input device found"))?
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Microphone access denied — grant permission in System Settings → Privacy → Microphone, then relaunch."
+                ))?
         };
 
         let name = device.name().unwrap_or_else(|_| "unknown".into());
