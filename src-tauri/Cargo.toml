@@ -26,6 +26,12 @@ librewin-common = { git = "https://github.com/eldo9000/Libre-Apps.git", tag = "v
 cpal            = "0.15"
 hound           = "3.5"
 rubato          = "0.15"
+# Lock-free MPSC channel for the streaming audio finalizer (TASK-22). The
+# capture-feeder thread ships chunks to the finalizer worker via a bounded
+# channel; if the worker falls behind we drop on the worker side, never on
+# the capture side. crossbeam-channel is already pulled in transitively
+# through cpal, declaring it directly pins the API surface we depend on.
+crossbeam-channel = "0.5"
 
 # VAD: Silero v4 ONNX model wrapped via vad-rs. The transitive `ort` crate pulls
 # the onnxruntime native lib at build time via its `download-binaries` default

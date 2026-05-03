@@ -180,6 +180,44 @@ impl<'a> SmoothedVad<'a> {
     }
 }
 
+/// Streaming-finalizer accessor (TASK-22). Returns the cached
+/// process-lifetime VAD `OnceLock<Mutex<Option<Vad>>>` so the streaming
+/// worker can hold the same session the batch path uses. Lazily
+/// initializes on first call (mirroring `trim()`'s init path) so we
+/// don't pay init twice.
+///
+/// Returns `None` only if the model bytes can't be materialized to disk
+/// or `Vad::new` fails — same graceful-fallback contract as `trim()`.
+/// On success, the caller must call `inner.reset()` before pushing
+/// frames so prior audio can't influence the new stream.
+pub fn cached_vad_for_streaming() -> Option<&'static Mutex<Option<Vad>>> {
+    let cell = VAD_CACHE.get_or_init(|| Mutex::new(None));
+    {
+        let mut guard = cell.lock();
+        if guard.is_none() {
+            let path = match ensure_model_on_disk() {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(
+                        "[vad] failed to materialize Silero model for streaming: {e}"
+                    );
+                    return None;
+                }
+            };
+            match Vad::new(&path, SAMPLE_RATE) {
+                Ok(v) => *guard = Some(v),
+                Err(e) => {
+                    tracing::warn!(
+                        "[vad] failed to initialize Silero for streaming: {e}"
+                    );
+                    return None;
+                }
+            }
+        }
+    }
+    Some(cell)
+}
+
 /// Detect the speech-bounded sample-index range of `samples`.
 ///
 /// Returns `(start, end)` such that `samples[start..end]` contains the

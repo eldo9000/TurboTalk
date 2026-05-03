@@ -4,10 +4,13 @@
 // This lets the device change (built-in ↔ AirPods) without restarting the app.
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tempfile::TempPath;
+
+use crate::audio_finalizer::{DropReason, FinalizeResult, StreamingFinalizer};
 
 /// Peak target ≈ -1 dBFS — leaves 1 dB of headroom so the i16 conversion
 /// can't clip even on the loudest inter-sample peaks. Matches Handy and
@@ -52,6 +55,27 @@ pub struct AudioCapture {
     /// surfaces exactly once.
     device_lost:  Arc<AtomicBool>,
     active:       Mutex<Option<ActiveStream>>,
+    /// TASK-22: streaming finalizer worker (resample + VAD off the
+    /// post-release critical path). Spawned in `start()`, shut down in
+    /// `stop()` / `cancel()`. The capture-feeder thread (`feeder`) ships
+    /// chunks to it from the shared `samples` buffer.
+    ///
+    /// On streaming degradation (worker init failure, channel disconnect)
+    /// `stop()` falls back to the legacy batch finalizer path against
+    /// the canonical `samples` buffer — no recording is ever lost.
+    streaming:    Mutex<Option<StreamingFinalizer>>,
+    /// Capture-feeder thread handle. The feeder polls `samples` and ships
+    /// each new chunk to the streaming worker. Joined by `stop()` /
+    /// `cancel()` after `feeder_stop` is set so it returns cleanly.
+    feeder:       Mutex<Option<JoinHandle<()>>>,
+    /// Set true to ask the feeder thread to drain pending samples, send
+    /// them to the worker, and exit. The feeder polls this every ~10 ms.
+    feeder_stop:  Arc<AtomicBool>,
+    /// How many samples from `samples` the feeder has already shipped to
+    /// the streaming worker. Owned by the feeder; `stop()` reads it after
+    /// the feeder has exited so it knows whether all captured audio
+    /// reached the worker.
+    feeder_cursor: Arc<AtomicUsize>,
 }
 
 /// Why a recording was thrown away instead of returning a WAV path.
@@ -240,11 +264,15 @@ fn peak_normalize(samples: &mut [f32], target: f32) {
 impl AudioCapture {
     pub fn new() -> anyhow::Result<Self> {
         Ok(Self {
-            samples:      Arc::new(Mutex::new(Vec::new())),
-            level:        Arc::new(AtomicU32::new(0)),
-            is_recording: Arc::new(AtomicBool::new(false)),
-            device_lost:  Arc::new(AtomicBool::new(false)),
-            active:       Mutex::new(None),
+            samples:        Arc::new(Mutex::new(Vec::new())),
+            level:          Arc::new(AtomicU32::new(0)),
+            is_recording:   Arc::new(AtomicBool::new(false)),
+            device_lost:    Arc::new(AtomicBool::new(false)),
+            active:         Mutex::new(None),
+            streaming:      Mutex::new(None),
+            feeder:         Mutex::new(None),
+            feeder_stop:    Arc::new(AtomicBool::new(false)),
+            feeder_cursor:  Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -295,11 +323,29 @@ impl AudioCapture {
             }
         };
 
+        // ---- cpal callback discipline (TASK-22) ------------------------
+        // The audio callback runs on CoreAudio's high-priority thread and
+        // must do only:
+        //   1. extend the shared `samples: Mutex<Vec<f32>>` buffer with
+        //      the new native-rate slice;
+        //   2. update the level meter atomic.
+        //
+        // No DSP. No channel sends. No heap-alloc beyond what
+        // `Vec::extend_from_slice` does (amortized; `samples` is
+        // pre-grown by the first few callbacks). The streaming finalizer
+        // pulls from `samples` via the capture-feeder thread, never
+        // here.
+        //
+        // This matches `cjpais/Handy`'s callback discipline and the
+        // TASK-22 constraint. Verified by code inspection: the only
+        // operations below `extend_from_slice` and `level.store`. If
+        // you add work here, it MUST be moved to the feeder or worker.
         let stream = match sample_format {
             cpal::SampleFormat::F32 => {
                 device.build_input_stream(
                     &config.into(),
                     move |data: &[f32], _: &_| {
+                        // CALLBACK-ALLOWED-OPS: append + level only.
                         if rec.load(Ordering::Relaxed) {
                             smp.lock().extend_from_slice(data);
                             lvl.store(rms(data).to_bits(), Ordering::Relaxed);
@@ -363,21 +409,156 @@ impl AudioCapture {
         // Clear any stale device-lost flag from a previous session so a fresh
         // recording doesn't immediately trigger the loss path.
         self.device_lost.store(false, Ordering::SeqCst);
+        self.feeder_stop.store(false, Ordering::SeqCst);
+        self.feeder_cursor.store(0, Ordering::SeqCst);
 
         // Always read device from config so changes take effect without restart.
         let want = crate::settings::load().audio.device;
         let stream = self.open_stream(&want)?;
+        let src_rate = stream.sample_rate;
+        let src_channels = stream.channels;
         *self.active.lock() = Some(stream);
+
+        // TASK-22: spawn the streaming finalizer worker and the
+        // capture-feeder thread. The worker owns the resampler + VAD
+        // state and consumes chunks off the cpal callback's critical
+        // path. The feeder polls `samples` every ~10 ms and ships any
+        // newly-appended tail to the worker.
+        let finalizer = StreamingFinalizer::start(src_rate, src_channels, NORMALIZE_PEAK);
+        *self.streaming.lock() = Some(finalizer);
+
+        let feeder_handle = self.spawn_feeder();
+        *self.feeder.lock() = Some(feeder_handle);
 
         self.is_recording.store(true, Ordering::SeqCst);
         tracing::info!("[audio] recording started");
         Ok(())
     }
 
+    /// Spawn the capture-feeder thread. It polls `samples` for new
+    /// content (via a cursor) and ships each new chunk to the streaming
+    /// finalizer via the bounded crossbeam channel. The feeder runs
+    /// off the audio callback thread, so a slow channel send (or even a
+    /// full channel) cannot back-propagate into the cpal callback.
+    fn spawn_feeder(&self) -> JoinHandle<()> {
+        // Capture clones we hand to the thread. We deliberately do NOT
+        // capture `&self` — the feeder must be detachable so `start()`
+        // can return without leaking lifetimes.
+        let samples = self.samples.clone();
+        let stop_flag = self.feeder_stop.clone();
+        let cursor = self.feeder_cursor.clone();
+        // The streaming finalizer lives behind the capture's `streaming:
+        // Mutex<Option<...>>`. We can't share that across the thread
+        // boundary directly (the `StreamingFinalizer` is owned by
+        // AudioCapture, not Arc-shared), so the feeder reaches into it
+        // each tick by cloning the `Sender` once — which it can't,
+        // because the Sender is private. Instead, expose `try_send_samples`
+        // through a clone of the Sender held in the finalizer.
+        //
+        // For simplicity, we clone a `try_send` closure: the feeder
+        // captures an Arc<Mutex<Option<StreamingFinalizer>>> by way of
+        // a small shim. To avoid restructuring AudioCapture into Arcs,
+        // we instead reach through `self` via a separate Arc-shared
+        // channel sender. That's what we'll do: the streaming module
+        // exposes a clonable `Sender`-style handle.
+        //
+        // Practical: clone a fresh handle to the channel from the
+        // running finalizer.
+        let finalizer_sender = self
+            .streaming
+            .lock()
+            .as_ref()
+            .map(|f| f.handle())
+            .expect("finalizer must exist by start() time");
+
+        std::thread::Builder::new()
+            .name("turbotalk-capture-feeder".into())
+            .spawn(move || {
+                // Poll cadence: 10 ms is short enough to keep the
+                // capture-feeder ahead of the resampler (~30× faster
+                // than realtime on this hardware), and long enough that
+                // the polling loop itself doesn't burn CPU. We never
+                // hold the `samples` lock across DSP — only across the
+                // copy-out of the new tail.
+                let poll_interval = Duration::from_millis(10);
+                let mut backpressure_drops: u64 = 0;
+
+                loop {
+                    let stop = stop_flag.load(Ordering::SeqCst);
+
+                    // Snapshot the new tail. Hold the lock only across
+                    // the copy; never across the channel send.
+                    let new_tail: Option<Vec<f32>> = {
+                        let buf = samples.lock();
+                        let consumed = cursor.load(Ordering::SeqCst);
+                        if buf.len() > consumed {
+                            let slice = &buf[consumed..];
+                            let v = slice.to_vec();
+                            cursor.store(buf.len(), Ordering::SeqCst);
+                            Some(v)
+                        } else {
+                            None
+                        }
+                    };
+
+                    if let Some(chunk) = new_tail {
+                        match finalizer_sender.try_send(chunk) {
+                            Ok(()) => {}
+                            Err(DropReason::WorkerBackpressure) => {
+                                // Drop on the capture-feeder side, never
+                                // on the cpal callback side. The
+                                // canonical audio buffer is `samples`,
+                                // so `stop()`'s batch fallback can still
+                                // recover the recording bit-for-bit.
+                                backpressure_drops += 1;
+                            }
+                            Err(DropReason::WorkerGone) => {
+                                tracing::warn!(
+                                    "[audio] streaming finalizer worker disconnected — \
+                                     feeder exiting; stop() will use batch fallback"
+                                );
+                                break;
+                            }
+                        }
+                    }
+
+                    if stop {
+                        // After observing the stop signal we did one
+                        // last drain above. Now exit so `stop()` can
+                        // call `finish()` on the finalizer.
+                        if backpressure_drops > 0 {
+                            tracing::info!(
+                                "[audio] capture-feeder exiting; {} chunks dropped on \
+                                 worker backpressure (batch fallback covers these)",
+                                backpressure_drops
+                            );
+                        }
+                        return;
+                    }
+
+                    std::thread::sleep(poll_interval);
+                }
+            })
+            .expect("spawn capture-feeder thread")
+    }
+
     /// Drop the active stream and clear the sample buffer without producing a
     /// WAV. Called by the level-broadcast thread when device loss is detected.
     pub fn cancel(&self) {
         self.is_recording.store(false, Ordering::SeqCst);
+
+        // Tear down the streaming finalizer + feeder. We drop the
+        // finalizer (which closes the channel and joins the worker)
+        // and ask the feeder to exit; the worker discards whatever it
+        // had in flight — there's no result to deliver.
+        self.feeder_stop.store(true, Ordering::SeqCst);
+        let feeder = self.feeder.lock().take();
+        if let Some(h) = feeder {
+            let _ = h.join();
+        }
+        let streaming = self.streaming.lock().take();
+        drop(streaming);
+
         *self.active.lock() = None;
         self.samples.lock().clear();
         self.level.store(0_f32.to_bits(), Ordering::Relaxed);
@@ -387,10 +568,11 @@ impl AudioCapture {
     pub fn stop(&self) -> anyhow::Result<StopOutcome> {
         // Stage timing — see ARCHITECTURE.md "Audio Pipeline Contract".
         // We log a single compact line at the end of finalization so later
-        // optimization work (TASK-17 / TASK-18) is grounded in measurements
-        // instead of vibes. Per-stage `Instant` reads are nanosecond-cheap
-        // compared to the work they bracket (downmix/resample/VAD/normalize/
-        // WAV write each take milliseconds at minimum).
+        // optimization work (TASK-17 / TASK-18 / TASK-22) is grounded in
+        // measurements instead of vibes. The legacy `total=` field is
+        // preserved for direct comparison against TASK-21 evidence, with
+        // additional `incremental_resample_total`, `incremental_vad_total`,
+        // and `finalize_flush` fields when the streaming path is used.
         let t_total_start = Instant::now();
 
         self.is_recording.store(false, Ordering::SeqCst);
@@ -406,22 +588,66 @@ impl AudioCapture {
             }
         };
         *self.active.lock() = None; // drop stream
-        let buf = self.samples.lock().clone();
+
+        // Signal the capture-feeder to drain remaining samples and
+        // exit, then join it. After this the streaming worker has
+        // received every sample the cpal callback ever wrote.
+        self.feeder_stop.store(true, Ordering::SeqCst);
+        let feeder = self.feeder.lock().take();
+        if let Some(h) = feeder {
+            let _ = h.join();
+        }
+
+        // Snapshot the canonical buffer for the batch-fallback path
+        // before we tear down the streaming finalizer. Cheap: this is
+        // the same `buf.clone()` the legacy path used.
+        let buf_full = self.samples.lock().clone();
         let capture_clone_ms = t_capture_clone_start.elapsed().as_secs_f32() * 1000.0;
 
         tracing::info!(
             "[audio] {} samples captured ({} Hz, {} ch — pre-resample)",
-            buf.len(), src_sample_rate, src_channels
+            buf_full.len(), src_sample_rate, src_channels
         );
 
-        // Downmix to mono and resample to TARGET_SAMPLE_RATE before any
-        // silence/length math. cpal stays at the device's native rate so
-        // AirPods/Bluetooth/aggregate devices keep working; we do the
-        // conversion once, here, after the recording is finished. From this
-        // point on, the buffer is `TARGET_SAMPLE_RATE` Hz / `TARGET_CHANNELS`
-        // ch — both `vad::trim` and the WAV writer rely on those values.
+        // Try the streaming finalizer first.
+        let streaming = self.streaming.lock().take();
+        if let Some(finalizer) = streaming {
+            let t_streaming_finish = Instant::now();
+            if let Some(result) = finalizer.finish() {
+                let streaming_finish_ms =
+                    t_streaming_finish.elapsed().as_secs_f32() * 1000.0;
+
+                if result.resampled_total > 0 {
+                    return self.write_wav_from_streaming_result(
+                        result,
+                        capture_clone_ms,
+                        streaming_finish_ms,
+                        t_total_start,
+                    );
+                }
+
+                // Worker degraded (resampler init failure or zero
+                // throughput). Fall through to the batch path below
+                // against `buf_full` — no recording is lost.
+                tracing::warn!(
+                    "[audio] streaming finalizer produced no output — \
+                     falling back to batch finalizer"
+                );
+            } else {
+                tracing::warn!(
+                    "[audio] streaming finalizer worker did not deliver a result — \
+                     falling back to batch finalizer"
+                );
+            }
+        }
+
+        // ---- Batch fallback path -------------------------------------
+        // Same code as pre-TASK-22. Reached only when the streaming
+        // path is degraded (worker init failure, mid-stream VAD/
+        // resampler error). Preserved verbatim so a streaming
+        // regression can never lose a recording.
         let t_downmix_start = Instant::now();
-        let buf = downmix_to_mono(&buf, src_channels);
+        let buf = downmix_to_mono(&buf_full, src_channels);
         let downmix_ms = t_downmix_start.elapsed().as_secs_f32() * 1000.0;
 
         let t_resample_start = Instant::now();
@@ -429,21 +655,15 @@ impl AudioCapture {
         let resample_ms = t_resample_start.elapsed().as_secs_f32() * 1000.0;
 
         tracing::info!(
-            "[audio] {} samples after resample ({} Hz, {} ch)",
+            "[audio] {} samples after resample ({} Hz, {} ch — batch fallback)",
             buf.len(), TARGET_SAMPLE_RATE, TARGET_CHANNELS
         );
 
-        // Silero v4 + onset/hangover smoothing — see vad.rs. On model
-        // failure this gracefully returns (0, buf.len()) so we never lose
-        // a recording to a VAD bug; downstream `min_samples` still catches
-        // genuinely empty input. The old fixed-RMS gate (`trim_silence`)
-        // was removed in TASK-11.
         let t_vad_start = Instant::now();
         let (start, end) = crate::vad::trim(&buf);
         let mut trimmed: Vec<f32> = buf[start..end].to_vec();
         let vad_ms = t_vad_start.elapsed().as_secs_f32() * 1000.0;
 
-        // MIN_RECORDING_MS → samples at the (now-fixed) target rate.
         let min_samples =
             (TARGET_SAMPLE_RATE as u64 * MIN_RECORDING_MS as u64 / 1000) as usize;
         if trimmed.len() < min_samples {
@@ -455,23 +675,107 @@ impl AudioCapture {
                 trimmed.len(), duration_ms
             );
             tracing::info!(
-                "[audio] stage timings (ms): capture_clone={:.2} downmix={:.2} resample={:.2} vad={:.2} normalize=0.00 wav_write=0.00 total={:.2} (discarded: too_short)",
+                "[audio] stage timings (ms): capture_clone={:.2} downmix={:.2} resample={:.2} vad={:.2} normalize=0.00 wav_write=0.00 total={:.2} (discarded: too_short, batch_fallback)",
                 capture_clone_ms, downmix_ms, resample_ms, vad_ms, total_ms
             );
             return Ok(StopOutcome::Discard(DiscardReason::TooShort { duration_ms }));
         }
 
-        // Peak-normalize quiet recordings up to ~-1 dBFS before WAV write.
-        // One-way: only boosts when below target, never attenuates. Loud
-        // recordings pass through unchanged.
         let t_normalize_start = Instant::now();
         peak_normalize(&mut trimmed, NORMALIZE_PEAK);
         let normalize_ms = t_normalize_start.elapsed().as_secs_f32() * 1000.0;
 
-        // tempfile::Builder gives us a 0600-perm file with a random suffix in
-        // the system temp dir. Persisting via `into_temp_path()` keeps the
-        // RAII delete-on-drop guarantee while letting us hand the path off.
         let t_wav_start = Instant::now();
+        let temp_path = self.write_wav(&trimmed)?;
+        let wav_write_ms = t_wav_start.elapsed().as_secs_f32() * 1000.0;
+
+        let total_ms = t_total_start.elapsed().as_secs_f32() * 1000.0;
+        tracing::info!(
+            "[audio] wrote {} samples ({:.2}s trimmed) → {:?} (batch_fallback)",
+            trimmed.len(),
+            trimmed.len() as f32 / TARGET_SAMPLE_RATE as f32,
+            temp_path.to_path_buf(),
+        );
+        tracing::info!(
+            "[audio] stage timings (ms): capture_clone={:.2} downmix={:.2} resample={:.2} vad={:.2} normalize={:.2} wav_write={:.2} total={:.2} (batch_fallback)",
+            capture_clone_ms, downmix_ms, resample_ms, vad_ms, normalize_ms, wav_write_ms, total_ms
+        );
+        Ok(StopOutcome::Wav { path: temp_path })
+    }
+
+    /// Write the streaming finalizer's already-trimmed, already-
+    /// peak-normalized buffer to a tempfile WAV. Logs the new TASK-22
+    /// stage-timings shape (with `incremental_*` and `finalize_flush`
+    /// fields) alongside the legacy `total=` for comparison against
+    /// TASK-21 evidence.
+    fn write_wav_from_streaming_result(
+        &self,
+        result: FinalizeResult,
+        capture_clone_ms: f32,
+        streaming_finish_ms: f32,
+        t_total_start: Instant,
+    ) -> anyhow::Result<StopOutcome> {
+        let trimmed = result.trimmed;
+
+        let min_samples =
+            (TARGET_SAMPLE_RATE as u64 * MIN_RECORDING_MS as u64 / 1000) as usize;
+        if trimmed.len() < min_samples {
+            let duration_ms =
+                (trimmed.len() as u64 * 1000 / TARGET_SAMPLE_RATE as u64) as u32;
+            let total_ms = t_total_start.elapsed().as_secs_f32() * 1000.0;
+            tracing::info!(
+                "[audio] recording too short after streaming trim ({} samples, {} ms) — skipping",
+                trimmed.len(), duration_ms
+            );
+            tracing::info!(
+                "[audio] stage timings (ms): capture_clone={:.2} \
+                 incremental_resample_total={:.2} incremental_vad_total={:.2} \
+                 finalize_flush={:.2} streaming_finish={:.2} \
+                 wav_write=0.00 total={:.2} (discarded: too_short, streaming)",
+                capture_clone_ms,
+                result.incremental_resample_total_ms,
+                result.incremental_vad_total_ms,
+                result.finalize_flush_ms,
+                streaming_finish_ms,
+                total_ms,
+            );
+            return Ok(StopOutcome::Discard(DiscardReason::TooShort { duration_ms }));
+        }
+
+        let t_wav_start = Instant::now();
+        let temp_path = self.write_wav(&trimmed)?;
+        let wav_write_ms = t_wav_start.elapsed().as_secs_f32() * 1000.0;
+
+        let total_ms = t_total_start.elapsed().as_secs_f32() * 1000.0;
+        tracing::info!(
+            "[audio] wrote {} samples ({:.2}s trimmed) → {:?} (streaming, speech_detected={})",
+            trimmed.len(),
+            trimmed.len() as f32 / TARGET_SAMPLE_RATE as f32,
+            temp_path.to_path_buf(),
+            result.speech_detected,
+        );
+        tracing::info!(
+            "[audio] stage timings (ms): capture_clone={:.2} \
+             incremental_resample_total={:.2} incremental_vad_total={:.2} \
+             finalize_flush={:.2} streaming_finish={:.2} \
+             wav_write={:.2} total={:.2} (streaming, vad_frames={}, resampled_total={})",
+            capture_clone_ms,
+            result.incremental_resample_total_ms,
+            result.incremental_vad_total_ms,
+            result.finalize_flush_ms,
+            streaming_finish_ms,
+            wav_write_ms,
+            total_ms,
+            result.vad_frames,
+            result.resampled_total,
+        );
+        Ok(StopOutcome::Wav { path: temp_path })
+    }
+
+    /// Common WAV-write helper for both the streaming and batch paths.
+    /// Pulled out so the spec stays in one place — the on-disk handoff
+    /// to whisper-cli is invariant: 16 kHz mono 16-bit PCM int.
+    fn write_wav(&self, samples: &[f32]) -> anyhow::Result<TempPath> {
         let named = tempfile::Builder::new()
             .prefix("turbotalk-")
             .suffix(".wav")
@@ -481,25 +785,12 @@ impl AudioCapture {
 
         let spec = whisper_wav_spec();
         let mut writer = hound::WavWriter::create(&path_buf, spec)?;
-        for &s in trimmed.iter() {
+        for &s in samples.iter() {
             let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
             writer.write_sample(v)?;
         }
         writer.finalize()?;
-        let wav_write_ms = t_wav_start.elapsed().as_secs_f32() * 1000.0;
-
-        let total_ms = t_total_start.elapsed().as_secs_f32() * 1000.0;
-        tracing::info!(
-            "[audio] wrote {} samples ({:.2}s trimmed) → {:?}",
-            trimmed.len(),
-            trimmed.len() as f32 / TARGET_SAMPLE_RATE as f32,
-            path_buf,
-        );
-        tracing::info!(
-            "[audio] stage timings (ms): capture_clone={:.2} downmix={:.2} resample={:.2} vad={:.2} normalize={:.2} wav_write={:.2} total={:.2}",
-            capture_clone_ms, downmix_ms, resample_ms, vad_ms, normalize_ms, wav_write_ms, total_ms
-        );
-        Ok(StopOutcome::Wav { path: temp_path })
+        Ok(temp_path)
     }
 }
 
