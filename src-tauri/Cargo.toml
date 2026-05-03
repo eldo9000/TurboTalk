@@ -15,8 +15,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri           = { version = "2", features = ["macos-private-api", "tray-icon"] }
-core-graphics   = "0.24"
-core-foundation = "0.10"
 serde           = { version = "1", features = ["derive"] }
 serde_json      = "1"
 toml            = "0.8"
@@ -66,7 +64,6 @@ anyhow          = "1"
 thiserror       = "1"
 tracing         = "0.1"
 tracing-subscriber = "0.3"
-tauri-plugin-shell = "2.0.0-rc.4"
 tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
 tempfile        = "3"
@@ -78,3 +75,12 @@ tempfile        = "3"
 specta            = { version = "=2.0.0-rc.24", features = ["derive"] }
 specta-typescript = "=0.0.11"
 tauri-specta      = { version = "=2.0.0-rc.24", features = ["derive", "typescript"] }
+
+# macOS-only dependencies. `core-graphics` and `core-foundation` underpin the
+# CGEventTap-based push-to-talk hotkey in `src/hotkey.rs`. Both crates use
+# `std::os::unix` and `libc::PATH_MAX` internally, so they cannot compile for
+# Windows targets — keeping them gated here lets `cargo check` succeed on
+# non-mac targets even though the hotkey runtime path is mac-only.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics   = "0.24"
+core-foundation = "0.10"
