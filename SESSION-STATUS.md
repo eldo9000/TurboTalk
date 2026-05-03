@@ -22,9 +22,11 @@ Commits this session:
 
 ## Active Focus
 
-None — queue empty. Open carry-overs are TASK-18's still-deferred warm
-Whisper backend (gated on whisper-rs-sys cmake fix or a maintained
-whisper-server crate; option 3 lifecycle wrapper landed in TASK-20).
+None — queue empty. TASK-23 (cancel recording gesture) shipped 2026-05-01.
+
+Open carry-overs are TASK-18's still-deferred warm Whisper backend (gated
+on whisper-rs-sys cmake fix or a maintained whisper-server crate; option 3
+lifecycle wrapper landed in TASK-20).
 
 ## Blockers
 

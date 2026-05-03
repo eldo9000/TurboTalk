@@ -898,7 +898,7 @@ Reply with only the single word, lowercase, no punctuation.
               bind:value={cfgVocabulary}
               onchange={() => saveModes()}
               rows="4"
-              placeholder={"One word or phrase per line…\nTurboTalk\nOllama\nggml-base"}
+              placeholder={"One word or phrase per line…\nTurbo Talk\nOllama\nggml-base"}
               class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
                      text-[13px] text-[var(--text-primary)] font-mono placeholder:text-[var(--text-muted)]
                      outline-none resize-none hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
@@ -941,19 +941,14 @@ Reply with only the single word, lowercase, no punctuation.
 
       <!-- System -->
       <div class="border-b border-[var(--border)] px-4 py-3">
-        <label class="flex items-center justify-between gap-3 cursor-pointer">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={cfgLaunchLogin}
+            onchange={() => { cfgLaunchLogin = !cfgLaunchLogin; saveSettings(); }}
+            class="accent-[var(--accent)] w-3 h-3 shrink-0"
+          />
           <span class="text-[var(--text-secondary)]">Launch at login</span>
-          <button
-            role="switch"
-            aria-checked={cfgLaunchLogin}
-            aria-label="Launch at login"
-            onclick={() => { cfgLaunchLogin = !cfgLaunchLogin; saveSettings(); }}
-            class="relative shrink-0 w-8 h-4 rounded-full transition-colors
-                   {cfgLaunchLogin ? 'bg-[var(--accent)]' : 'bg-[var(--surface-raised)] border border-[var(--border)]'}"
-          >
-            <span class="absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-all
-                         {cfgLaunchLogin ? 'left-[18px]' : 'left-0.5'}"></span>
-          </button>
         </label>
       </div>
 
@@ -964,21 +959,19 @@ Reply with only the single word, lowercase, no punctuation.
         <div class="space-y-1">
           <p class="text-[var(--text-muted)]">Hotkey</p>
           <div class="flex items-center gap-2">
-            <div class="relative flex rounded shrink-0"
-                 style="background:var(--surface-deep); padding:2px; height:22px;">
-              {#if !hotkeyKeyPart.startsWith('numpad_')}
-                <div class="absolute inset-y-[2px] rounded pointer-events-none transition-all duration-150 ease-out"
-                     style="width:calc((100% - 4px) / 2); left:calc(2px + {hotkeySide === 'left' ? 0 : 1} * (100% - 4px) / 2); background:var(--surface-raised); box-shadow:0 1px 3px rgba(0,0,0,0.35);"></div>
-              {/if}
+            <div class="inline-flex rounded border border-[var(--border)]"
+                 style="background:var(--surface-deep); height:22px;">
               {#each [['left','Left'],['right','Right']] as [side, sideLabel]}
                 <button
                   onclick={() => { hotkeySide = side; applyHotkeyKey(); }}
-                  class="relative z-10 flex-1 flex items-center justify-center px-2.5
-                         text-[11px] font-medium transition-colors duration-100
+                  class="relative px-3 flex items-center text-[11px] font-medium transition-colors duration-100
                          {hotkeySide === side && !hotkeyKeyPart.startsWith('numpad_')
                            ? 'text-[var(--text-primary)]'
                            : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}">
                   {sideLabel}
+                  {#if hotkeySide === side && !hotkeyKeyPart.startsWith('numpad_')}
+                    <span class="absolute bottom-0 left-1 right-1 h-[2px] rounded-t bg-[var(--accent)]"></span>
+                  {/if}
                 </button>
               {/each}
             </div>
@@ -1004,22 +997,22 @@ Reply with only the single word, lowercase, no punctuation.
           </div>
         </div>
 
-        <!-- Mode: sliding pill toggle -->
+        <!-- Mode: pill toggle -->
         <div class="space-y-1">
           <p class="text-[var(--text-muted)]">Mode</p>
-          <div class="relative flex rounded shrink-0"
-               style="background:var(--surface-deep); padding:2px; height:22px;">
-            <div class="absolute inset-y-[2px] rounded pointer-events-none transition-all duration-150 ease-out"
-                 style="width:calc((100% - 4px) / 2); left:calc(2px + {cfgHotkeyMode === 'hold' ? 0 : 1} * (100% - 4px) / 2); background:var(--surface-raised); box-shadow:0 1px 3px rgba(0,0,0,0.35);"></div>
+          <div class="inline-flex rounded border border-[var(--border)]"
+               style="background:var(--surface-deep); height:22px;">
             {#each [['hold','Hold'],['toggle','Toggle']] as [val, label]}
               <button
                 onclick={() => { cfgHotkeyMode = val; saveSettings(); }}
-                class="relative z-10 flex-1 flex items-center justify-center px-2.5
-                       text-[11px] font-medium transition-colors duration-100
+                class="relative px-3 flex items-center text-[11px] font-medium transition-colors duration-100
                        {cfgHotkeyMode === val
                          ? 'text-[var(--text-primary)]'
                          : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}">
                 {label}
+                {#if cfgHotkeyMode === val}
+                  <span class="absolute bottom-0 left-1 right-1 h-[2px] rounded-t bg-[var(--accent)]"></span>
+                {/if}
               </button>
             {/each}
           </div>
@@ -1076,19 +1069,19 @@ Reply with only the single word, lowercase, no punctuation.
       <div class="px-4 py-3 space-y-2.5">
         <div class="space-y-1">
           <p class="text-[var(--text-muted)]">Theme</p>
-          <div class="relative flex rounded shrink-0"
-               style="background:var(--surface-deep); padding:2px; height:22px;">
-            <div class="absolute inset-y-[2px] rounded pointer-events-none transition-all duration-150 ease-out"
-                 style="width:calc((100% - 4px) / 3); left:calc(2px + {['auto','light','dark'].indexOf(cfgTheme)} * (100% - 4px) / 3); background:var(--surface-raised); box-shadow:0 1px 3px rgba(0,0,0,0.35);"></div>
+          <div class="inline-flex rounded border border-[var(--border)]"
+               style="background:var(--surface-deep); height:22px;">
             {#each [['auto','Auto'],['light','Light'],['dark','Dark']] as [val, label]}
               <button
                 onclick={() => { cfgTheme = val; saveSettings(); }}
-                class="relative z-10 flex-1 flex items-center justify-center px-2.5
-                       text-[11px] font-medium transition-colors duration-100
+                class="relative px-3 flex items-center text-[11px] font-medium transition-colors duration-100
                        {cfgTheme === val
                          ? 'text-[var(--text-primary)]'
                          : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}">
                 {label}
+                {#if cfgTheme === val}
+                  <span class="absolute bottom-0 left-1 right-1 h-[2px] rounded-t bg-[var(--accent)]"></span>
+                {/if}
               </button>
             {/each}
           </div>
@@ -1129,7 +1122,7 @@ Reply with only the single word, lowercase, no punctuation.
         aria-modal="true"
       >
         <div class="flex flex-col items-center gap-0.5 pb-3 border-b border-[var(--border)]">
-          <span class="text-[18px] font-semibold tracking-tight text-[var(--text-primary)]">TurboTalk</span>
+          <span class="text-[18px] font-semibold tracking-tight text-[var(--text-primary)]">Turbo Talk</span>
           <span class="text-[10px] text-[var(--text-muted)] tabular-nums">v0.0.1</span>
           <p class="text-[var(--text-secondary)] text-[11px] leading-snug mt-1.5 text-center">
             Personal voice dictation for macOS.<br>Speak anywhere, paste everywhere.

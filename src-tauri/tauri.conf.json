@@ -1,5 +1,5 @@
 {
-  "productName": "TurboTalk",
+  "productName": "Turbo Talk",
   "version": "0.0.1",
   "identifier": "io.librewin.turbotalk",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "TurboTalk",
+        "title": "Turbo Talk",
         "width": 440,
         "height": 280,
         "decorations": true,
