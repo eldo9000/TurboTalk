@@ -1,12 +1,12 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-05-03
-**Current state:** Streaming-finalizer sprint complete. TASK-22 shipped and
-verified — long-recording post-release finalization went from 741.11 ms
-(TASK-21 baseline) to 61.94 ms (12.6× speedup) on arm64/macOS 26.4.1.
-Resample + VAD now run concurrently with recording, off the user-visible
-critical path. Hardening (8/8), dictation-quality (4/4), and
-post-quality (TASK-13–17, 20, 21, 22) sprints all closed.
+**Current state:** Beta audit roadmap added 2026-05-03 in
+`BETA-AUDIT-ROADMAP.md`. It breaks release readiness into five agent-sized
+blocks: platform compatibility, packaging matrix, stability/failure modes,
+privacy/trust, and release ops/signing/updates. Security review follow-up also
+implemented: downloader IPC hardened, transcript logs redacted, main/overlay
+Tauri capabilities split, shell-open removed.
 
 ## Where We Are
 
@@ -22,7 +22,9 @@ Commits this session:
 
 ## Active Focus
 
-None — queue empty. TASK-23 (cancel recording gesture) shipped 2026-05-01.
+Beta readiness. Work through `BETA-AUDIT-ROADMAP.md` one block at a time,
+starting with Block 1 (platform compatibility audit) unless beta scope is
+explicitly narrowed to macOS-only.
 
 Open carry-overs are TASK-18's still-deferred warm Whisper backend (gated
 on whisper-rs-sys cmake fix or a maintained whisper-server crate; option 3
@@ -34,12 +36,21 @@ None.
 
 ## Next action
 
-User's call. Likely candidates:
-- Bundle whisper-server alongside whisper-cli to revisit TASK-18 option 2
-  (warm model in-process via long-lived sidecar) — would close out the
-  remaining warmup gap left from TASK-20 option 3.
-- Burn-in / dogfood the streaming pipeline; collect a third evidence
-  sample at a later date to confirm the speedup is stable.
+Block 1 of `BETA-AUDIT-ROADMAP.md` dispatched 2026-05-03 as a 3-task arc:
+- TASK-1 (`2cee14f`) — `PLATFORM-AUDIT.md` written: cargo check classification
+  on Win/Linux, platform touch-points, sidecar/config inventory, capability
+  table.
+- TASK-2 (`701ddf4`) — `hotkey.rs` split into `#[cfg(target_os = "macos")] mod
+  imp` + non-mac unsupported stub; core-graphics/core-foundation moved under
+  target-specific deps.
+- TASK-3 (`fb2ed79`) — `paste.rs` `paste()` and `frontmost_app()` gated to
+  macOS; non-mac branch returns an "unsupported platform" Err.
+
+Pending human verification: hold push-to-talk on macOS, dictate one phrase,
+confirm paste still works (interactive proof for TASK-2 and TASK-3).
+
+Then decide beta scope (mac-only vs true cross-platform) and pick Block 2
+(packaging matrix) or Block 3 (stability) next.
 
 ## Streaming-finalizer sprint (2026-05-03) — closed
 
