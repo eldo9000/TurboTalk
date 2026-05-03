@@ -1,7 +1,7 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-05-03
-**Current state:** Blocks 3 and 4 of BETA-AUDIT-ROADMAP.md complete. Diagnostics backend + UI, actionable error messages, SMOKE-TEST.md, PRIVACY.md, save-history toggle, open-data-folder button, and Chaperone locality hint all landed.
+**Current state:** Blocks 3, 4, and 5 of BETA-AUDIT-ROADMAP.md complete. Block 5 added Developer ID signing/notarization config, hardened-runtime entitlements, version-bump script, SHA-256 checksums, RELEASING.md, and an installed-artifact smoke section. Pending: actual signed/notarized release build (user task — requires Apple Developer credentials).
 
 ## Where We Are
 
@@ -67,7 +67,17 @@ Block 4 dispatched 2026-05-03 as a 3-task arc, all landed:
 - TASK-6 (`2e7c3df`) — `save_history` toggle + `open_data_folder` button wired end-to-end.
 - TASK-7 (`64763ae`) — Chaperone locality hint shown when Advanced cleanup mode selected.
 
-Next up: Block 5 (signing, versioning, release ops) — or human verification of Blocks 3/4 UI first.
+Block 5 dispatched 2026-05-03 as a 5-task arc, all landed:
+- TASK-1 (`82ac00f`) — Developer ID signing config + entitlements.plist (hardened runtime, mic, AppleEvents, JIT, library-validation disable); BUILD.md "Release build (signed + notarized)" section with env vars and spctl verification.
+- TASK-2 (`148fd58`) — `scripts/bump-version.mjs` keeps `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` in lockstep; `npm run bump-version -- <version>`.
+- TASK-3 (`9f5a00e`) — `scripts/rename-artifact.mjs` extended to emit `<dmg>.sha256` in `shasum -a 256 -c` format.
+- TASK-4 (`02be37e`) — `RELEASING.md`: pre-flight, version bump, signed build, tag + `gh release create`, manual-updates-only policy, copy-paste release notes template.
+- TASK-5 (`2052e5f`) — `SMOKE-TEST.md` "Installed-artifact smoke test" section: 11-step procedure for verifying packaged DMG on a clean macOS account.
+
+Pending human verification:
+- Acquire Developer ID Application certificate and Apple Developer notary credentials.
+- Run `APPLE_SIGNING_IDENTITY=... APPLE_ID=... APPLE_PASSWORD=... APPLE_TEAM_ID=... npm run package` and confirm `spctl -a -t open --context context:primary-signature -v dist-artifacts/TurboTalk-<v>-macos-arm64.dmg` returns "accepted".
+- Run the SMOKE-TEST.md "Installed-artifact" section against the resulting DMG on a clean macOS account.
 
 ## Streaming-finalizer sprint (2026-05-03) — closed
 
