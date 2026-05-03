@@ -8,6 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "preflight": "node scripts/preflight.mjs",
+    "package": "npm run preflight && tauri build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
