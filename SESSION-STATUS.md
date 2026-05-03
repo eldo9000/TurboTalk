@@ -1,12 +1,7 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-05-03
-**Current state:** Beta audit roadmap added 2026-05-03 in
-`BETA-AUDIT-ROADMAP.md`. It breaks release readiness into five agent-sized
-blocks: platform compatibility, packaging matrix, stability/failure modes,
-privacy/trust, and release ops/signing/updates. Security review follow-up also
-implemented: downloader IPC hardened, transcript logs redacted, main/overlay
-Tauri capabilities split, shell-open removed.
+**Current state:** Blocks 3 and 4 of BETA-AUDIT-ROADMAP.md complete. Diagnostics backend + UI, actionable error messages, SMOKE-TEST.md, PRIVACY.md, save-history toggle, open-data-folder button, and Chaperone locality hint all landed.
 
 ## Where We Are
 
@@ -46,11 +41,33 @@ Block 1 of `BETA-AUDIT-ROADMAP.md` dispatched 2026-05-03 as a 3-task arc:
 - TASK-3 (`fb2ed79`) — `paste.rs` `paste()` and `frontmost_app()` gated to
   macOS; non-mac branch returns an "unsupported platform" Err.
 
-Pending human verification: hold push-to-talk on macOS, dictate one phrase,
-confirm paste still works (interactive proof for TASK-2 and TASK-3).
+Block 2 dispatched 2026-05-03 as a 3-task arc, all landed:
+- TASK-1 (`f604caa`) — `scripts/preflight.mjs` checks macOS bundle assets
+  before `tauri build`; wired via `npm run package` (preflight && build).
+- TASK-2 (`298ffbc`) — `BUILD.md` + `scripts/rename-artifact.mjs` produce
+  `dist-artifacts/TurboTalk-<version>-macos-arm64.dmg` on `npm run package`.
+- TASK-3 (`26c900a`) — README "Release matrix" section: supported
+  platforms, install steps, permissions, local data paths, known limits.
 
-Then decide beta scope (mac-only vs true cross-platform) and pick Block 2
-(packaging matrix) or Block 3 (stability) next.
+Pending human verification:
+- Hold push-to-talk on macOS, dictate one phrase, confirm paste works
+  (interactive proof for Block 1 cfg-split refactors).
+- Run `npm run package` once and confirm
+  `dist-artifacts/TurboTalk-0.0.1-macos-arm64.dmg` is produced (Block 2
+  proof gate).
+
+Block 3 dispatched 2026-05-03 as a 4-task arc, all landed:
+- TASK-1 (`9a61f81`) — `diagnostics.rs` + `run_diagnostics` Tauri command; 7-field health check.
+- TASK-2 (`7fce12b`) — "Copy diagnostics" button in settings panel; clipboard + "Copied" confirmation.
+- TASK-3 (`8560387`) — Actionable error strings for mic denied, sidecar missing, model missing, whisper exit, Ollama unreachable.
+- TASK-4 (`c76fa9d`) — `SMOKE-TEST.md`: 7-step manual beta test script.
+
+Block 4 dispatched 2026-05-03 as a 3-task arc, all landed:
+- TASK-5 (`3182617`) — `PRIVACY.md`: local-first data handling, exact paths, deletion instructions.
+- TASK-6 (`2e7c3df`) — `save_history` toggle + `open_data_folder` button wired end-to-end.
+- TASK-7 (`64763ae`) — Chaperone locality hint shown when Advanced cleanup mode selected.
+
+Next up: Block 5 (signing, versioning, release ops) — or human verification of Blocks 3/4 UI first.
 
 ## Streaming-finalizer sprint (2026-05-03) — closed
 
