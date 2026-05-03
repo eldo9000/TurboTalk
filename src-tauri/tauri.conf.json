@@ -56,7 +56,9 @@
       "binaries/libggml-base.0.dylib": "libggml-base.0.dylib"
     },
     "macOS": {
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "hardenedRuntime": true,
+      "entitlements": "entitlements.plist"
     },
     "icon": [
       "icons/32x32.png",
