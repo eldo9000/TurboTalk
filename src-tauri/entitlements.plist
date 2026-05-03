@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Required for microphone capture (cpal) under hardened runtime. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+
+    <!-- Required for the AppleScript-based paste path (paste.rs uses osascript
+         to send Cmd+V to the focused app). Without this, hardened runtime
+         blocks System Events scripting. -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+
+    <!-- Tauri's WebView (WKWebView) needs JIT under hardened runtime. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- The bundled whisper-cli sidecar and its dylibs are not signed by the
+         developer's identity at build time — Tauri re-signs them with the
+         app's identity. allow-unsigned-executable-memory is needed for
+         whisper.cpp's runtime-generated kernels on some configurations. -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- Allow loading the bundled .dylib resources (libwhisper, libggml,
+         libggml-base) which are signed with the app identity but not by
+         Apple. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>
