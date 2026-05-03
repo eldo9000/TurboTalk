@@ -934,25 +934,12 @@ Reply with only the single word, lowercase, no punctuation.
   {#if activeTab === 'settings'}
     <div class="flex-1 min-h-0 overflow-y-auto text-[12px]">
 
-      <!-- System -->
-      <div class="border-b border-[var(--border)] px-4 py-3">
-        <label class="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={cfgLaunchLogin}
-            onchange={() => { cfgLaunchLogin = !cfgLaunchLogin; saveSettings(); }}
-            class="accent-[var(--accent)] w-3 h-3 shrink-0"
-          />
-          <span class="text-[var(--text-secondary)]">Launch at login</span>
-        </label>
-      </div>
-
       <!-- Input -->
       <div class="border-b border-[var(--border)] px-4 py-3 space-y-3">
 
         <!-- Hotkey: side tabs + key dropdown on same row -->
         <div class="space-y-1">
-          <p class="text-[var(--text-muted)]">Hotkey</p>
+          <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Hotkey</p>
           <div class="flex items-center gap-2">
             <div class="inline-flex rounded border border-[var(--border)]"
                  style="background:var(--surface-deep); height:22px;">
@@ -995,7 +982,7 @@ Reply with only the single word, lowercase, no punctuation.
 
         <!-- Recording mode + microphone on same row -->
         <div class="space-y-1">
-          <p class="text-[var(--text-muted)]">Recording</p>
+          <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Recording</p>
           <div class="flex items-center gap-2">
             <div class="inline-flex rounded border border-[var(--border)] shrink-0"
                  style="background:var(--surface-deep); height:22px;">
@@ -1034,7 +1021,7 @@ Reply with only the single word, lowercase, no punctuation.
       <!-- Display -->
       <div class="px-4 py-3 space-y-2.5">
         <div class="space-y-1">
-          <p class="text-[var(--text-muted)]">Theme</p>
+          <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Theme</p>
           <div class="inline-flex rounded border border-[var(--border)]"
                style="background:var(--surface-deep); height:22px;">
             {#each [['auto','Auto'],['light','Light'],['dark','Dark']] as [val, label]}
@@ -1053,13 +1040,14 @@ Reply with only the single word, lowercase, no punctuation.
           </div>
         </div>
         <div class="space-y-1">
-          <label class="block text-[var(--text-muted)]">Auto-delete history</label>
+          <label class="block text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Auto-delete history</label>
           <select
             bind:value={cfgHistoryAutoDelete}
             onchange={() => saveSettings()}
-            class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
-                   text-[13px] text-[var(--text-primary)] outline-none
+            class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2
+                   text-[11px] text-[var(--text-primary)] outline-none
                    hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
+            style="height:22px;"
           >
             <option value="restart">On app restart</option>
             <option value="1d">After 1 day</option>
@@ -1068,6 +1056,20 @@ Reply with only the single word, lowercase, no punctuation.
             <option value="30d">After 30 days</option>
           </select>
         </div>
+      </div>
+
+      <!-- System -->
+      <div class="px-4 py-3 space-y-2">
+        <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">System</p>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={cfgLaunchLogin}
+            onchange={() => { cfgLaunchLogin = !cfgLaunchLogin; saveSettings(); }}
+            class="accent-[var(--accent)] w-3 h-3 shrink-0"
+          />
+          <span class="text-[var(--text-secondary)]">Launch at login</span>
+        </label>
       </div>
 
     </div>

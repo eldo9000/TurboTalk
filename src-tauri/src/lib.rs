@@ -287,7 +287,7 @@ type RecorderState  = Arc<recorder::Recorder>;
 type TrayIconState  = tauri::tray::TrayIcon;
 
 use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, WindowEvent,
 };
@@ -369,12 +369,19 @@ pub fn run() {
         ])
         .setup(|app| {
             // ── Tray icon ──────────────────────────────────────────────────
+            let launch_enabled = {
+                use tauri_plugin_autostart::ManagerExt;
+                app.autolaunch().is_enabled().unwrap_or(false)
+            };
+            let launch_item  = CheckMenuItem::with_id(app, "launch", "Launch at Login", true, launch_enabled, None::<&str>)?;
             let show_item    = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;
             let restart_item = MenuItem::with_id(app, "restart", "Restart", true, None::<&str>)?;
             let quit_item    = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let separator    = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&show_item, &separator, &restart_item, &quit_item])?;
+            let sep1         = PredefinedMenuItem::separator(app)?;
+            let sep2         = PredefinedMenuItem::separator(app)?;
+            let menu = Menu::with_items(app, &[&launch_item, &sep1, &show_item, &sep2, &restart_item, &quit_item])?;
 
+            let launch_item_ref = launch_item.clone();
             let tray_icon: TrayIcon = TrayIconBuilder::new()
                 .icon(tray::make_icon(tray::TrayState::Idle))
                 .menu(&menu)
@@ -396,7 +403,14 @@ pub fn run() {
                         let _ = app.emit("open-history", ());
                     }
                 })
-                .on_menu_event(|app, event| match event.id.as_ref() {
+                .on_menu_event(move |app, event| match event.id.as_ref() {
+                    "launch" => {
+                        use tauri_plugin_autostart::ManagerExt;
+                        let mgr = app.autolaunch();
+                        let new_state = !launch_item_ref.is_checked().unwrap_or(false);
+                        if new_state { let _ = mgr.enable(); } else { let _ = mgr.disable(); }
+                        let _ = launch_item_ref.set_checked(new_state);
+                    }
                     "show" => {
                         if let Some(win) = app.get_webview_window("main") {
                             let _ = win.show();
