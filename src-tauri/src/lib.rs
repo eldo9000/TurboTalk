@@ -158,6 +158,11 @@ fn load_history(app: tauri::AppHandle) -> Vec<settings::HistoryEntry> {
 #[tauri::command]
 #[specta::specta]
 fn save_history(entries: Vec<settings::HistoryEntry>, app: tauri::AppHandle) -> Result<(), String> {
+    // Respect the "never save history" toggle — skip the write silently.
+    let cfg = settings::load();
+    if !cfg.save_history {
+        return Ok(());
+    }
     if let Err(e) = settings::save_history(&entries) {
         let msg = e.to_string();
         emit_ui_error(
@@ -168,6 +173,22 @@ fn save_history(entries: Vec<settings::HistoryEntry>, app: tauri::AppHandle) -> 
         );
         return Err(msg);
     }
+    Ok(())
+}
+
+/// Open the TurboTalk data folder (`~/.config/librewin/turbotalk/`) in Finder.
+/// macOS only — uses the system `open` command.
+#[tauri::command]
+#[specta::specta]
+fn open_data_folder() -> Result<(), String> {
+    let mut path = dirs::home_dir().ok_or_else(|| "Could not locate home directory".to_string())?;
+    path.push(".config/librewin/turbotalk");
+    // Create the directory if it doesn't exist yet so Finder doesn't error.
+    std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    std::process::Command::new("open")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -403,6 +424,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         save_history,
         copy_history_item,
         cancel_recording,
+        open_data_folder,
         diagnostics::run_diagnostics,
     ])
 }
@@ -451,6 +473,7 @@ pub fn run() {
             save_history,
             copy_history_item,
             cancel_recording,
+            open_data_folder,
             diagnostics::run_diagnostics,
         ])
         .setup(|app| {
