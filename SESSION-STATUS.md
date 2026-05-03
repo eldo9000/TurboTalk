@@ -1,10 +1,12 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-05-02
-**Current state:** Dictation-quality sprint complete. 4/4 tasks landed.
-Hardening sprint already closed (8/8). Audio pipeline now does explicit
-16 kHz mono resampling, peak-normalization, Silero VAD, and tuned
-whisper-cli flags — addresses the "mic not sensitive enough" complaint.
+**Last updated:** 2026-05-03
+**Current state:** Streaming-finalizer sprint complete. TASK-22 shipped and
+verified — long-recording post-release finalization went from 741.11 ms
+(TASK-21 baseline) to 61.94 ms (12.6× speedup) on arm64/macOS 26.4.1.
+Resample + VAD now run concurrently with recording, off the user-visible
+critical path. Hardening (8/8), dictation-quality (4/4), and
+post-quality (TASK-13–17, 20, 21, 22) sprints all closed.
 
 ## Where We Are
 
@@ -20,14 +22,9 @@ Commits this session:
 
 ## Active Focus
 
-Optimization planning for the dictation pipeline.
-
-## Current Planning Output
-
-Created ordered task files TASK-13 through TASK-19 in `tasks/`.
-They cover audio/codec invariants, one-in-flight lifecycle, stage separation
-with job ids, paste focus policy, VAD reuse, persistent Whisper, and optional
-streaming finalization.
+None — queue empty. Open carry-overs are TASK-18's still-deferred warm
+Whisper backend (gated on whisper-rs-sys cmake fix or a maintained
+whisper-server crate; option 3 lifecycle wrapper landed in TASK-20).
 
 ## Blockers
 
@@ -35,9 +32,28 @@ None.
 
 ## Next action
 
-Dispatch `tasks/TASK-13-audio-pipeline-contract-and-stage-timings.md`;
-success signal is a normal dictation plus timing logs for each audio
-finalization stage.
+User's call. Likely candidates:
+- Bundle whisper-server alongside whisper-cli to revisit TASK-18 option 2
+  (warm model in-process via long-lived sidecar) — would close out the
+  remaining warmup gap left from TASK-20 option 3.
+- Burn-in / dogfood the streaming pipeline; collect a third evidence
+  sample at a later date to confirm the speedup is stable.
+
+## Streaming-finalizer sprint (2026-05-03) — closed
+
+TASK-22 shipped streaming audio finalizer. Concurrent resample + Silero
+VAD off the cpal callback thread. Post-release finalization on the same
+host as TASK-21:
+
+- Short (1.41s after VAD): 192.49 ms → 49.60 ms (3.9× faster)
+- Long  (8.13s after VAD): 781.94 ms → 61.94 ms (12.6× faster)
+
+Both clear the < 250 ms gate and the < 100 ms aspirational target.
+Quality preserved (no clipped first/last words).
+
+- `3d13660` feat(audio): streaming audio finalizer — incremental resample + VAD off the callback
+
+Post-landing evidence pasted into `tasks/done/TASK-22-implement-streaming-finalizer.md`.
 
 ## Hardening Sprint (2026-05-01) — closed
 
