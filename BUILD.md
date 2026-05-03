@@ -4,6 +4,9 @@ How to produce the first-beta TurboTalk artifact. Today that means **macOS
 arm64 only**. Cross-platform builds are deferred — see the bottom of this
 file for what would need to land first.
 
+> For the full release procedure (versioning, tagging, publishing, release
+> notes), see `RELEASING.md`.
+
 ## Build a macOS arm64 beta DMG
 
 Prerequisites (install once):
