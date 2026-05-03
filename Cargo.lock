@@ -5083,6 +5083,7 @@ dependencies = [
  "core-foundation",
  "core-graphics 0.24.0",
  "cpal",
+ "crossbeam-channel",
  "dirs 5.0.1",
  "enigo",
  "hound",

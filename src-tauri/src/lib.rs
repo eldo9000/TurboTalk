@@ -11,6 +11,7 @@
 //   settings    config persistence
 
 pub mod audio;
+pub mod audio_finalizer;
 pub mod cleanup;
 pub mod hotkey;
 pub mod paste;
