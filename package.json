@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "preflight": "node scripts/preflight.mjs",
-    "package": "npm run preflight && tauri build",
+    "package": "npm run preflight && tauri build && node scripts/rename-artifact.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
