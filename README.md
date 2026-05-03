@@ -12,6 +12,72 @@ Voice dictation for getting work done.
 
 ---
 
+## Release matrix
+
+First beta is **macOS on Apple Silicon only.** The hotkey and paste paths are
+implemented against macOS APIs (CGEventTap, `osascript`); on every other
+target they compile to honest "unsupported platform" stubs. No Windows or
+Linux build is shipped.
+
+| Platform | Architecture | First-beta status |
+|---|---|---|
+| macOS    | arm64 (Apple Silicon) | **supported (beta-1)** |
+| macOS    | x86_64 (Intel)        | not supported — no Intel sidecar built |
+| Windows  | x86_64                | not supported — deferred (no hotkey/paste implementation) |
+| Linux    | x86_64                | not supported — deferred (no hotkey/paste implementation) |
+
+### Install
+
+Download `TurboTalk-<version>-macos-arm64.dmg` from the release page, drag
+`TurboTalk.app` to `/Applications`, then **right-click → Open** the first
+time you launch it. Beta-1 builds are ad-hoc signed, so Gatekeeper will
+warn the first time. If you'd rather build from source, see `BUILD.md`.
+
+### Permissions the app will request
+
+- **Microphone** — to capture audio while you hold the trigger key. Without
+  this, no recording happens.
+- **Accessibility** (System Settings → Privacy & Security → Accessibility) —
+  required twice over: (1) for the global push-to-talk hotkey, which uses a
+  `CGEventTap` to observe modifier-key flag changes, and (2) for the paste
+  step, which sends `Cmd+V` to the focused app via `System Events`. If you
+  see a `paste-error` toast saying "check Accessibility permission", this is
+  why.
+
+No other system permissions are requested. There is no Automation prompt
+per app, no Full Disk Access, no Screen Recording.
+
+### Local data
+
+- **Config + history:** `~/.config/librewin/turbotalk/` — holds
+  `config.toml` (settings) and `history.json` (last 50 dictations).
+- **Whisper models:** `~/.config/librewin/turbotalk/models/` — `.bin` files
+  downloaded via the Models tab live here.
+- **Audio temp files:** `turbotalk-*.wav` written to the system temp dir
+  (`/tmp` on macOS) for each dictation. Each file is deleted automatically
+  the moment its dictation finishes — successful, failed, or cancelled.
+- **Delete everything:** quit from the tray, then
+  `rm -rf ~/.config/librewin/turbotalk/`.
+
+### Known limitations
+
+- Apple Silicon only. No Intel-Mac, Windows, or Linux build.
+- Ad-hoc signed only — not Apple-notarized. Expect a Gatekeeper warning on
+  first launch.
+- No auto-updater. Re-download the DMG to update.
+- History is saved to disk by default, retained for 10 days. Configurable
+  in Settings — choose `restart` (clear on launch), `1d`, `5d`, `10d`, or
+  `30d`. Capped at 50 entries either way.
+- The Chaperone cleanup mode requires a local Ollama install. If you don't
+  run Ollama, leave cleanup on `Off` or `Simple`.
+
+### Feedback
+
+Personal-use beta — feedback by direct message until a public tracker
+opens.
+
+---
+
 ## Why this exists
 
 Every other dictation tool is built around a feature list. You get a dropdown of 40 models, a settings panel with 12 tabs, and a history buried three clicks deep. They optimized for "supported" instead of "usable."
