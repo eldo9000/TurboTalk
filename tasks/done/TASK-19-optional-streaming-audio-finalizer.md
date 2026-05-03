@@ -56,3 +56,18 @@ This task is intentionally last because it adds complexity and should only happe
 - This is not the time to optimize unless measurements justify it.
 - If implemented, do it as a careful pipeline change, not a quick pre-resample silence gate.
 
+## Re-evaluation 2026-05-03
+
+TASK-21 phase 2 produced runtime evidence on arm64 / macOS 26.4.1 (build 25E253):
+
+| | finalization sum (ms) | whisper (ms) | ratio |
+|---|---|---|---|
+| Short (~3.5s captured, 2.34s after VAD) | 150.96 | 3095 | 4.9% |
+| Long (~27s captured, 22.89s after VAD) | 741.11 | 2074 | 35.7% |
+
+Long-recording dominator: `resample = 654.42 ms` (88% of the finalization sum).
+Both decision-rule gates pass on the long recording: ratio 35.7% > 30%, absolute
+741.11 ms > 250 ms. Streaming finalizer is justified.
+
+Verdict: implement. → TASK-22 created.
+

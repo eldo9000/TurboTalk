@@ -85,6 +85,10 @@ Tasks archived at `tasks/done/TASK-09..TASK-12.md`.
 - **Window: 380×280** — no custom titlebar, native macOS traffic lights only.
 - **Reference, not fork** — built from scratch. Handy/typr/sagascript as references.
 
+## TASK-21 (streaming-finalizer decision) — 2026-05-03
+
+TASK-21: streaming-finalizer decision = implement (long ratio 35.7%, finalization 741.11 ms; resample-during-silence dominates). → TASK-22 created.
+
 ## TASK-19 (streaming audio finalizer) — deferred 2026-05-02
 
 Deferred this sprint. Documentation-only completion; no source changes.
