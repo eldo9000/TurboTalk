@@ -68,8 +68,8 @@ source=Notarized Developer ID
 
 Then run the full smoke test against the **installed** DMG (not a dev
 build) on a clean macOS account — see `SMOKE-TEST.md` →
-"Installed-artifact" section. Every test in that section must pass before
-you publish.
+[Installed-artifact smoke test](./SMOKE-TEST.md#installed-artifact-smoke-test).
+Every numbered step in that section must pass before you publish.
 
 ## Step 4 — Tag and publish
 
