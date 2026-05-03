@@ -23,12 +23,12 @@ pub enum State {
 impl State {
     fn as_str(self) -> &'static str {
         match self {
-            State::Ready           => "Ready",
-            State::Recording       => "Recording",
+            State::Ready => "Ready",
+            State::Recording => "Recording",
             State::FinalizingAudio => "FinalizingAudio",
-            State::Transcribing    => "Transcribing",
-            State::Cleaning        => "Cleaning",
-            State::Pasting         => "Pasting",
+            State::Transcribing => "Transcribing",
+            State::Cleaning => "Cleaning",
+            State::Pasting => "Pasting",
         }
     }
 
@@ -150,7 +150,11 @@ impl Recorder {
     /// Advance: `FinalizingAudio → Transcribing`. Called by the hotkey path
     /// once the WAV is on disk and Whisper is about to run.
     pub fn begin_transcribing(&self) -> Result<(), RecorderError> {
-        self.transition("begin_transcribing", State::FinalizingAudio, State::Transcribing)
+        self.transition(
+            "begin_transcribing",
+            State::FinalizingAudio,
+            State::Transcribing,
+        )
     }
 
     /// Advance: `Transcribing → Cleaning`. Called once Whisper returns text
@@ -218,10 +222,7 @@ impl Recorder {
                 tracing::info!("[recorder] Transcribing → Ready (user cancelled)");
                 *s = State::Ready;
             }
-            State::Recording
-            | State::FinalizingAudio
-            | State::Cleaning
-            | State::Pasting => {
+            State::Recording | State::FinalizingAudio | State::Cleaning | State::Pasting => {
                 self.capture.cancel();
                 tracing::info!("[recorder] {} → Ready (cancelled)", *s);
                 *s = State::Ready;

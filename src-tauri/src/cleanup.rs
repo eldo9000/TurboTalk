@@ -73,9 +73,7 @@ pub fn process(raw: &str) -> String {
         crate::settings::CleanupMode::Chaperone => match classify_blocking(trimmed, &cfg.cleanup) {
             Ok(mode) => route(trimmed, mode, &cfg.cleanup),
             Err(e) => {
-                tracing::warn!(
-                    "[chaperone] classify failed, falling back to raw transcript: {e}"
-                );
+                tracing::warn!("[chaperone] classify failed, falling back to raw transcript: {e}");
                 handle_raw(trimmed)
             }
         },
@@ -111,10 +109,16 @@ const FILLER_WORDS: &[&str] = &["um", "uh", "er", "hmm", "hm"];
 
 fn handle_prose(text: &str, cfg: &crate::settings::CleanupConfig) -> String {
     let mut s = text.to_string();
-    if cfg.strip_whisper_artifacts { s = strip_whisper_artifacts(&s); }
-    if cfg.strip_fillers           { s = strip_filler_words(&s); }
+    if cfg.strip_whisper_artifacts {
+        s = strip_whisper_artifacts(&s);
+    }
+    if cfg.strip_fillers {
+        s = strip_filler_words(&s);
+    }
     s = capitalize_first(&s);
-    if cfg.append_period           { s = append_period(s); }
+    if cfg.append_period {
+        s = append_period(s);
+    }
     s
 }
 
@@ -141,7 +145,9 @@ fn strip_filler_words(text: &str) -> String {
 }
 
 fn append_period(mut s: String) -> String {
-    if s.is_empty() { return s; }
+    if s.is_empty() {
+        return s;
+    }
     if !matches!(s.chars().last().unwrap(), '.' | '!' | '?' | ':' | ';') {
         s.push('.');
     }
@@ -245,17 +251,17 @@ fn build_prompt(text: &str, cfg: &crate::settings::CleanupConfig) -> String {
     format!("{vocab_section}{}", template.replace("{text}", &escaped))
 }
 
-fn classify_blocking(
-    text: &str,
-    cfg: &crate::settings::CleanupConfig,
-) -> anyhow::Result<Mode> {
+fn classify_blocking(text: &str, cfg: &crate::settings::CleanupConfig) -> anyhow::Result<Mode> {
     let base = validate_ollama_url(&cfg.ollama_url)?;
     let endpoint = base
         .join("api/generate")
         .map_err(|e| anyhow::anyhow!("could not build Ollama endpoint URL: {e}"))?;
 
     let prompt = build_prompt(text, cfg);
-    tracing::debug!("[chaperone] classifier prompt built ({} bytes)", prompt.len());
+    tracing::debug!(
+        "[chaperone] classifier prompt built ({} bytes)",
+        prompt.len()
+    );
 
     let body = OllamaRequest {
         model: &cfg.classifier_model,
@@ -297,9 +303,18 @@ mod tests {
 
     #[test]
     fn voice_commands() {
-        assert_eq!(detect_voice_command("scratch that"), VoiceCommand::ScratchThat);
-        assert_eq!(detect_voice_command("Scratch that."), VoiceCommand::ScratchThat);
-        assert_eq!(detect_voice_command("new paragraph"), VoiceCommand::NewParagraph);
+        assert_eq!(
+            detect_voice_command("scratch that"),
+            VoiceCommand::ScratchThat
+        );
+        assert_eq!(
+            detect_voice_command("Scratch that."),
+            VoiceCommand::ScratchThat
+        );
+        assert_eq!(
+            detect_voice_command("new paragraph"),
+            VoiceCommand::NewParagraph
+        );
         assert_eq!(detect_voice_command("hello world"), VoiceCommand::None);
     }
 
@@ -312,7 +327,10 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(handle_prose("hello world", &cfg), "Hello world");
-        assert_eq!(handle_prose("already capitalized", &cfg), "Already capitalized");
+        assert_eq!(
+            handle_prose("already capitalized", &cfg),
+            "Already capitalized"
+        );
     }
 
     #[test]
@@ -438,8 +456,14 @@ mod tests {
     fn build_prompt_includes_transcript_wrapper() {
         let cfg = crate::settings::CleanupConfig::default();
         let prompt = build_prompt("hello world", &cfg);
-        assert!(prompt.contains("<transcript>"), "missing opening wrapper: {prompt}");
-        assert!(prompt.contains("</transcript>"), "missing closing wrapper: {prompt}");
+        assert!(
+            prompt.contains("<transcript>"),
+            "missing opening wrapper: {prompt}"
+        );
+        assert!(
+            prompt.contains("</transcript>"),
+            "missing closing wrapper: {prompt}"
+        );
     }
 
     #[test]
@@ -448,7 +472,10 @@ mod tests {
         let prompt = build_prompt("hello world", &cfg);
         // The literal `{text}` placeholder must have been replaced by the
         // (escaped) user input.
-        assert!(!prompt.contains("{text}"), "placeholder still present: {prompt}");
+        assert!(
+            !prompt.contains("{text}"),
+            "placeholder still present: {prompt}"
+        );
         assert!(prompt.contains("hello world"));
     }
 

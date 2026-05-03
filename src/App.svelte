@@ -4,7 +4,6 @@
   import { invoke } from '@tauri-apps/api/core';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { LogicalSize } from '@tauri-apps/api/dpi';
-  import { open } from '@tauri-apps/plugin-shell';
   import { open as openFilePicker } from '@tauri-apps/plugin-dialog';
   import { initTheme } from '@libre/ui/src/theme.js';
   // Typed Rust↔TS contract — see TASK-8. `commands.*` are wrappers around
@@ -125,11 +124,11 @@ Reply with only the single word, lowercase, no punctuation.
   $effect(() => {
     const zoom = ZOOM_LEVELS[zoomIdx] / 100;
     if (settingsH === 0) return;
-    const isAdvanced = activeTab === 'modes' && cfgCleanupMode === 'chaperone';
-    const h = isAdvanced ? settingsH : Math.ceil(settingsH * COMPACT_HEIGHT_FACTOR);
+    const isAdv = activeTab === 'modes' && cfgCleanupMode === 'chaperone';
+    const w = isAdv ? WINDOW_W * 2 : WINDOW_W;
     getCurrentWindow().setSize(new LogicalSize(
-      Math.ceil(WINDOW_W * zoom),
-      Math.ceil(h * zoom),
+      Math.ceil(w * zoom),
+      Math.ceil(settingsH * zoom),
     ));
   });
 
@@ -255,7 +254,7 @@ Reply with only the single word, lowercase, no punctuation.
 
   async function startDownload(m) {
     downloadProgress = { ...downloadProgress, [m.name]: 0 };
-    const res = await commands.downloadModel(m.url, m.name);
+    const res = await commands.downloadModel(m.name);
     const { [m.name]: _removed, ...rest } = downloadProgress;
     downloadProgress = rest;
     if (res.status === 'error') {
@@ -542,8 +541,10 @@ Reply with only the single word, lowercase, no punctuation.
       </div>
     {/if}
 
-    <!-- All tabs — absolutely centered in the full bar width -->
-    <div class="absolute inset-0 flex items-end justify-center pointer-events-none">
+    <!-- All tabs — centered in the left panel width (stays fixed even when window doubles) -->
+    <div class="absolute inset-y-0 left-0 flex items-end justify-center pointer-events-none"
+         style="{activeTab === 'modes' && cfgCleanupMode === 'chaperone' ? `width:${WINDOW_W}px` : 'right:0'}"
+    >
       {#each ['history', 'models', 'modes', 'settings'] as tab}
         <button
           onclick={() => switchTab(tab)}
@@ -800,92 +801,105 @@ Reply with only the single word, lowercase, no punctuation.
 
   <!-- Modes tab -->
   {#if activeTab === 'modes'}
-    <div class="flex-1 min-h-0 overflow-y-auto text-[12px]">
+    {@const isAdv = cfgCleanupMode === 'chaperone'}
+    <div class="flex-1 min-h-0 flex text-[12px] {isAdv ? '' : 'flex-col overflow-y-auto'}">
 
-      <!-- Post-processing -->
-      <div class="border-b border-[var(--border)] px-4 py-3 space-y-3">
-        <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Post-processing</p>
-        <div class="flex border-b border-[var(--border)]">
-          {#each [['off','Off'],['regex','Simple'],['chaperone','Advanced']] as [val, label]}
-            <button
-              onclick={() => { cfgCleanupMode = val; saveModes(); }}
-              class="relative px-3 py-1.5 text-[12px] font-medium transition-colors
-                     {cfgCleanupMode === val
-                       ? 'text-[var(--text-primary)]'
-                       : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}">
-              {label}
-              {#if cfgCleanupMode === val}
-                <span class="absolute bottom-0 left-0.5 right-0.5 h-[2px] rounded-t bg-[var(--accent)]"></span>
-              {/if}
-            </button>
-          {/each}
-        </div>
-        <p class="text-[var(--text-muted)] text-[11px] leading-relaxed">
-          {#if cfgCleanupMode === 'off'}
-            Paste raw Whisper output — no formatting, no changes.
-          {:else if cfgCleanupMode === 'regex'}
-            Capitalizes the first letter. Fast, deterministic, works offline.
-          {:else}
-            Routes transcript through a local Ollama model for intent-aware formatting.
-          {/if}
-        </p>
+      <!-- Left column: always visible -->
+      <div class="flex flex-col {isAdv ? 'overflow-y-auto shrink-0 border-r border-[var(--border)]' : ''}"
+           style="{isAdv ? `width:${WINDOW_W}px` : ''}">
 
-        {#if cfgCleanupMode !== 'off'}
-          <div class="space-y-2 pt-1 border-t border-[var(--border)]">
-            {#each [
-              ['strip_fillers',   cfgStripFillers,   (v) => { cfgStripFillers   = v; saveModes(); }, 'Strip filler words',      'Removes um, uh, er, hmm.'],
-              ['append_period',   cfgAppendPeriod,   (v) => { cfgAppendPeriod   = v; saveModes(); }, 'Append period',           'Adds a period if no punctuation present.'],
-              ['strip_artifacts', cfgStripArtifacts, (v) => { cfgStripArtifacts = v; saveModes(); }, 'Strip Whisper artifacts', 'Removes trailing " ." and "..." on silence.'],
-            ] as [key, val, setter, label, desc]}
-              <label class="flex items-start gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={val}
-                  onchange={() => setter(!val)}
-                  class="accent-[var(--accent)] w-3 h-3 shrink-0 mt-[3px]"
-                />
-                <div>
-                  <span class="text-[var(--text-secondary)]">{label}</span>
-                  <p class="text-[var(--text-muted)] text-[11px] mt-0.5">{desc}</p>
-                </div>
-              </label>
+        <!-- Post-processing -->
+        <div class="border-b border-[var(--border)] px-4 py-3 space-y-3">
+          <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Post-processing</p>
+          <div class="flex">
+            {#each [['off','Off'],['regex','Simple'],['chaperone','Advanced']] as [val, label]}
+              <button
+                onclick={() => { cfgCleanupMode = val; saveModes(); }}
+                class="relative px-3 py-1.5 text-[12px] font-medium transition-colors
+                       {cfgCleanupMode === val
+                         ? 'text-[var(--text-primary)]'
+                         : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}">
+                {label}
+                {#if cfgCleanupMode === val}
+                  <span class="absolute bottom-0 left-0.5 right-0.5 h-[2px] rounded-t bg-[var(--accent)]"></span>
+                {/if}
+              </button>
             {/each}
           </div>
+          <p class="text-[var(--text-muted)] text-[11px] leading-relaxed">
+            {#if cfgCleanupMode === 'off'}
+              Paste raw Whisper output — no formatting, no changes.
+            {:else if cfgCleanupMode === 'regex'}
+              Capitalizes the first letter. Fast, deterministic, works offline.
+            {:else}
+              Routes transcript through a local Ollama model for intent-aware formatting.
+            {/if}
+          </p>
+
+          {#if cfgCleanupMode !== 'off'}
+            <div class="space-y-2 pt-1">
+              {#each [
+                ['strip_fillers',   cfgStripFillers,   (v) => { cfgStripFillers   = v; saveModes(); }, 'Strip filler words',      'Removes um, uh, er, hmm.'],
+                ['append_period',   cfgAppendPeriod,   (v) => { cfgAppendPeriod   = v; saveModes(); }, 'Append period',           'Adds a period if no punctuation present.'],
+                ['strip_artifacts', cfgStripArtifacts, (v) => { cfgStripArtifacts = v; saveModes(); }, 'Strip Whisper artifacts', 'Removes trailing " ." and "..." on silence.'],
+              ] as [key, val, setter, label, desc]}
+                <label class="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={val}
+                    onchange={() => setter(!val)}
+                    class="accent-[var(--accent)] w-3 h-3 shrink-0 mt-[3px]"
+                  />
+                  <div>
+                    <span class="text-[var(--text-secondary)]">{label}</span>
+                    <p class="text-[var(--text-muted)] text-[11px] mt-0.5">{desc}</p>
+                  </div>
+                </label>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        {#if isAdv}
+          <!-- Chaperone: connection fields stay in left column -->
+          <div class="px-4 py-3 space-y-3">
+            <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Chaperone</p>
+
+            <div class="space-y-1">
+              <label class="text-[var(--text-muted)]">Ollama URL</label>
+              <input
+                bind:value={cfgOllamaUrl}
+                onchange={() => saveModes()}
+                class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
+                       text-[13px] text-[var(--text-primary)] outline-none
+                       hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
+                spellcheck="false"
+              />
+            </div>
+
+            <div class="space-y-1">
+              <label class="text-[var(--text-muted)]">Classifier model</label>
+              <input
+                bind:value={cfgLlmModel}
+                onchange={() => saveModes()}
+                placeholder="llama3.2:3b"
+                class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
+                       text-[13px] text-[var(--text-primary)] placeholder:text-[var(--text-muted)]
+                       outline-none hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
+                spellcheck="false"
+              />
+              <p class="text-[var(--text-muted)] text-[11px]">
+                Run <code class="font-mono">ollama pull llama3.2:3b</code> to fetch.
+              </p>
+            </div>
+          </div>
         {/if}
+
       </div>
 
-      {#if cfgCleanupMode === 'chaperone'}
-        <!-- Chaperone config -->
-        <div class="px-4 py-3 space-y-3">
-          <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Chaperone</p>
-
-          <div class="space-y-1">
-            <label class="text-[var(--text-muted)]">Ollama URL</label>
-            <input
-              bind:value={cfgOllamaUrl}
-              onchange={() => saveModes()}
-              class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
-                     text-[13px] text-[var(--text-primary)] outline-none
-                     hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
-              spellcheck="false"
-            />
-          </div>
-
-          <div class="space-y-1">
-            <label class="text-[var(--text-muted)]">Classifier model</label>
-            <input
-              bind:value={cfgLlmModel}
-              onchange={() => saveModes()}
-              placeholder="llama3.2:3b"
-              class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
-                     text-[13px] text-[var(--text-primary)] placeholder:text-[var(--text-muted)]
-                     outline-none hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
-              spellcheck="false"
-            />
-            <p class="text-[var(--text-muted)] text-[11px]">
-              Run <code class="font-mono">ollama pull llama3.2:3b</code> to fetch.
-            </p>
-          </div>
+      <!-- Right column: vocabulary + prompt, slides in when Advanced -->
+      {#if isAdv}
+        <div class="flex-1 overflow-y-auto px-4 py-3 space-y-3 adv-panel-in">
 
           <div class="space-y-1">
             <label class="text-[var(--text-muted)]">Custom vocabulary</label>
@@ -1183,4 +1197,10 @@ Reply with only the single word, lowercase, no punctuation.
   }
   .about-card-in  { animation: about-card-in  0.4s cubic-bezier(0.16,1,0.3,1) forwards; }
   .about-card-out { animation: about-card-out 0.35s ease-in              forwards; }
+
+  @keyframes adv-panel-in {
+    from { opacity: 0; transform: translateX(16px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+  .adv-panel-in { animation: adv-panel-in 0.2s cubic-bezier(0.16,1,0.3,1) forwards; }
 </style>

@@ -87,8 +87,7 @@ fn get_launch_at_login(app: tauri::AppHandle) -> bool {
 fn set_launch_at_login(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     use tauri_plugin_autostart::ManagerExt;
     let al = app.autolaunch();
-    if enabled { al.enable() } else { al.disable() }
-        .map_err(|e| e.to_string())
+    if enabled { al.enable() } else { al.disable() }.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -134,9 +133,14 @@ fn load_history(app: tauri::AppHandle) -> Vec<settings::HistoryEntry> {
         emit_ui_error(
             &app,
             "history-load-malformed",
-            format!("{} history entr{} skipped (malformed)",
+            format!(
+                "{} history entr{} skipped (malformed)",
                 result.dropped,
-                if result.dropped == 1 { "y was" } else { "ies were" },
+                if result.dropped == 1 {
+                    "y was"
+                } else {
+                    "ies were"
+                },
             ),
             true,
         );
@@ -152,10 +156,7 @@ fn load_history(app: tauri::AppHandle) -> Vec<settings::HistoryEntry> {
 
 #[tauri::command]
 #[specta::specta]
-fn save_history(
-    entries: Vec<settings::HistoryEntry>,
-    app: tauri::AppHandle,
-) -> Result<(), String> {
+fn save_history(entries: Vec<settings::HistoryEntry>, app: tauri::AppHandle) -> Result<(), String> {
     if let Err(e) = settings::save_history(&entries) {
         let msg = e.to_string();
         emit_ui_error(
@@ -171,20 +172,62 @@ fn save_history(
 
 #[tauri::command]
 #[specta::specta]
-async fn download_model(
-    url: String,
-    name: String,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
+async fn download_model(model_id: String, app: tauri::AppHandle) -> Result<String, String> {
     use tokio::io::AsyncWriteExt;
+
+    const MAX_MODEL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+    fn catalog_url(model_id: &str) -> Option<&'static str> {
+        match model_id {
+            "ggml-large-v3-turbo" => Some(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+            ),
+            "ggml-large-v3-turbo-q5_0" => Some(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+            ),
+            "ggml-large-v3" => Some(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
+            ),
+            _ => None,
+        }
+    }
+
+    fn validate_catalog_url(raw: &str) -> Result<(), String> {
+        let parsed = url::Url::parse(raw).map_err(|e| format!("invalid model URL: {}", e))?;
+        if parsed.scheme() != "https" {
+            return Err("model downloads must use https".into());
+        }
+        if parsed.host_str() != Some("huggingface.co") {
+            return Err("model downloads must come from huggingface.co".into());
+        }
+        if !parsed
+            .path()
+            .starts_with("/ggerganov/whisper.cpp/resolve/main/")
+        {
+            return Err("model URL is outside the whisper.cpp catalog".into());
+        }
+        if !parsed.path().ends_with(".bin") {
+            return Err("model URL must point to a .bin file".into());
+        }
+        Ok(())
+    }
+
+    let url = catalog_url(&model_id).ok_or_else(|| format!("unknown model id: {}", model_id))?;
+    validate_catalog_url(url)?;
 
     // Build the destination path — create the directory if it doesn't exist yet.
     // (canonical_models_dir() requires the dir to already exist, so we build manually.)
-    let mut dir = dirs::home_dir()
-        .ok_or_else(|| "Could not locate home directory".to_string())?;
+    let mut dir = dirs::home_dir().ok_or_else(|| "Could not locate home directory".to_string())?;
     dir.push(".config/librewin/turbotalk/models");
-    tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
-    let dest = dir.join(format!("{}.bin", name));
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| e.to_string())?;
+    let canon_dir = dir.canonicalize().map_err(|e| e.to_string())?;
+    let filename = format!("{}.bin", model_id);
+    if filename.contains(std::path::MAIN_SEPARATOR) || filename.contains("..") {
+        return Err("invalid model id".into());
+    }
+    let dest = canon_dir.join(filename);
 
     let client = reqwest::Client::builder()
         .user_agent("TurboTalk/0.0.1")
@@ -192,7 +235,7 @@ async fn download_model(
         .map_err(|e| e.to_string())?;
 
     let mut resp = client
-        .get(&url)
+        .get(url)
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
@@ -202,30 +245,53 @@ async fn download_model(
     }
 
     let total = resp.content_length();
+    if total.is_some_and(|t| t > MAX_MODEL_BYTES) {
+        return Err("model file is larger than the allowed limit".into());
+    }
     let mut downloaded: u64 = 0;
-    let mut file = tokio::fs::File::create(&dest).await.map_err(|e| e.to_string())?;
+    let temp_path = tempfile::Builder::new()
+        .prefix("turbotalk-model-")
+        .suffix(".download")
+        .tempfile_in(&canon_dir)
+        .map_err(|e| e.to_string())?
+        .into_temp_path();
+    let temp_file_path = temp_path.to_path_buf();
+    let mut file = tokio::fs::File::create(&temp_file_path)
+        .await
+        .map_err(|e| e.to_string())?;
 
-    let _ = app.emit("download-progress", serde_json::json!({ "name": &name, "pct": 0u8 }));
+    let _ = app.emit(
+        "download-progress",
+        serde_json::json!({ "name": &model_id, "pct": 0u8 }),
+    );
 
     loop {
         match resp.chunk().await {
             Ok(Some(chunk)) => {
+                downloaded += chunk.len() as u64;
+                if downloaded > MAX_MODEL_BYTES {
+                    drop(file);
+                    let _ = tokio::fs::remove_file(&temp_file_path).await;
+                    return Err("model file is larger than the allowed limit".into());
+                }
                 if let Err(e) = file.write_all(&chunk).await {
                     drop(file);
-                    let _ = tokio::fs::remove_file(&dest).await;
+                    let _ = tokio::fs::remove_file(&temp_file_path).await;
                     return Err(e.to_string());
                 }
-                downloaded += chunk.len() as u64;
                 let pct = total
                     .filter(|&t| t > 0)
                     .map(|t| ((downloaded * 100) / t).min(99) as u8)
                     .unwrap_or(0);
-                let _ = app.emit("download-progress", serde_json::json!({ "name": &name, "pct": pct }));
+                let _ = app.emit(
+                    "download-progress",
+                    serde_json::json!({ "name": &model_id, "pct": pct }),
+                );
             }
             Ok(None) => break,
             Err(e) => {
                 drop(file);
-                let _ = tokio::fs::remove_file(&dest).await;
+                let _ = tokio::fs::remove_file(&temp_file_path).await;
                 return Err(format!("Download interrupted: {}", e));
             }
         }
@@ -234,7 +300,15 @@ async fn download_model(
     file.flush().await.map_err(|e| e.to_string())?;
     drop(file);
 
+    tokio::fs::rename(&temp_file_path, &dest)
+        .await
+        .map_err(|e| e.to_string())?;
+
     let canonical = dest.canonicalize().map_err(|e| e.to_string())?;
+    if !canonical.starts_with(&canon_dir) {
+        let _ = tokio::fs::remove_file(&canonical).await;
+        return Err("download destination escaped models directory".into());
+    }
     Ok(canonical.to_string_lossy().into_owned())
 }
 
@@ -245,7 +319,7 @@ fn list_audio_devices() -> Vec<String> {
     let host = cpal::default_host();
     match host.input_devices() {
         Ok(devs) => devs.filter_map(|d| d.name().ok()).collect(),
-        Err(_)   => vec![],
+        Err(_) => vec![],
     }
 }
 
@@ -262,8 +336,8 @@ fn cancel_recording(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     use tauri::Emitter;
-    let rec   = recorder_state.inner();
-    let tray  = tray_icon_state.inner();
+    let rec = recorder_state.inner();
+    let tray = tray_icon_state.inner();
     let state = rec.state();
     if !matches!(
         state,
@@ -277,14 +351,14 @@ fn cancel_recording(
     Ok(())
 }
 
-use std::sync::Arc;
 use parking_lot::RwLock;
+use std::sync::Arc;
 
 // Shared hotkey config — hotkey thread reads this on every event so
 // settings changes take effect without restarting the app.
-type HotkeyState    = Arc<RwLock<settings::HotkeyConfig>>;
-type RecorderState  = Arc<recorder::Recorder>;
-type TrayIconState  = tauri::tray::TrayIcon;
+type HotkeyState = Arc<RwLock<settings::HotkeyConfig>>;
+type RecorderState = Arc<recorder::Recorder>;
+type TrayIconState = tauri::tray::TrayIcon;
 
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
@@ -313,6 +387,7 @@ fn center_top(win: &tauri::WebviewWindow) {
 /// Build the tauri-specta type-export descriptor. Lives in its own function
 /// so the `#[test]` regenerator below can call it without standing up the
 /// full Tauri runtime.
+#[cfg(any(debug_assertions, test))]
 fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new().commands(tauri_specta::collect_commands![
         get_config,
@@ -341,12 +416,10 @@ pub fn run() {
     // any sub-struct) shows up as a TypeScript compile error in the
     // frontend. `get_theme`/`get_accent` stay free-form because the
     // frontend reaches them through `@libre/ui`.
-    let specta_builder = specta_builder();
-
     #[cfg(debug_assertions)]
     {
         use specta_typescript::Typescript;
-        if let Err(e) = specta_builder.export(
+        if let Err(e) = specta_builder().export(
             Typescript::default()
                 .header("// AUTO-GENERATED by tauri-specta. Do not edit by hand.\n// Run `cargo test --manifest-path src-tauri/Cargo.toml export_bindings`\n// (or launch the app in dev) to regenerate.\n"),
             "../src/bindings.ts",
@@ -356,15 +429,25 @@ pub fn run() {
     }
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
-        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            get_theme, get_accent,
-            get_config, save_config, scan_models_dir,
-            get_launch_at_login, set_launch_at_login, list_audio_devices,
-            download_model, delete_model_file,
-            load_history, save_history, copy_history_item,
+            get_theme,
+            get_accent,
+            get_config,
+            save_config,
+            scan_models_dir,
+            get_launch_at_login,
+            set_launch_at_login,
+            list_audio_devices,
+            download_model,
+            delete_model_file,
+            load_history,
+            save_history,
+            copy_history_item,
             cancel_recording
         ])
         .setup(|app| {
@@ -373,13 +456,30 @@ pub fn run() {
                 use tauri_plugin_autostart::ManagerExt;
                 app.autolaunch().is_enabled().unwrap_or(false)
             };
-            let launch_item  = CheckMenuItem::with_id(app, "launch", "Launch at Login", true, launch_enabled, None::<&str>)?;
-            let show_item    = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;
+            let launch_item = CheckMenuItem::with_id(
+                app,
+                "launch",
+                "Launch at Login",
+                true,
+                launch_enabled,
+                None::<&str>,
+            )?;
+            let show_item = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;
             let restart_item = MenuItem::with_id(app, "restart", "Restart", true, None::<&str>)?;
-            let quit_item    = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let sep1         = PredefinedMenuItem::separator(app)?;
-            let sep2         = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&launch_item, &sep1, &show_item, &sep2, &restart_item, &quit_item])?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let sep1 = PredefinedMenuItem::separator(app)?;
+            let sep2 = PredefinedMenuItem::separator(app)?;
+            let menu = Menu::with_items(
+                app,
+                &[
+                    &launch_item,
+                    &sep1,
+                    &show_item,
+                    &sep2,
+                    &restart_item,
+                    &quit_item,
+                ],
+            )?;
 
             let launch_item_ref = launch_item.clone();
             let tray_icon: TrayIcon = TrayIconBuilder::new()
@@ -408,7 +508,11 @@ pub fn run() {
                         use tauri_plugin_autostart::ManagerExt;
                         let mgr = app.autolaunch();
                         let new_state = !launch_item_ref.is_checked().unwrap_or(false);
-                        if new_state { let _ = mgr.enable(); } else { let _ = mgr.disable(); }
+                        if new_state {
+                            let _ = mgr.enable();
+                        } else {
+                            let _ = mgr.disable();
+                        }
                         let _ = launch_item_ref.set_checked(new_state);
                     }
                     "show" => {
@@ -418,7 +522,7 @@ pub fn run() {
                         }
                     }
                     "restart" => app.restart(),
-                    "quit"    => app.exit(0),
+                    "quit" => app.exit(0),
                     _ => {}
                 })
                 .build(app)?;
@@ -427,12 +531,7 @@ pub fn run() {
             let cfg_result = settings::load_detailed();
             let cfg = cfg_result.config;
             if let Some(err_msg) = cfg_result.parse_error {
-                emit_ui_error(
-                    &app.handle().clone(),
-                    "config-parse",
-                    err_msg,
-                    true,
-                );
+                emit_ui_error(&app.handle().clone(), "config-parse", err_msg, true);
             }
             if let Err(e) = settings::save(&cfg) {
                 tracing::warn!("[settings] could not write config: {:?}", e);

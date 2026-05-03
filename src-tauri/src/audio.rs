@@ -40,21 +40,21 @@ const TARGET_BITS_PER_SAMPLE: u16 = 16;
 const MIN_RECORDING_MS: u32 = 100;
 
 struct ActiveStream {
-    _stream:     cpal::Stream,
+    _stream: cpal::Stream,
     sample_rate: u32,
-    channels:    u16,
+    channels: u16,
 }
 
 pub struct AudioCapture {
-    samples:      Arc<Mutex<Vec<f32>>>,
-    level:        Arc<AtomicU32>, // current RMS as f32 bits
+    samples: Arc<Mutex<Vec<f32>>>,
+    level: Arc<AtomicU32>, // current RMS as f32 bits
     is_recording: Arc<AtomicBool>,
     /// Set by the cpal error callback when CoreAudio reports the device went
     /// away mid-recording (e.g. AirPods disconnected). Read edge-triggered by
     /// `device_lost()` — swap-to-false on read so a single device-loss event
     /// surfaces exactly once.
-    device_lost:  Arc<AtomicBool>,
-    active:       Mutex<Option<ActiveStream>>,
+    device_lost: Arc<AtomicBool>,
+    active: Mutex<Option<ActiveStream>>,
     /// TASK-22: streaming finalizer worker (resample + VAD off the
     /// post-release critical path). Spawned in `start()`, shut down in
     /// `stop()` / `cancel()`. The capture-feeder thread (`feeder`) ships
@@ -63,14 +63,14 @@ pub struct AudioCapture {
     /// On streaming degradation (worker init failure, channel disconnect)
     /// `stop()` falls back to the legacy batch finalizer path against
     /// the canonical `samples` buffer — no recording is ever lost.
-    streaming:    Mutex<Option<StreamingFinalizer>>,
+    streaming: Mutex<Option<StreamingFinalizer>>,
     /// Capture-feeder thread handle. The feeder polls `samples` and ships
     /// each new chunk to the streaming worker. Joined by `stop()` /
     /// `cancel()` after `feeder_stop` is set so it returns cleanly.
-    feeder:       Mutex<Option<JoinHandle<()>>>,
+    feeder: Mutex<Option<JoinHandle<()>>>,
     /// Set true to ask the feeder thread to drain pending samples, send
     /// them to the worker, and exit. The feeder polls this every ~10 ms.
-    feeder_stop:  Arc<AtomicBool>,
+    feeder_stop: Arc<AtomicBool>,
     /// How many samples from `samples` the feeder has already shipped to
     /// the streaming worker. Owned by the feeder; `stop()` reads it after
     /// the feeder has exited so it knows whether all captured audio
@@ -142,7 +142,9 @@ unsafe impl Sync for AudioCapture {}
 unsafe impl Send for ActiveStream {}
 
 fn rms(data: &[f32]) -> f32 {
-    if data.is_empty() { return 0.0; }
+    if data.is_empty() {
+        return 0.0;
+    }
     (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt()
 }
 
@@ -264,15 +266,15 @@ fn peak_normalize(samples: &mut [f32], target: f32) {
 impl AudioCapture {
     pub fn new() -> anyhow::Result<Self> {
         Ok(Self {
-            samples:        Arc::new(Mutex::new(Vec::new())),
-            level:          Arc::new(AtomicU32::new(0)),
-            is_recording:   Arc::new(AtomicBool::new(false)),
-            device_lost:    Arc::new(AtomicBool::new(false)),
-            active:         Mutex::new(None),
-            streaming:      Mutex::new(None),
-            feeder:         Mutex::new(None),
-            feeder_stop:    Arc::new(AtomicBool::new(false)),
-            feeder_cursor:  Arc::new(AtomicUsize::new(0)),
+            samples: Arc::new(Mutex::new(Vec::new())),
+            level: Arc::new(AtomicU32::new(0)),
+            is_recording: Arc::new(AtomicBool::new(false)),
+            device_lost: Arc::new(AtomicBool::new(false)),
+            active: Mutex::new(None),
+            streaming: Mutex::new(None),
+            feeder: Mutex::new(None),
+            feeder_stop: Arc::new(AtomicBool::new(false)),
+            feeder_cursor: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -290,12 +292,17 @@ impl AudioCapture {
 
         let name = device.name().unwrap_or_else(|_| "unknown".into());
         let config = device.default_input_config()?;
-        let sample_rate  = config.sample_rate().0;
-        let channels     = config.channels();
+        let sample_rate = config.sample_rate().0;
+        let channels = config.channels();
         let sample_format = config.sample_format();
 
-        tracing::info!("[audio] opening stream: \"{}\" {} Hz {} ch {:?}",
-            name, sample_rate, channels, sample_format);
+        tracing::info!(
+            "[audio] opening stream: \"{}\" {} Hz {} ch {:?}",
+            name,
+            sample_rate,
+            channels,
+            sample_format
+        );
 
         let rec = self.is_recording.clone();
         let smp = self.samples.clone();
@@ -310,7 +317,9 @@ impl AudioCapture {
         let err_fn = move |e: cpal::StreamError| {
             match &e {
                 cpal::StreamError::DeviceNotAvailable => {
-                    tracing::warn!("[audio] device became unavailable mid-stream — flagging device-lost");
+                    tracing::warn!(
+                        "[audio] device became unavailable mid-stream — flagging device-lost"
+                    );
                     dev_lost.store(true, Ordering::SeqCst);
                     // Stop accumulating samples. The active stream will be
                     // dropped by the broadcast thread when it observes the
@@ -353,44 +362,51 @@ impl AudioCapture {
                             lvl.store(0_f32.to_bits(), Ordering::Relaxed);
                         }
                     },
-                    err_fn, None,
+                    err_fn,
+                    None,
                 )?
             }
-            cpal::SampleFormat::I16 => {
-                device.build_input_stream(
-                    &config.into(),
-                    move |data: &[i16], _: &_| {
-                        let floats: Vec<f32> = data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
-                        if rec.load(Ordering::Relaxed) {
-                            smp.lock().extend_from_slice(&floats);
-                            lvl.store(rms(&floats).to_bits(), Ordering::Relaxed);
-                        } else {
-                            lvl.store(0_f32.to_bits(), Ordering::Relaxed);
-                        }
-                    },
-                    err_fn, None,
-                )?
-            }
-            cpal::SampleFormat::U16 => {
-                device.build_input_stream(
-                    &config.into(),
-                    move |data: &[u16], _: &_| {
-                        let floats: Vec<f32> = data.iter().map(|&s| (s as f32 - 32768.0) / 32768.0).collect();
-                        if rec.load(Ordering::Relaxed) {
-                            smp.lock().extend_from_slice(&floats);
-                            lvl.store(rms(&floats).to_bits(), Ordering::Relaxed);
-                        } else {
-                            lvl.store(0_f32.to_bits(), Ordering::Relaxed);
-                        }
-                    },
-                    err_fn, None,
-                )?
-            }
+            cpal::SampleFormat::I16 => device.build_input_stream(
+                &config.into(),
+                move |data: &[i16], _: &_| {
+                    let floats: Vec<f32> =
+                        data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
+                    if rec.load(Ordering::Relaxed) {
+                        smp.lock().extend_from_slice(&floats);
+                        lvl.store(rms(&floats).to_bits(), Ordering::Relaxed);
+                    } else {
+                        lvl.store(0_f32.to_bits(), Ordering::Relaxed);
+                    }
+                },
+                err_fn,
+                None,
+            )?,
+            cpal::SampleFormat::U16 => device.build_input_stream(
+                &config.into(),
+                move |data: &[u16], _: &_| {
+                    let floats: Vec<f32> = data
+                        .iter()
+                        .map(|&s| (s as f32 - 32768.0) / 32768.0)
+                        .collect();
+                    if rec.load(Ordering::Relaxed) {
+                        smp.lock().extend_from_slice(&floats);
+                        lvl.store(rms(&floats).to_bits(), Ordering::Relaxed);
+                    } else {
+                        lvl.store(0_f32.to_bits(), Ordering::Relaxed);
+                    }
+                },
+                err_fn,
+                None,
+            )?,
             other => anyhow::bail!("unsupported sample format: {:?}", other),
         };
 
         stream.play()?;
-        Ok(ActiveStream { _stream: stream, sample_rate, channels })
+        Ok(ActiveStream {
+            _stream: stream,
+            sample_rate,
+            channels,
+        })
     }
 
     pub fn level(&self) -> f32 {
@@ -584,7 +600,7 @@ impl AudioCapture {
             let active = self.active.lock();
             match active.as_ref() {
                 Some(a) => (a.sample_rate, a.channels),
-                None    => return Ok(StopOutcome::Discard(DiscardReason::NoStream)),
+                None => return Ok(StopOutcome::Discard(DiscardReason::NoStream)),
             }
         };
         *self.active.lock() = None; // drop stream
@@ -606,7 +622,9 @@ impl AudioCapture {
 
         tracing::info!(
             "[audio] {} samples captured ({} Hz, {} ch — pre-resample)",
-            buf_full.len(), src_sample_rate, src_channels
+            buf_full.len(),
+            src_sample_rate,
+            src_channels
         );
 
         // Try the streaming finalizer first.
@@ -614,8 +632,7 @@ impl AudioCapture {
         if let Some(finalizer) = streaming {
             let t_streaming_finish = Instant::now();
             if let Some(result) = finalizer.finish() {
-                let streaming_finish_ms =
-                    t_streaming_finish.elapsed().as_secs_f32() * 1000.0;
+                let streaming_finish_ms = t_streaming_finish.elapsed().as_secs_f32() * 1000.0;
 
                 if result.resampled_total > 0 {
                     return self.write_wav_from_streaming_result(
@@ -656,7 +673,9 @@ impl AudioCapture {
 
         tracing::info!(
             "[audio] {} samples after resample ({} Hz, {} ch — batch fallback)",
-            buf.len(), TARGET_SAMPLE_RATE, TARGET_CHANNELS
+            buf.len(),
+            TARGET_SAMPLE_RATE,
+            TARGET_CHANNELS
         );
 
         let t_vad_start = Instant::now();
@@ -664,21 +683,22 @@ impl AudioCapture {
         let mut trimmed: Vec<f32> = buf[start..end].to_vec();
         let vad_ms = t_vad_start.elapsed().as_secs_f32() * 1000.0;
 
-        let min_samples =
-            (TARGET_SAMPLE_RATE as u64 * MIN_RECORDING_MS as u64 / 1000) as usize;
+        let min_samples = (TARGET_SAMPLE_RATE as u64 * MIN_RECORDING_MS as u64 / 1000) as usize;
         if trimmed.len() < min_samples {
-            let duration_ms =
-                (trimmed.len() as u64 * 1000 / TARGET_SAMPLE_RATE as u64) as u32;
+            let duration_ms = (trimmed.len() as u64 * 1000 / TARGET_SAMPLE_RATE as u64) as u32;
             let total_ms = t_total_start.elapsed().as_secs_f32() * 1000.0;
             tracing::info!(
                 "[audio] recording too short after trim ({} samples, {} ms) — skipping",
-                trimmed.len(), duration_ms
+                trimmed.len(),
+                duration_ms
             );
             tracing::info!(
                 "[audio] stage timings (ms): capture_clone={:.2} downmix={:.2} resample={:.2} vad={:.2} normalize=0.00 wav_write=0.00 total={:.2} (discarded: too_short, batch_fallback)",
                 capture_clone_ms, downmix_ms, resample_ms, vad_ms, total_ms
             );
-            return Ok(StopOutcome::Discard(DiscardReason::TooShort { duration_ms }));
+            return Ok(StopOutcome::Discard(DiscardReason::TooShort {
+                duration_ms,
+            }));
         }
 
         let t_normalize_start = Instant::now();
@@ -717,15 +737,14 @@ impl AudioCapture {
     ) -> anyhow::Result<StopOutcome> {
         let trimmed = result.trimmed;
 
-        let min_samples =
-            (TARGET_SAMPLE_RATE as u64 * MIN_RECORDING_MS as u64 / 1000) as usize;
+        let min_samples = (TARGET_SAMPLE_RATE as u64 * MIN_RECORDING_MS as u64 / 1000) as usize;
         if trimmed.len() < min_samples {
-            let duration_ms =
-                (trimmed.len() as u64 * 1000 / TARGET_SAMPLE_RATE as u64) as u32;
+            let duration_ms = (trimmed.len() as u64 * 1000 / TARGET_SAMPLE_RATE as u64) as u32;
             let total_ms = t_total_start.elapsed().as_secs_f32() * 1000.0;
             tracing::info!(
                 "[audio] recording too short after streaming trim ({} samples, {} ms) — skipping",
-                trimmed.len(), duration_ms
+                trimmed.len(),
+                duration_ms
             );
             tracing::info!(
                 "[audio] stage timings (ms): capture_clone={:.2} \
@@ -739,7 +758,9 @@ impl AudioCapture {
                 streaming_finish_ms,
                 total_ms,
             );
-            return Ok(StopOutcome::Discard(DiscardReason::TooShort { duration_ms }));
+            return Ok(StopOutcome::Discard(DiscardReason::TooShort {
+                duration_ms,
+            }));
         }
 
         let t_wav_start = Instant::now();
@@ -812,7 +833,7 @@ mod tests {
         for i in 0..FRAMES {
             let t = i as f32 / SRC_RATE as f32;
             let s = (2.0 * std::f32::consts::PI * 1_000.0 * t).sin() * 0.5;
-            stereo.push(s);   // L
+            stereo.push(s); // L
             stereo.push(0.0); // R
         }
 
@@ -829,7 +850,8 @@ mod tests {
         assert!(
             diff <= 32,
             "resampled length {} differs from ideal {} by more than 32 samples",
-            resampled.len(), ideal
+            resampled.len(),
+            ideal
         );
     }
 
@@ -884,8 +906,7 @@ mod tests {
     /// Stop() relies on this for the TooShort discard check.
     #[test]
     fn min_recording_ms_in_samples_at_target_rate() {
-        let min_samples =
-            (TARGET_SAMPLE_RATE as u64 * MIN_RECORDING_MS as u64 / 1000) as usize;
+        let min_samples = (TARGET_SAMPLE_RATE as u64 * MIN_RECORDING_MS as u64 / 1000) as usize;
         assert_eq!(min_samples, 1600);
     }
 
@@ -897,6 +918,10 @@ mod tests {
         peak_normalize(&mut buf, 0.89);
         assert_eq!(buf, original, "loud buffer must not be attenuated");
         let peak = buf.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
-        assert!((peak - 0.95).abs() < f32::EPSILON, "peak should remain 0.95, got {}", peak);
+        assert!(
+            (peak - 0.95).abs() < f32::EPSILON,
+            "peak should remain 0.95, got {}",
+            peak
+        );
     }
 }
