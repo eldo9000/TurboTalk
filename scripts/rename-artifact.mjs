@@ -4,9 +4,10 @@
 // Wired via package.json "package" script (preflight && tauri build && this).
 // macOS-only today: TurboTalk's first beta is mac arm64 (see BETA-AUDIT-ROADMAP.md).
 
-import { readFileSync, mkdirSync, copyFileSync, statSync } from 'node:fs';
+import { readFileSync, mkdirSync, copyFileSync, writeFileSync, statSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -50,3 +51,13 @@ mkdirSync(outDir, { recursive: true });
 copyFileSync(sourceDmg, outPath);
 
 console.log(`[rename-artifact] copied DMG to dist-artifacts/${outName}`);
+
+// SHA-256 checksum: format is `<hex><two spaces><filename><newline>`,
+// the canonical layout `shasum -a 256 -c` accepts.
+const dmgBytes = readFileSync(outPath);
+const sha256 = createHash('sha256').update(dmgBytes).digest('hex');
+const checksumName = `${outName}.sha256`;
+const checksumPath = resolve(outDir, checksumName);
+writeFileSync(checksumPath, `${sha256}  ${outName}\n`);
+
+console.log(`[rename-artifact] sha256 written: ${checksumName}`);
