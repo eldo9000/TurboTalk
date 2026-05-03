@@ -39,3 +39,4 @@ models/
 *.dmg
 *.app
 *.pkg
+dist-artifacts/
