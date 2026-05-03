@@ -8,6 +8,9 @@
   let canvasEl  = $state(null);
   let wordCount = $state(0);
 
+  let transcribeProgress = $state(0); // 0 → 1 as countdown elapses
+  let transcribeTimer    = null;
+
   // Each audio-level event = 50ms. Frames above threshold = speech time.
   // At 140 WPM: words ≈ speech_seconds * 140 / 60
   const SPEECH_THRESHOLD = 0.008;
@@ -98,44 +101,51 @@
 
     listen('ptt-up', () => {
       mode = 'transcribing';
+      transcribeProgress = 0;
+      // Estimate: audio duration ≈ wordCount * 60/140 s; whisper ~0.4× real-time
+      const audioSec = wordCount > 0 ? (wordCount * 60 / 140) : 3;
+      const estMs    = Math.max(2000, audioSec * 600);
+      const start    = Date.now();
+      clearInterval(transcribeTimer);
+      transcribeTimer = setInterval(() => {
+        transcribeProgress = Math.min(1, (Date.now() - start) / estMs);
+        if (transcribeProgress >= 1) clearInterval(transcribeTimer);
+      }, 50);
       draw();
     }).then(u => uns.push(u));
 
     listen('transcript', () => {
+      clearInterval(transcribeTimer);
       setTimeout(() => { mode = 'idle'; }, 350);
     }).then(u => uns.push(u));
 
     listen('transcript-error', () => {
+      clearInterval(transcribeTimer);
       mode = 'error';
       draw();
       setTimeout(() => { mode = 'idle'; }, 2500);
     }).then(u => uns.push(u));
 
     listen('recording-discarded', () => {
-      // Silence-trim discarded all samples — clear overlay immediately so
-      // it doesn't hang on "Transcribing…" with no transcript ever arriving.
+      clearInterval(transcribeTimer);
       mode = 'idle';
       draw();
     }).then(u => uns.push(u));
 
     listen('recording-too-short', () => {
-      // Specific subtype of recording-discarded; same overlay behaviour —
-      // clear immediately. The main window owns the duration-aware toast.
+      clearInterval(transcribeTimer);
       mode = 'idle';
       draw();
     }).then(u => uns.push(u));
 
     listen('device-lost', () => {
-      // Active mic went away mid-recording. Clear the overlay; the main
-      // window banner explains what happened and how to recover.
+      clearInterval(transcribeTimer);
       mode = 'idle';
       draw();
     }).then(u => uns.push(u));
 
     listen('paste-error', () => {
-      // Transcription succeeded but paste failed — show the same brief
-      // error pulse the overlay uses for transcript errors. The banner in
-      // the main window carries the detailed message.
+      clearInterval(transcribeTimer);
       mode = 'error';
       draw();
       setTimeout(() => { mode = 'idle'; }, 2500);
@@ -166,15 +176,42 @@
     margin: 0; padding: 0; overflow: hidden;
   }
 
+  @keyframes pulse-red {
+    0%, 100% { border-color: rgba(239, 68, 68, 0.15); }
+    50%       { border-color: rgba(239, 68, 68, 1); }
+  }
+  @keyframes pulse-yellow {
+    0%, 100% { border-color: rgba(251, 191, 36, 0.15); }
+    50%       { border-color: rgba(251, 191, 36, 1); }
+  }
+
   .pill {
     opacity: 0;
     transform: scale(0.88) translateY(6px);
     transition: opacity 180ms ease-out, transform 180ms ease-out;
     pointer-events: none;
+    border: 1px solid transparent;
+    position: relative;
+    overflow: hidden;
   }
   .pill.show {
     opacity: 1;
     transform: scale(1) translateY(0);
+  }
+  .pill.recording {
+    animation: pulse-red 10s ease-in-out infinite;
+  }
+  .pill.transcribing {
+    animation: pulse-yellow 10s ease-in-out infinite;
+  }
+
+  .progress-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 2px;
+    background: rgba(255, 255, 255, 0.9);
+    transition: width 50ms linear;
   }
 
   canvas { display: block; }
@@ -184,8 +221,9 @@
   <div
     class="pill flex items-center gap-3.5 px-5 py-3.5 rounded-2xl"
     class:show={mode !== 'idle'}
-    style="background: rgba(16,16,16,0.87); backdrop-filter: blur(18px) saturate(160%);
-           box-shadow: 0 8px 32px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06);"
+    class:recording={mode === 'recording'}
+    class:transcribing={mode === 'transcribing'}
+    style="background: rgba(16,16,16,0.87); backdrop-filter: blur(18px) saturate(160%);"
   >
     <canvas
       bind:this={canvasEl}
@@ -206,5 +244,12 @@
         </span>
       {/if}
     </div>
+
+    {#if mode === 'transcribing'}
+      <div
+        class="progress-bar"
+        style="width: {(1 - transcribeProgress) * 100}%;"
+      ></div>
+    {/if}
   </div>
 </div>
