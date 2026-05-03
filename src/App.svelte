@@ -87,6 +87,7 @@ Reply with only the single word, lowercase, no punctuation.
   // Settings tab
   const cfgBin             = 'auto';
   let cfgLaunchLogin       = $state(false);
+  let copiedDiagnostics    = $state(false);
   let cfgDevice            = $state('default');
   let audioDevices         = $state([]);
   let settingsSaveMsg      = $state('');
@@ -351,6 +352,25 @@ Reply with only the single word, lowercase, no punctuation.
     }
     const launchRes = await commands.setLaunchAtLogin(cfgLaunchLogin);
     settingsSaveMsg = launchRes.status === 'ok' ? 'Saved.' : 'Error: ' + launchRes.error;
+  }
+
+  async function copyDiagnostics() {
+    const d = await commands.runDiagnostics();
+    const lines = [
+      'TurboTalk diagnostics',
+      `platform: ${d.platform}`,
+      `audio_input_available: ${d.audio_input_available}`,
+      `model_file_exists: ${d.model_file_exists}`,
+      `model_file_path: ${d.model_file_path}`,
+      `sidecar_available: ${d.sidecar_available}`,
+      `sidecar_path: ${d.sidecar_path}`,
+      `cleanup_mode: ${d.cleanup_mode}`,
+      ...(d.ollama_status ? [`ollama_status: ${d.ollama_status}`] : []),
+      `paste_capability: ${d.paste_capability}`,
+    ];
+    await navigator.clipboard.writeText(lines.join('\n'));
+    copiedDiagnostics = true;
+    setTimeout(() => { copiedDiagnostics = false; }, 2000);
   }
 
   function switchTab(tab) {
@@ -1084,6 +1104,17 @@ Reply with only the single word, lowercase, no punctuation.
           />
           <span class="text-[var(--text-secondary)]">Launch at login</span>
         </label>
+        <div class="flex items-center gap-2 pt-0.5">
+          <button
+            onclick={copyDiagnostics}
+            class="px-3 py-1 rounded border border-[var(--border)] text-[11px] font-medium
+                   text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--accent)]
+                   transition-colors whitespace-nowrap"
+          >Copy diagnostics</button>
+          {#if copiedDiagnostics}
+            <span class="text-[11px] text-[var(--accent)]">Copied</span>
+          {/if}
+        </div>
       </div>
 
     </div>
