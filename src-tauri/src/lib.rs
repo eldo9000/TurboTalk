@@ -13,6 +13,7 @@
 pub mod audio;
 pub mod audio_finalizer;
 pub mod cleanup;
+pub mod diagnostics;
 pub mod hotkey;
 pub mod paste;
 pub mod recorder;
@@ -402,6 +403,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         save_history,
         copy_history_item,
         cancel_recording,
+        diagnostics::run_diagnostics,
     ])
 }
 
@@ -448,7 +450,8 @@ pub fn run() {
             load_history,
             save_history,
             copy_history_item,
-            cancel_recording
+            cancel_recording,
+            diagnostics::run_diagnostics,
         ])
         .setup(|app| {
             // ── Tray icon ──────────────────────────────────────────────────

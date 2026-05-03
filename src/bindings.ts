@@ -34,6 +34,7 @@ export const commands = {
 	 *  builder so it appears in `bindings.ts` (TASK-23).
 	 */
 	cancelRecording: () => typedError<null, string>(__TAURI_INVOKE("cancel_recording")),
+	runDiagnostics: () => __TAURI_INVOKE<DiagnosticsResult>("run_diagnostics"),
 };
 
 /* Types */
@@ -80,6 +81,48 @@ export type Config = {
 	 *  removes entries older than N days. Default is "10d".
 	 */
 	history_auto_delete?: string,
+};
+
+/**
+ *  All fields are `String` or `bool` for trivial JSON serialisation. String
+ *  fields use sentinel values ("ok", "missing", "error: …") so the frontend
+ *  can render them without additional type magic.
+ */
+export type DiagnosticsResult = {
+	// `std::env::consts::OS` — "macos", "linux", "windows", …
+	platform: string,
+	/**
+	 *  Whether `cpal::default_host().input_devices()` returned at least one
+	 *  device.
+	 */
+	audio_input_available: boolean,
+	/**
+	 *  Whether the model file configured in `Settings.whisper.model` exists
+	 *  on disk.
+	 */
+	model_file_exists: boolean,
+	// Absolute path to the model file as stored in Settings (not resolved).
+	model_file_path: string,
+	/**
+	 *  Whether the whisper-cli sidecar binary exists at the resolved path and
+	 *  is executable (unix execute-bit check on macOS).
+	 */
+	sidecar_available: boolean,
+	/**
+	 *  Absolute path to the sidecar binary that was checked, or an error
+	 *  description if it could not be resolved.
+	 */
+	sidecar_path: string,
+	// Cleanup mode from Settings: "off", "regex", or "chaperone".
+	cleanup_mode: string,
+	/**
+	 *  Only populated when `cleanup_mode == "chaperone"`. "reachable" if
+	 *  Ollama responded to an HTTP GET within 2 s; "unreachable: <reason>"
+	 *  otherwise. Empty string when not checked.
+	 */
+	ollama_status: string,
+	// "supported" on macOS; "unsupported" on other platforms.
+	paste_capability: string,
 };
 
 export type HistoryEntry = {
