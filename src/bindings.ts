@@ -34,6 +34,11 @@ export const commands = {
 	 *  builder so it appears in `bindings.ts` (TASK-23).
 	 */
 	cancelRecording: () => typedError<null, string>(__TAURI_INVOKE("cancel_recording")),
+	/**
+	 *  Open the TurboTalk data folder (`~/.config/librewin/turbotalk/`) in Finder.
+	 *  macOS only — uses the system `open` command.
+	 */
+	openDataFolder: () => typedError<null, string>(__TAURI_INVOKE("open_data_folder")),
 	runDiagnostics: () => __TAURI_INVOKE<DiagnosticsResult>("run_diagnostics"),
 };
 
@@ -81,6 +86,11 @@ export type Config = {
 	 *  removes entries older than N days. Default is "10d".
 	 */
 	history_auto_delete?: string,
+	/**
+	 *  Whether to persist history entries to disk. Default: true (preserve existing behavior).
+	 *  When false, no new history entries are written — existing history on disk is untouched.
+	 */
+	save_history?: boolean,
 };
 
 /**

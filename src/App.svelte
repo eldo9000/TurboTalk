@@ -107,6 +107,7 @@ Reply with only the single word, lowercase, no punctuation.
     saveSettings();
   }
   let cfgHistoryAutoDelete = $state('10d');
+  let cfgSaveHistory       = $state(true);
   let showAdvanced         = $state(false);
   // Captured once from the Modes tab; all non-history tabs lock to this height.
   let settingsH            = $state(0);
@@ -329,6 +330,7 @@ Reply with only the single word, lowercase, no punctuation.
     hotkeySide           = parsed.side;
     hotkeyKeyPart        = parsed.keyPart;
     cfgHistoryAutoDelete = cfg.history_auto_delete             ?? '10d';
+    cfgSaveHistory       = cfg.save_history                    ?? true;
     cfgLaunchLogin       = launch;
     audioDevices         = devs;
     settingsSaveMsg      = '';
@@ -345,6 +347,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfg.hotkey.key                    = cfgHotkeyKey;
     cfg.hotkey.mode                   = cfgHotkeyMode;
     cfg.history_auto_delete           = cfgHistoryAutoDelete;
+    cfg.save_history                  = cfgSaveHistory;
     const saveRes = await commands.saveConfig(cfg);
     if (saveRes.status === 'error') {
       settingsSaveMsg = 'Error: ' + saveRes.error;
@@ -1078,9 +1081,11 @@ Reply with only the single word, lowercase, no punctuation.
           <select
             bind:value={cfgHistoryAutoDelete}
             onchange={() => saveSettings()}
+            disabled={!cfgSaveHistory}
             class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2
                    text-[11px] text-[var(--text-primary)] outline-none
-                   hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
+                   hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors
+                   disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
             style="height:22px;"
           >
             <option value="restart">On app restart</option>
@@ -1090,6 +1095,15 @@ Reply with only the single word, lowercase, no punctuation.
             <option value="30d">After 30 days</option>
           </select>
         </div>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={cfgSaveHistory}
+            onchange={() => { cfgSaveHistory = !cfgSaveHistory; saveSettings(); }}
+            class="accent-[var(--accent)] w-3 h-3 shrink-0"
+          />
+          <span class="text-[var(--text-secondary)]">Save history</span>
+        </label>
       </div>
 
       <!-- System -->
@@ -1114,6 +1128,14 @@ Reply with only the single word, lowercase, no punctuation.
           {#if copiedDiagnostics}
             <span class="text-[11px] text-[var(--accent)]">Copied</span>
           {/if}
+        </div>
+        <div class="flex items-center gap-2">
+          <button
+            onclick={() => commands.openDataFolder()}
+            class="px-3 py-1 rounded border border-[var(--border)] text-[11px] font-medium
+                   text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--accent)]
+                   transition-colors whitespace-nowrap"
+          >Open data folder</button>
         </div>
       </div>
 

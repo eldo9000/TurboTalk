@@ -22,6 +22,10 @@ pub struct Config {
     /// removes entries older than N days. Default is "10d".
     #[serde(default = "default_history_auto_delete")]
     pub history_auto_delete: String,
+    /// Whether to persist history entries to disk. Default: true (preserve existing behavior).
+    /// When false, no new history entries are written — existing history on disk is untouched.
+    #[serde(default = "default_true")]
+    pub save_history: bool,
 }
 
 fn default_theme() -> String {
@@ -157,6 +161,7 @@ impl Default for Config {
             hotkey: HotkeyConfig::default(),
             theme: default_theme(),
             history_auto_delete: default_history_auto_delete(),
+            save_history: true,
         }
     }
 }
