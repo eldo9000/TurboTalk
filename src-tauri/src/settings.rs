@@ -24,8 +24,12 @@ pub struct Config {
     pub history_auto_delete: String,
 }
 
-fn default_theme() -> String { "auto".into() }
-fn default_history_auto_delete() -> String { "10d".into() }
+fn default_theme() -> String {
+    "auto".into()
+}
+fn default_history_auto_delete() -> String {
+    "10d".into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct WhisperConfig {
@@ -72,7 +76,9 @@ pub struct CleanupConfig {
     pub strip_whisper_artifacts: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 pub fn default_classifier_prompt() -> String {
     "You are a classifier. The user's transcript is enclosed in <transcript> tags below. \
@@ -129,7 +135,7 @@ impl Default for AudioConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct HotkeyConfig {
-    pub key: String,  // "right_option" | "right_control" | "right_command" | "right_shift"
+    pub key: String, // "right_option" | "right_control" | "right_command" | "right_shift"
     pub mode: String, // "hold" | "toggle"
 }
 
@@ -164,11 +170,11 @@ pub fn filter_history_by_policy(entries: Vec<HistoryEntry>, policy: &str) -> Vec
         return vec![];
     }
     let days: u64 = match policy {
-        "1d"  => 1,
-        "5d"  => 5,
+        "1d" => 1,
+        "5d" => 5,
         "10d" => 10,
         "30d" => 30,
-        _     => return entries,
+        _ => return entries,
     };
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -216,19 +222,28 @@ pub fn load_history_detailed() -> LoadHistoryResult {
 /// the loader against a temp file without touching `~/.config/...`.
 pub(crate) fn load_history_detailed_at(path: &std::path::Path) -> LoadHistoryResult {
     let Ok(contents) = std::fs::read_to_string(path) else {
-        return LoadHistoryResult { entries: vec![], dropped: 0 };
+        return LoadHistoryResult {
+            entries: vec![],
+            dropped: 0,
+        };
     };
 
     // Parse to a generic Value first so a single bogus entry doesn't poison the
     // whole file. Each element is then validated individually.
     let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) else {
         tracing::warn!("[settings] history.json is not valid JSON; treating as empty");
-        return LoadHistoryResult { entries: vec![], dropped: 0 };
+        return LoadHistoryResult {
+            entries: vec![],
+            dropped: 0,
+        };
     };
 
     let Some(arr) = value.as_array() else {
         tracing::warn!("[settings] history.json root is not an array; treating as empty");
-        return LoadHistoryResult { entries: vec![], dropped: 0 };
+        return LoadHistoryResult {
+            entries: vec![],
+            dropped: 0,
+        };
     };
 
     let mut entries = Vec::with_capacity(arr.len());
@@ -237,7 +252,10 @@ pub(crate) fn load_history_detailed_at(path: &std::path::Path) -> LoadHistoryRes
         match serde_json::from_value::<HistoryEntry>(v.clone()) {
             Ok(entry) if !entry.text.is_empty() && entry.ts != 0 => entries.push(entry),
             Ok(_) => {
-                tracing::warn!("[settings] dropping history entry with empty text or zero ts: {}", v);
+                tracing::warn!(
+                    "[settings] dropping history entry with empty text or zero ts: {}",
+                    v
+                );
                 dropped += 1;
             }
             Err(e) => {
@@ -255,7 +273,10 @@ pub fn save_history(entries: &[HistoryEntry]) -> anyhow::Result<()> {
 
 /// Path-parameterized variant of `save_history` so tests can write to a temp
 /// file. Enforces the same `HISTORY_LIMIT` truncation as the public API.
-pub(crate) fn save_history_at(path: &std::path::Path, entries: &[HistoryEntry]) -> anyhow::Result<()> {
+pub(crate) fn save_history_at(
+    path: &std::path::Path,
+    entries: &[HistoryEntry],
+) -> anyhow::Result<()> {
     // Backend is the single source of truth for the on-disk size cap. The
     // frontend may pass a longer in-memory list; we trim here. History is
     // most-recent-first (see App.svelte transcript listener), so `truncate`
@@ -294,12 +315,20 @@ pub struct LoadConfigResult {
 pub fn load_detailed() -> LoadConfigResult {
     let path = config_path();
     let Ok(contents) = std::fs::read_to_string(&path) else {
-        return LoadConfigResult { config: Config::default(), parse_error: None };
+        return LoadConfigResult {
+            config: Config::default(),
+            parse_error: None,
+        };
     };
 
     // First attempt: strict parse.
     let strict_err = match toml::from_str::<Config>(&contents) {
-        Ok(cfg) => return LoadConfigResult { config: cfg, parse_error: None },
+        Ok(cfg) => {
+            return LoadConfigResult {
+                config: cfg,
+                parse_error: None,
+            }
+        }
         Err(e) => {
             tracing::warn!(
                 "[settings] strict parse failed ({}); attempting recovery with default cleanup section",
@@ -334,7 +363,10 @@ pub fn load_detailed() -> LoadConfigResult {
     tracing::warn!("[settings] recovery failed, using full defaults");
     LoadConfigResult {
         config: Config::default(),
-        parse_error: Some(format!("config.toml could not be parsed; defaults used: {}", strict_err)),
+        parse_error: Some(format!(
+            "config.toml could not be parsed; defaults used: {}",
+            strict_err
+        )),
     }
 }
 
@@ -468,7 +500,11 @@ mod tests {
         fs::write(canon_dir.join("notes.txt"), b"notes").expect("write notes");
 
         let found = scan_models_dir_in(&canon_dir);
-        assert!(found.is_empty(), "non-.bin files should be ignored, got: {:?}", found);
+        assert!(
+            found.is_empty(),
+            "non-.bin files should be ignored, got: {:?}",
+            found
+        );
     }
 
     #[cfg(unix)]
@@ -532,14 +568,21 @@ mod tests {
         let path = dir.path().join("history.json");
 
         let entries: Vec<HistoryEntry> = (1..=60u64)
-            .map(|ts| HistoryEntry { text: format!("entry {}", ts), ts })
+            .map(|ts| HistoryEntry {
+                text: format!("entry {}", ts),
+                ts,
+            })
             .collect();
 
         save_history_at(&path, &entries).expect("save_history_at");
 
         let raw = std::fs::read_to_string(&path).expect("read history.json");
         let arr: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("parse JSON");
-        assert_eq!(arr.len(), HISTORY_LIMIT, "persisted file must be capped at HISTORY_LIMIT");
+        assert_eq!(
+            arr.len(),
+            HISTORY_LIMIT,
+            "persisted file must be capped at HISTORY_LIMIT"
+        );
     }
 
     /// Convention is most-recent-first (see App.svelte transcript listener).
@@ -555,7 +598,10 @@ mod tests {
         // Most-recent-first: index 0 (ts=1) is "newest", index 59 (ts=60) is
         // "oldest". Truncation keeps the first HISTORY_LIMIT, dropping the tail.
         let entries: Vec<HistoryEntry> = (1..=60u64)
-            .map(|ts| HistoryEntry { text: format!("entry {}", ts), ts })
+            .map(|ts| HistoryEntry {
+                text: format!("entry {}", ts),
+                ts,
+            })
             .collect();
 
         save_history_at(&path, &entries).expect("save_history_at");
@@ -594,7 +640,10 @@ mod tests {
             3,
             "exactly the 3 well-formed entries should survive"
         );
-        assert_eq!(result.dropped, 2, "the 2 malformed entries should be counted as dropped");
+        assert_eq!(
+            result.dropped, 2,
+            "the 2 malformed entries should be counted as dropped"
+        );
 
         let texts: Vec<&str> = result.entries.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(texts, vec!["alpha", "beta", "delta"]);

@@ -198,18 +198,14 @@ pub fn cached_vad_for_streaming() -> Option<&'static Mutex<Option<Vad>>> {
             let path = match ensure_model_on_disk() {
                 Ok(p) => p,
                 Err(e) => {
-                    tracing::warn!(
-                        "[vad] failed to materialize Silero model for streaming: {e}"
-                    );
+                    tracing::warn!("[vad] failed to materialize Silero model for streaming: {e}");
                     return None;
                 }
             };
             match Vad::new(&path, SAMPLE_RATE) {
                 Ok(v) => *guard = Some(v),
                 Err(e) => {
-                    tracing::warn!(
-                        "[vad] failed to initialize Silero for streaming: {e}"
-                    );
+                    tracing::warn!("[vad] failed to initialize Silero for streaming: {e}");
                     return None;
                 }
             }
@@ -253,9 +249,7 @@ pub fn trim(samples: &[f32]) -> (usize, usize) {
         let path = match ensure_model_on_disk() {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!(
-                    "[vad] failed to materialize Silero model — skipping trim: {e}"
-                );
+                tracing::warn!("[vad] failed to materialize Silero model — skipping trim: {e}");
                 return (0, samples.len());
             }
         };
@@ -312,10 +306,14 @@ pub fn trim(samples: &[f32]) -> (usize, usize) {
     // `init=0.00` and the savings are real.
     tracing::info!(
         "[vad] timings (ms): init={:.2} reset={:.2} compute={:.2} frames={}",
-        init_ms, reset_ms, compute_ms, total_frames
+        init_ms,
+        reset_ms,
+        compute_ms,
+        total_frames
     );
 
-    let (Some(start_frame), Some(end_frame)) = (vad.speech_start_frame, vad.speech_end_frame) else {
+    let (Some(start_frame), Some(end_frame)) = (vad.speech_start_frame, vad.speech_end_frame)
+    else {
         // No speech detected. Mirror the old `trim_silence` "everything
         // below threshold" path: callers will see a too-short buffer and
         // discard via DiscardReason::TooShort. We don't return (0, 0) —

@@ -499,8 +499,7 @@ fn run_worker(rx: Receiver<WorkerMsg>, src_rate: u32, src_channels: u16, normali
                                     break;
                                 }
                             };
-                            incremental_resample_total_ms +=
-                                t.elapsed().as_secs_f32() * 1000.0;
+                            incremental_resample_total_ms += t.elapsed().as_secs_f32() * 1000.0;
                             let out = &processed[0];
                             extend_skipping_delay(&mut resampled_buf, out, &mut delay_to_skip);
                             // Stop once we've produced enough output to
@@ -560,13 +559,13 @@ fn run_worker(rx: Receiver<WorkerMsg>, src_rate: u32, src_channels: u16, normali
                 let (start_sample, end_sample, speech_detected) =
                     if vad_state.vad_failed || vad_state.vad_cell.is_none() {
                         (0, resampled_buf.len(), false)
-                    } else if let (Some(s), Some(e)) =
-                        (vad_state.smoothing.speech_start_frame, vad_state.smoothing.speech_end_frame)
-                    {
+                    } else if let (Some(s), Some(e)) = (
+                        vad_state.smoothing.speech_start_frame,
+                        vad_state.smoothing.speech_end_frame,
+                    ) {
                         let prefill_start = s.saturating_sub(PREFILL_FRAMES);
                         let start = prefill_start * VAD_FRAME_SAMPLES;
-                        let end =
-                            ((e + 1) * VAD_FRAME_SAMPLES).min(resampled_buf.len());
+                        let end = ((e + 1) * VAD_FRAME_SAMPLES).min(resampled_buf.len());
                         (start, end, true)
                     } else {
                         // No speech detected — full-range fallback,
@@ -721,8 +720,7 @@ fn run_vad_on_new_frames(resampled_buf: &[f32], state: &mut VadStreamState) {
         let avail = resampled_buf.len() - cursor;
         let take = want.min(avail);
         let fill = state.frame_fill;
-        state.frame_buf[fill..fill + take]
-            .copy_from_slice(&resampled_buf[cursor..cursor + take]);
+        state.frame_buf[fill..fill + take].copy_from_slice(&resampled_buf[cursor..cursor + take]);
         state.frame_fill += take;
         cursor += take;
         if state.frame_fill == VAD_FRAME_SAMPLES {
@@ -900,7 +898,10 @@ mod tests {
         //   (b) trimmed.len() <= input.len() (some prefix kept).
         // The point is that finalize does not crash and produces a
         // sensible buffer.
-        assert!(result.resampled_total > 0, "must produce at least some output");
+        assert!(
+            result.resampled_total > 0,
+            "must produce at least some output"
+        );
         assert!(
             result.trimmed.len() <= result.resampled_total,
             "trimmed must be a slice of resampled (got {} > {})",
@@ -967,7 +968,8 @@ mod tests {
             (134..=140).contains(&end),
             "speech end frame {} must be hangover-extended ~15 frames \
              past word B's last voice frame (119) — got {}",
-            end, end,
+            end,
+            end,
         );
     }
 

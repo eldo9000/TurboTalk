@@ -209,15 +209,21 @@ impl TranscriptionWorker {
         // The user-editable `cleanup.vocabulary` (already used by the Chaperone classifier) is
         // also fed to whisper as `--prompt` to bias spelling of names/jargon/identifiers.
         let mut args: Vec<String> = vec![
-            "-m".into(), model_str.to_string(),
-            "-f".into(), wav.to_str().unwrap().to_string(),
+            "-m".into(),
+            model_str.to_string(),
+            "-f".into(),
+            wav.to_str().unwrap().to_string(),
             "-otxt".into(),
             "-np".into(),
             "-nt".into(),
-            "-l".into(), "en".into(),
-            "-mc".into(), "0".into(),
-            "--beam-size".into(), "5".into(),
-            "--temperature".into(), "0".into(),
+            "-l".into(),
+            "en".into(),
+            "-mc".into(),
+            "0".into(),
+            "--beam-size".into(),
+            "5".into(),
+            "--temperature".into(),
+            "0".into(),
             "--suppress-nst".into(),
         ];
         if !self.vocabulary.is_empty() {
@@ -239,7 +245,10 @@ impl TranscriptionWorker {
 
         // Wait for completion and collect output. After wait_with_output returns,
         // the process has exited — clear the active-child slot regardless of outcome.
-        let child = self.active_child.lock().take()
+        let child = self
+            .active_child
+            .lock()
+            .take()
             .expect("active_child was stolen between spawn and wait");
         let output = child.wait_with_output()?;
 
@@ -331,13 +340,17 @@ pub fn invalidate_worker() {
 /// cached worker's model differs from the current `cfg.whisper.model`, it is
 /// dropped and rebuilt. Returns an `Arc` so the spawn call can drop the outer
 /// mutex before the (potentially long) whisper invocation.
-fn worker_for(cfg: &crate::settings::Config) -> anyhow::Result<std::sync::Arc<TranscriptionWorker>> {
+fn worker_for(
+    cfg: &crate::settings::Config,
+) -> anyhow::Result<std::sync::Arc<TranscriptionWorker>> {
     let mut slot = WORKER.lock().unwrap_or_else(|e| e.into_inner());
 
     // Cheap cache-validity check: compare canonicalized model paths.
     // canonicalize() may fail if the file was deleted out from under us —
     // treat that as "rebuild and let the build error surface".
-    let configured_canon = std::path::PathBuf::from(&cfg.whisper.model).canonicalize().ok();
+    let configured_canon = std::path::PathBuf::from(&cfg.whisper.model)
+        .canonicalize()
+        .ok();
     let cached_matches = match (&*slot, configured_canon.as_ref()) {
         (Some(w), Some(c)) => w.model_path() == c.as_path(),
         _ => false,

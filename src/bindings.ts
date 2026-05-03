@@ -14,7 +14,7 @@ export const commands = {
 	getLaunchAtLogin: () => __TAURI_INVOKE<boolean>("get_launch_at_login"),
 	setLaunchAtLogin: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_launch_at_login", { enabled })),
 	listAudioDevices: () => __TAURI_INVOKE<string[]>("list_audio_devices"),
-	downloadModel: (url: string, name: string) => typedError<string, string>(__TAURI_INVOKE("download_model", { url, name })),
+	downloadModel: (modelId: string) => typedError<string, string>(__TAURI_INVOKE("download_model", { modelId })),
 	/**
 	 *  Best-effort delete of a model `.bin` file from the canonical models
 	 *  directory. Returns `Ok(true)` if the file was actually deleted,
