@@ -104,7 +104,7 @@
       transcribeProgress = 0;
       // Estimate: audio duration ≈ wordCount * 60/140 s; whisper ~0.4× real-time
       const audioSec = wordCount > 0 ? (wordCount * 60 / 140) : 3;
-      const estMs    = Math.max(2000, audioSec * 600);
+      const estMs    = Math.max(2000, audioSec * 480);
       const start    = Date.now();
       clearInterval(transcribeTimer);
       transcribeTimer = setInterval(() => {
@@ -127,6 +127,12 @@
     }).then(u => uns.push(u));
 
     listen('recording-discarded', () => {
+      clearInterval(transcribeTimer);
+      mode = 'idle';
+      draw();
+    }).then(u => uns.push(u));
+
+    listen('recording-cancelled', () => {
       clearInterval(transcribeTimer);
       mode = 'idle';
       draw();

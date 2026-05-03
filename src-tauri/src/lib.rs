@@ -249,12 +249,42 @@ fn list_audio_devices() -> Vec<String> {
     }
 }
 
+/// Cancel an in-flight recording (Recording or Transcribing state) from the
+/// frontend. The hotkey thread calls `recorder.cancel()` directly and does not
+/// go through this command — this command exists for future UI use (e.g. an
+/// X button on the overlay). Registered in the invoke_handler and specta
+/// builder so it appears in `bindings.ts` (TASK-23).
+#[tauri::command]
+#[specta::specta]
+fn cancel_recording(
+    recorder_state: tauri::State<'_, RecorderState>,
+    tray_icon_state: tauri::State<'_, TrayIconState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    use tauri::Emitter;
+    let rec   = recorder_state.inner();
+    let tray  = tray_icon_state.inner();
+    let state = rec.state();
+    if !matches!(
+        state,
+        recorder::State::Recording | recorder::State::Transcribing
+    ) {
+        return Err(format!("nothing to cancel (recorder is {})", state));
+    }
+    rec.cancel();
+    let _ = tray.set_icon(Some(tray::make_icon(tray::TrayState::Idle)));
+    let _ = app.emit("recording-cancelled", ());
+    Ok(())
+}
+
 use std::sync::Arc;
 use parking_lot::RwLock;
 
 // Shared hotkey config — hotkey thread reads this on every event so
 // settings changes take effect without restarting the app.
-type HotkeyState = Arc<RwLock<settings::HotkeyConfig>>;
+type HotkeyState    = Arc<RwLock<settings::HotkeyConfig>>;
+type RecorderState  = Arc<recorder::Recorder>;
+type TrayIconState  = tauri::tray::TrayIcon;
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -296,6 +326,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         load_history,
         save_history,
         copy_history_item,
+        cancel_recording,
     ])
 }
 
@@ -333,7 +364,8 @@ pub fn run() {
             get_config, save_config, scan_models_dir,
             get_launch_at_login, set_launch_at_login, list_audio_devices,
             download_model, delete_model_file,
-            load_history, save_history, copy_history_item
+            load_history, save_history, copy_history_item,
+            cancel_recording
         ])
         .setup(|app| {
             // ── Tray icon ──────────────────────────────────────────────────
@@ -404,7 +436,7 @@ pub fn run() {
             // ── Hotkey ─────────────────────────────────────────────────────
             // Stream opens on first keypress; always re-queries the config device
             // so built-in mic / AirPods switches work without restarting.
-            let recorder = Arc::new(recorder::Recorder::new()?);
+            let recorder: RecorderState = Arc::new(recorder::Recorder::new()?);
 
             // Emit live audio level to the overlay at 20 Hz while recording.
             // Same thread also services the device-lost edge: if the cpal
@@ -430,6 +462,11 @@ pub fn run() {
                     let _ = level_app.emit("audio-level", level_rec.level());
                 }
             });
+
+            // TASK-23: manage recorder and tray_icon as app state so the
+            // `cancel_recording` command can reach them from the invoke handler.
+            app.manage(recorder.clone());
+            app.manage(tray_icon.clone());
 
             hotkey::spawn(recorder, tray_icon, app.handle().clone(), hotkey_state);
 

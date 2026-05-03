@@ -26,6 +26,14 @@ export const commands = {
 	loadHistory: () => __TAURI_INVOKE<HistoryEntry[]>("load_history"),
 	saveHistory: (entries: HistoryEntry[]) => typedError<null, string>(__TAURI_INVOKE("save_history", { entries })),
 	copyHistoryItem: (text: string) => typedError<null, string>(__TAURI_INVOKE("copy_history_item", { text })),
+	/**
+	 *  Cancel an in-flight recording (Recording or Transcribing state) from the
+	 *  frontend. The hotkey thread calls `recorder.cancel()` directly and does not
+	 *  go through this command — this command exists for future UI use (e.g. an
+	 *  X button on the overlay). Registered in the invoke_handler and specta
+	 *  builder so it appears in `bindings.ts` (TASK-23).
+	 */
+	cancelRecording: () => typedError<null, string>(__TAURI_INVOKE("cancel_recording")),
 };
 
 /* Types */
@@ -82,6 +90,16 @@ export type HistoryEntry = {
 export type HotkeyConfig = {
 	key: string,
 	mode: string,
+	/**
+	 *  Hold Ctrl+Alt alone for ~300 ms to cancel an in-flight recording.
+	 *  Default: true.
+	 */
+	cancel_via_ctrl_alt?: boolean,
+	/**
+	 *  Press Esc to cancel an in-flight recording. Off by default because
+	 *  Esc is widely overloaded (modal dialogs, vim, search bars, etc.).
+	 */
+	cancel_via_esc?: boolean,
 };
 
 export type WhisperConfig = {

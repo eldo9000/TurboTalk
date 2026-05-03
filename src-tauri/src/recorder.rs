@@ -198,14 +198,28 @@ impl Recorder {
     /// level-broadcast thread when device loss is detected — there's no
     /// hotkey-up coming, so we synthesize the cleanup ourselves.
     ///
+    /// TASK-23: also called by the cancel-gesture path (Ctrl+Alt hold or Esc).
+    ///   - From `Recording`: drops the audio stream; no WAV produced.
+    ///   - From `Transcribing`: additionally kills the active whisper-cli
+    ///     subprocess via `transcribe::abort_active()`.
+    ///   - From any other state: debug-logged, no-op (idempotent).
+    ///
     /// Idempotent: calling cancel() while in Ready is a no-op.
     pub fn cancel(&self) {
         let mut s = self.state.lock();
         match *s {
-            State::Ready => (),
+            State::Ready => {
+                tracing::debug!("[recorder] cancel() called while already Ready — no-op");
+            }
+            State::Transcribing => {
+                // Kill the in-flight whisper-cli subprocess (best-effort).
+                crate::transcribe::abort_active();
+                self.capture.cancel();
+                tracing::info!("[recorder] Transcribing → Ready (user cancelled)");
+                *s = State::Ready;
+            }
             State::Recording
             | State::FinalizingAudio
-            | State::Transcribing
             | State::Cleaning
             | State::Pasting => {
                 self.capture.cancel();

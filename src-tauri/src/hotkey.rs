@@ -8,6 +8,7 @@ use core_graphics::event::{
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tauri::{tray::TrayIcon, AppHandle, Emitter};
 
 /// Monotonically-increasing identifier attached to every accepted dictation
@@ -64,6 +65,59 @@ fn key_for_name(name: &str) -> (i64, CGEventFlags) {
         "right_shift"   => (0x3C, CGEventFlags::CGEventFlagShift),
         _               => (0x3D, CGEventFlags::CGEventFlagAlternate), // right_option (default)
     }
+}
+
+// ── TASK-23: cancel-chord helpers ────────────────────────────────────────────
+
+/// keycode for the Esc key on macOS (matches Carbon kVK_Escape = 0x35).
+const ESC_KEYCODE: i64 = 0x35;
+
+/// How long Ctrl+Alt must be held alone before the cancel fires (TASK-23).
+const CANCEL_CHORD_HOLD_MS: u128 = 300;
+
+/// The exact modifier combination that activates the cancel chord:
+/// Control + Alternate, with no other modifier bits set.
+///
+/// We compare against `CANCEL_CHORD_MASK` by masking out the bits we care
+/// about and checking they equal the expected combination. This correctly
+/// handles "NumLock always set" and similar platform quirks.
+const CANCEL_CHORD_MASK: CGEventFlags = CGEventFlags::CGEventFlagControl
+    .union(CGEventFlags::CGEventFlagAlternate);
+
+/// Modifier bits that must NOT be set for the chord to be "clean". If any of
+/// these are present alongside Ctrl+Alt, we do not start (or continue) the
+/// hold timer — the user is probably typing Ctrl+Alt+<letter>.
+const EXCLUSIVE_MODIFIER_BITS: CGEventFlags = CGEventFlags::CGEventFlagCommand
+    .union(CGEventFlags::CGEventFlagShift);
+
+/// Returns true iff `flags` contains exactly Control+Alternate with no
+/// Command or Shift bit set. Used in tests and in the event-tap callback.
+pub fn cancel_chord_active(flags: CGEventFlags) -> bool {
+    let has_chord = flags.contains(CANCEL_CHORD_MASK);
+    let no_extra  = !flags.intersects(EXCLUSIVE_MODIFIER_BITS);
+    has_chord && no_extra
+}
+
+/// Fire the cancel path: call `recorder.cancel()`, reset tray, emit
+/// `recording-cancelled` (no payload). Called from both the chord-debounce
+/// polling thread and the Esc-keydown path.
+fn do_cancel(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
+    // Only cancel if actually in-flight (Recording or Transcribing).
+    let state = recorder.state();
+    if !matches!(
+        state,
+        crate::recorder::State::Recording | crate::recorder::State::Transcribing
+    ) {
+        tracing::debug!(
+            "[hotkey] cancel gesture ignored — recorder in {} (not Recording/Transcribing)",
+            state
+        );
+        return;
+    }
+    recorder.cancel();
+    tracing::info!("[hotkey] recording cancelled by user gesture");
+    let _ = tray_icon.set_icon(Some(tray::make_icon(TrayState::Idle)));
+    emit_critical(app, "recording-cancelled", ());
 }
 
 /// Emit a UI-critical event. Logs at warn-level if the emit fails (e.g. no
@@ -327,39 +381,103 @@ pub fn spawn(
     app: AppHandle,
     hotkey_state: Arc<parking_lot::RwLock<crate::settings::HotkeyConfig>>,
 ) {
+    // TASK-23: shared cell tracking when the Ctrl+Alt chord was entered.
+    // `None` = chord not active; `Some(t)` = chord entered at time t.
+    // Wrapped in Arc<Mutex> so the polling thread (below) can read it.
+    let chord_entered_at: Arc<parking_lot::Mutex<Option<Instant>>> =
+        Arc::new(parking_lot::Mutex::new(None));
+
+    // Polling thread: every 50 ms, check whether the Ctrl+Alt chord has been
+    // held for >= 300 ms with no intervening key events. If so, fire cancel.
+    // This piggybacks on the same 50 ms tick used by the audio-level broadcaster.
+    {
+        let chord_cell = chord_entered_at.clone();
+        let rec        = recorder.clone();
+        let tray       = tray_icon.clone();
+        let app2       = app.clone();
+        let hs         = hotkey_state.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let cancel_via_ctrl_alt = hs.read().cancel_via_ctrl_alt;
+            if !cancel_via_ctrl_alt {
+                continue;
+            }
+            let entered_at = *chord_cell.lock();
+            if let Some(t) = entered_at {
+                if t.elapsed().as_millis() >= CANCEL_CHORD_HOLD_MS {
+                    *chord_cell.lock() = None;
+                    do_cancel(&rec, &tray, &app2);
+                }
+            }
+        });
+    }
+
     std::thread::spawn(move || {
+        let chord_cell_tap = chord_entered_at.clone();
+
         let tap = match CGEventTap::new(
             CGEventTapLocation::HID,
             CGEventTapPlacement::HeadInsertEventTap,
             CGEventTapOptions::Default,
-            vec![CGEventType::FlagsChanged],
-            move |_proxy, _etype, event| {
+            vec![CGEventType::FlagsChanged, CGEventType::KeyDown],
+            move |_proxy, etype, event| {
                 let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
                 let flags   = event.get_flags();
 
                 // Read current config (RwLock read — nanoseconds, uncontended)
-                let (target_keycode, target_flag, toggle_mode) = {
+                let (target_keycode, target_flag, toggle_mode, cancel_via_ctrl_alt, cancel_via_esc) = {
                     let hk = hotkey_state.read();
                     let (kc, f) = key_for_name(&hk.key);
-                    (kc, f, hk.mode == "toggle")
+                    (kc, f, hk.mode == "toggle", hk.cancel_via_ctrl_alt, hk.cancel_via_esc)
                 };
 
-                if keycode == target_keycode {
-                    let is_key_down = flags.contains(target_flag);
-                    if toggle_mode {
-                        if is_key_down {
-                            if recorder.is_recording() {
-                                ptt_up(&recorder, &tray_icon, &app);
-                            } else {
+                match etype {
+                    CGEventType::FlagsChanged => {
+                        // PTT hotkey detection (existing behavior)
+                        if keycode == target_keycode {
+                            let is_key_down = flags.contains(target_flag);
+                            if toggle_mode {
+                                if is_key_down {
+                                    if recorder.is_recording() {
+                                        ptt_up(&recorder, &tray_icon, &app);
+                                    } else {
+                                        ptt_down(&recorder, &tray_icon, &app);
+                                    }
+                                }
+                            } else if is_key_down {
                                 ptt_down(&recorder, &tray_icon, &app);
+                            } else {
+                                ptt_up(&recorder, &tray_icon, &app);
                             }
                         }
-                    } else if is_key_down {
-                        ptt_down(&recorder, &tray_icon, &app);
-                    } else {
-                        ptt_up(&recorder, &tray_icon, &app);
+
+                        // TASK-23: Ctrl+Alt chord tracking
+                        if cancel_via_ctrl_alt {
+                            if cancel_chord_active(flags) {
+                                // Chord entered — start timer if not already started
+                                let mut cell = chord_cell_tap.lock();
+                                if cell.is_none() {
+                                    *cell = Some(Instant::now());
+                                }
+                            } else {
+                                // Chord released — clear the timer
+                                *chord_cell_tap.lock() = None;
+                            }
+                        }
                     }
+                    CGEventType::KeyDown => {
+                        // Any key down clears the chord timer (deliberate gesture
+                        // requires Ctrl+Alt held alone — any third key resets it).
+                        *chord_cell_tap.lock() = None;
+
+                        // Esc cancel (opt-in via cancel_via_esc setting)
+                        if cancel_via_esc && keycode == ESC_KEYCODE {
+                            do_cancel(&recorder, &tray_icon, &app);
+                        }
+                    }
+                    _ => {}
                 }
+
                 None
             },
         ) {
@@ -384,4 +502,60 @@ pub fn spawn(
         tap.enable();
         CFRunLoop::run_current();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // TASK-23: unit tests for cancel_chord_active against canned CGEventFlags.
+
+    #[test]
+    fn cancel_chord_active_true_for_ctrl_alt_only() {
+        let flags = CGEventFlags::CGEventFlagControl
+            | CGEventFlags::CGEventFlagAlternate;
+        assert!(cancel_chord_active(flags), "Ctrl+Alt alone must activate chord");
+    }
+
+    #[test]
+    fn cancel_chord_active_false_when_shift_added() {
+        let flags = CGEventFlags::CGEventFlagControl
+            | CGEventFlags::CGEventFlagAlternate
+            | CGEventFlags::CGEventFlagShift;
+        assert!(!cancel_chord_active(flags), "Ctrl+Alt+Shift must NOT activate chord");
+    }
+
+    #[test]
+    fn cancel_chord_active_false_when_command_added() {
+        let flags = CGEventFlags::CGEventFlagControl
+            | CGEventFlags::CGEventFlagAlternate
+            | CGEventFlags::CGEventFlagCommand;
+        assert!(!cancel_chord_active(flags), "Ctrl+Alt+Cmd must NOT activate chord");
+    }
+
+    #[test]
+    fn cancel_chord_active_false_for_ctrl_alone() {
+        let flags = CGEventFlags::CGEventFlagControl;
+        assert!(!cancel_chord_active(flags), "Ctrl alone must NOT activate chord");
+    }
+
+    #[test]
+    fn cancel_chord_active_false_for_alt_alone() {
+        let flags = CGEventFlags::CGEventFlagAlternate;
+        assert!(!cancel_chord_active(flags), "Alt alone must NOT activate chord");
+    }
+
+    #[test]
+    fn cancel_chord_active_false_for_empty_flags() {
+        assert!(!cancel_chord_active(CGEventFlags::empty()), "empty flags must NOT activate chord");
+    }
+
+    // TASK-23: HotkeyConfig defaults.
+
+    #[test]
+    fn hotkey_config_default_cancel_ctrl_alt_on_esc_off() {
+        let hk = crate::settings::HotkeyConfig::default();
+        assert!(hk.cancel_via_ctrl_alt, "cancel_via_ctrl_alt must default to true");
+        assert!(!hk.cancel_via_esc,     "cancel_via_esc must default to false");
+    }
 }
