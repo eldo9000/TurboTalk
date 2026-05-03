@@ -278,13 +278,11 @@ impl TranscriptionWorker {
     /// already exited, or if the kill syscall fails for any reason, we log at
     /// warn and move on. No-op if no transcription is currently in flight.
     ///
-    /// TASK-23: called by `Recorder::cancel()` when the user triggers a cancel
+    /// Called by `Recorder::cancel()` when the user triggers a cancel
     /// while a recording is in the `Transcribing` state.
     ///
-    /// Note: the chord-debounce timing test (300 ms Ctrl+Alt hold) cannot be
-    /// exercised headlessly because it requires a real CGEventTap. The abort
-    /// path itself is fully unit-testable — see the `abort_noop_when_idle` test
-    /// in the tests module below.
+    /// The abort path is fully unit-testable — see the `abort_noop_when_idle`
+    /// test in the tests module below.
     pub fn abort(&self) {
         let mut slot = self.active_child.lock();
         if let Some(ref mut child) = *slot {

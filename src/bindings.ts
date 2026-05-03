@@ -90,16 +90,6 @@ export type HistoryEntry = {
 export type HotkeyConfig = {
 	key: string,
 	mode: string,
-	/**
-	 *  Hold Ctrl+Alt alone for ~300 ms to cancel an in-flight recording.
-	 *  Default: true.
-	 */
-	cancel_via_ctrl_alt?: boolean,
-	/**
-	 *  Press Esc to cancel an in-flight recording. Off by default because
-	 *  Esc is widely overloaded (modal dialogs, vim, search bars, etc.).
-	 */
-	cancel_via_esc?: boolean,
 };
 
 export type WhisperConfig = {

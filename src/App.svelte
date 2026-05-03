@@ -93,8 +93,7 @@ Reply with only the single word, lowercase, no punctuation.
   let settingsSaveMsg      = $state('');
   let cfgHotkeyKey         = $state('right_option');
   let cfgHotkeyMode        = $state('hold');
-  let cfgCancelViaCtrlAlt  = $state(true);
-  let cfgCancelViaEsc      = $state(false);
+
   let hotkeySide           = $state('right');  // 'left' | 'right'
   let hotkeyKeyPart        = $state('option'); // key name without side prefix, or full numpad_* value
 
@@ -326,8 +325,6 @@ Reply with only the single word, lowercase, no punctuation.
     cfgDevice            = cfg.audio?.device                   ?? 'default';
     cfgHotkeyKey         = cfg.hotkey?.key                     ?? 'right_option';
     cfgHotkeyMode        = cfg.hotkey?.mode                    ?? 'hold';
-    cfgCancelViaCtrlAlt  = cfg.hotkey?.cancel_via_ctrl_alt     ?? true;
-    cfgCancelViaEsc      = cfg.hotkey?.cancel_via_esc          ?? false;
     const parsed         = parseHotkeyKey(cfgHotkeyKey);
     hotkeySide           = parsed.side;
     hotkeyKeyPart        = parsed.keyPart;
@@ -341,14 +338,12 @@ Reply with only the single word, lowercase, no punctuation.
     const cfg = await commands.getConfig();
     if (!cfg.whisper) cfg.whisper = { bin: 'auto', model: '', models: [] };
     if (!cfg.audio)   cfg.audio   = { device: 'default' };
-    if (!cfg.hotkey)  cfg.hotkey  = { key: 'right_option', mode: 'hold', cancel_via_ctrl_alt: true, cancel_via_esc: false };
+    if (!cfg.hotkey)  cfg.hotkey  = { key: 'right_option', mode: 'hold' };
     cfg.whisper.bin                   = cfgBin;
     cfg.audio.device                  = cfgDevice;
     cfg.theme                         = cfgTheme;
     cfg.hotkey.key                    = cfgHotkeyKey;
     cfg.hotkey.mode                   = cfgHotkeyMode;
-    cfg.hotkey.cancel_via_ctrl_alt    = cfgCancelViaCtrlAlt;
-    cfg.hotkey.cancel_via_esc         = cfgCancelViaEsc;
     cfg.history_auto_delete           = cfgHistoryAutoDelete;
     const saveRes = await commands.saveConfig(cfg);
     if (saveRes.status === 'error') {
@@ -978,9 +973,10 @@ Reply with only the single word, lowercase, no punctuation.
             <select
               bind:value={hotkeyKeyPart}
               onchange={applyHotkeyKey}
-              class="flex-1 bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
-                     text-[13px] text-[var(--text-primary)] outline-none
+              class="flex-1 bg-[var(--surface)] border border-[var(--border)] rounded px-2
+                     text-[11px] text-[var(--text-primary)] outline-none
                      hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
+              style="height:22px;"
             >
               <option value="option">Option ⌥</option>
               <option value="control">Control ⌃</option>
@@ -997,72 +993,42 @@ Reply with only the single word, lowercase, no punctuation.
           </div>
         </div>
 
-        <!-- Mode: pill toggle -->
+        <!-- Recording mode + microphone on same row -->
         <div class="space-y-1">
-          <p class="text-[var(--text-muted)]">Mode</p>
-          <div class="inline-flex rounded border border-[var(--border)]"
-               style="background:var(--surface-deep); height:22px;">
-            {#each [['hold','Hold'],['toggle','Toggle']] as [val, label]}
-              <button
-                onclick={() => { cfgHotkeyMode = val; saveSettings(); }}
-                class="relative px-3 flex items-center text-[11px] font-medium transition-colors duration-100
-                       {cfgHotkeyMode === val
-                         ? 'text-[var(--text-primary)]'
-                         : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}">
-                {label}
-                {#if cfgHotkeyMode === val}
-                  <span class="absolute bottom-0 left-1 right-1 h-[2px] rounded-t bg-[var(--accent)]"></span>
-                {/if}
-              </button>
-            {/each}
+          <p class="text-[var(--text-muted)]">Recording</p>
+          <div class="flex items-center gap-2">
+            <div class="inline-flex rounded border border-[var(--border)] shrink-0"
+                 style="background:var(--surface-deep); height:22px;">
+              {#each [['hold','Hold'],['toggle','Toggle']] as [val, label]}
+                <button
+                  onclick={() => { cfgHotkeyMode = val; saveSettings(); }}
+                  class="relative px-3 flex items-center text-[11px] font-medium transition-colors duration-100
+                         {cfgHotkeyMode === val
+                           ? 'text-[var(--text-primary)]'
+                           : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}">
+                  {label}
+                  {#if cfgHotkeyMode === val}
+                    <span class="absolute bottom-0 left-1 right-1 h-[2px] rounded-t bg-[var(--accent)]"></span>
+                  {/if}
+                </button>
+              {/each}
+            </div>
+            <select
+              bind:value={cfgDevice}
+              onchange={() => saveSettings()}
+              class="flex-1 bg-[var(--surface)] border border-[var(--border)] rounded px-2
+                     text-[11px] text-[var(--text-primary)] outline-none
+                     hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
+              style="height:22px;"
+            >
+              <option value="default">System default</option>
+              {#each audioDevices as d}
+                <option value={d}>{d}</option>
+              {/each}
+            </select>
           </div>
         </div>
 
-        <!-- Microphone: keep dropdown (dynamic list) -->
-        <div class="space-y-1">
-          <label class="block text-[var(--text-muted)]">Microphone</label>
-          <select
-            bind:value={cfgDevice}
-            onchange={() => saveSettings()}
-            class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
-                   text-[13px] text-[var(--text-primary)] outline-none
-                   hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
-          >
-            <option value="default">System default</option>
-            {#each audioDevices as d}
-              <option value={d}>{d}</option>
-            {/each}
-          </select>
-        </div>
-
-        <!-- Cancel recording -->
-        <div class="space-y-2 pt-1 border-t border-[var(--border)]">
-          <p class="text-[var(--text-muted)] text-[11px] font-semibold uppercase tracking-widest pt-1">Cancel recording</p>
-          <label class="flex items-start gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={cfgCancelViaCtrlAlt}
-              onchange={() => { cfgCancelViaCtrlAlt = !cfgCancelViaCtrlAlt; saveSettings(); }}
-              class="accent-[var(--accent)] w-3 h-3 shrink-0 mt-[3px]"
-            />
-            <div>
-              <span class="text-[var(--text-secondary)]">Ctrl+Alt held briefly</span>
-              <p class="text-[var(--text-muted)] text-[11px] mt-0.5">Hold Ctrl+Alt alone for ~300 ms to cancel.</p>
-            </div>
-          </label>
-          <label class="flex items-start gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={cfgCancelViaEsc}
-              onchange={() => { cfgCancelViaEsc = !cfgCancelViaEsc; saveSettings(); }}
-              class="accent-[var(--accent)] w-3 h-3 shrink-0 mt-[3px]"
-            />
-            <div>
-              <span class="text-[var(--text-secondary)]">Esc key</span>
-              <p class="text-[var(--text-muted)] text-[11px] mt-0.5">Esc may conflict with modal dialogs and other apps.</p>
-            </div>
-          </label>
-        </div>
       </div>
 
       <!-- Display -->

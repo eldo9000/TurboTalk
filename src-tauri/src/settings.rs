@@ -131,14 +131,6 @@ impl Default for AudioConfig {
 pub struct HotkeyConfig {
     pub key: String,  // "right_option" | "right_control" | "right_command" | "right_shift"
     pub mode: String, // "hold" | "toggle"
-    /// Hold Ctrl+Alt alone for ~300 ms to cancel an in-flight recording.
-    /// Default: true.
-    #[serde(default = "default_true")]
-    pub cancel_via_ctrl_alt: bool,
-    /// Press Esc to cancel an in-flight recording. Off by default because
-    /// Esc is widely overloaded (modal dialogs, vim, search bars, etc.).
-    #[serde(default)]
-    pub cancel_via_esc: bool,
 }
 
 impl Default for HotkeyConfig {
@@ -146,8 +138,6 @@ impl Default for HotkeyConfig {
         Self {
             key: "right_option".into(),
             mode: "hold".into(),
-            cancel_via_ctrl_alt: true,
-            cancel_via_esc: false,
         }
     }
 }
