@@ -29,13 +29,18 @@ npm run package
 2. `tauri build` — produces the signed (ad-hoc) `.app` and `.dmg` under
    `src-tauri/target/release/bundle/`.
 3. `node scripts/rename-artifact.mjs` — copies the DMG to a stable,
-   convention-named path.
+   convention-named path and writes a matching `.sha256` checksum file.
 
-Expected output path:
+Expected output paths:
 
 ```
 dist-artifacts/TurboTalk-0.0.1-macos-arm64.dmg
+dist-artifacts/TurboTalk-0.0.1-macos-arm64.dmg.sha256
 ```
+
+Verify the DMG is intact with
+`shasum -a 256 -c dist-artifacts/TurboTalk-0.0.1-macos-arm64.dmg.sha256`
+(expect `TurboTalk-0.0.1-macos-arm64.dmg: OK`).
 
 `dist-artifacts/` is gitignored. The original Tauri-named DMG remains in
 `src-tauri/target/release/bundle/dmg/` if you need it.
