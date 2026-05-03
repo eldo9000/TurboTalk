@@ -858,6 +858,9 @@ Reply with only the single word, lowercase, no punctuation.
               Routes transcript through a local Ollama model for intent-aware formatting.
             {/if}
           </p>
+          {#if cfgCleanupMode === 'chaperone'}
+            <p class="text-[var(--text-muted)] text-[11px]">Sends transcript to your local Ollama server (localhost only — no internet).</p>
+          {/if}
 
           {#if cfgCleanupMode !== 'off'}
             <div class="space-y-2 pt-1">
