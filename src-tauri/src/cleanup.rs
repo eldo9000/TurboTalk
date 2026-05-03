@@ -274,7 +274,27 @@ fn classify_blocking(text: &str, cfg: &crate::settings::CleanupConfig) -> anyhow
         .connect_timeout(OLLAMA_TIMEOUT)
         .build()?;
 
-    let resp: OllamaResponse = client.post(endpoint).json(&body).send()?.json()?;
+    let resp: OllamaResponse = client
+        .post(endpoint)
+        .json(&body)
+        .send()
+        .map_err(|e| {
+            // Connection-refused, timeout, and DNS-failure all surface here.
+            // Produce an actionable message so the user knows exactly what to fix.
+            if e.is_connect() || e.is_timeout() {
+                anyhow::anyhow!(
+                    "Cannot reach Ollama at {}. Start Ollama or switch to a simpler cleanup mode in Settings.",
+                    cfg.ollama_url
+                )
+            } else {
+                anyhow::anyhow!(
+                    "Cannot reach Ollama at {}. Start Ollama or switch to a simpler cleanup mode in Settings. ({})",
+                    cfg.ollama_url,
+                    e
+                )
+            }
+        })?
+        .json()?;
 
     parse_mode_strict(resp.response.trim())
 }

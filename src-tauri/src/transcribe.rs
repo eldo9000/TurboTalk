@@ -85,15 +85,15 @@ fn find_whisper(configured_bin: &str) -> anyhow::Result<PathBuf> {
     // Last resort: configured path. Validated against the allow-list to prevent
     // arbitrary code execution via a tampered config.toml.
     let configured = PathBuf::from(configured_bin);
-    if !is_allowed_whisper_path(&configured) {
+    if !configured.exists() || !is_allowed_whisper_path(&configured) {
         tracing::error!(
-            "[transcribe] rejected configured whisper bin (outside allowed roots): {}",
+            "[transcribe] whisper-cli sidecar not found (checked bundle and dev paths); \
+             configured bin: {}",
             configured_bin
         );
         anyhow::bail!(
-            "configured whisper.bin is outside allowed locations: {} — \
-             remove it from config.toml so the bundled sidecar is used",
-            configured_bin
+            "Whisper sidecar not found. Reinstall the app or check that whisper-cli exists \
+             in the app bundle."
         );
     }
     tracing::debug!("[transcribe] using configured bin: {}", configured_bin);
@@ -109,7 +109,7 @@ fn find_whisper(configured_bin: &str) -> anyhow::Result<PathBuf> {
 fn validate_model_path(raw_model: &str, canon_models_dir: &Path) -> anyhow::Result<PathBuf> {
     let canon_model = PathBuf::from(raw_model).canonicalize().map_err(|_| {
         anyhow::anyhow!(
-            "model path does not exist or could not be resolved: {}",
+            "Whisper model not found at the configured path. Open Settings and set the correct model path. (path: {})",
             raw_model
         )
     })?;
@@ -266,8 +266,11 @@ impl TranscriptionWorker {
         }
 
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("whisper-cli failed ({}): {}", output.status, stderr);
+            let code = output.status.code().unwrap_or(-1);
+            anyhow::bail!(
+                "Transcription failed (whisper-cli error {}). Check that the model file is valid.",
+                code
+            );
         }
 
         let text = std::fs::read_to_string(&txt_path).map_err(|_| {
@@ -475,7 +478,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("does not exist") || err.contains("could not be resolved"),
+            err.contains("Whisper model not found") || err.contains("could not be resolved"),
             "unexpected error message: {}",
             err
         );
