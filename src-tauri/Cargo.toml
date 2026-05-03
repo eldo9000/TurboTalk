@@ -61,6 +61,7 @@ thiserror       = "1"
 tracing         = "0.1"
 tracing-subscriber = "0.3"
 tauri-plugin-shell = "2.0.0-rc.4"
+tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
 tempfile        = "3"
 

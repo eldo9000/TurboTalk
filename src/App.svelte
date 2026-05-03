@@ -5,6 +5,7 @@
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { open } from '@tauri-apps/plugin-shell';
+  import { open as openFilePicker } from '@tauri-apps/plugin-dialog';
   import { initTheme } from '@libre/ui/src/theme.js';
   // Typed Rust↔TS contract — see TASK-8. `commands.*` are wrappers around
   // `invoke()` whose argument and return shapes are derived from the Rust
@@ -77,7 +78,7 @@ Reply with only the single word, lowercase, no punctuation.
   let modesSaveMsg            = $state('');
 
   // Settings tab
-  let cfgBin               = $state('');
+  const cfgBin             = 'auto';
   let cfgLaunchLogin       = $state(false);
   let cfgDevice            = $state('default');
   let audioDevices         = $state([]);
@@ -113,7 +114,7 @@ Reply with only the single word, lowercase, no punctuation.
 
   // ── Zoom ──────────────────────────────────────────────────────────────────
 
-  const ZOOM_LEVELS = [100, 110, 120, 130, 140, 150, 160, 170, 180];
+  const ZOOM_LEVELS = [100, 125, 150, 175, 200];
   let zoomIdx = $state(parseInt(localStorage.getItem('tt-zoom') ?? '0'));
 
   const KEY_DISPLAY = {
@@ -187,13 +188,19 @@ Reply with only the single word, lowercase, no punctuation.
     modelsSaveMsg = '';
   }
 
-  async function addModel() {
-    const path = newModelPath.trim();
-    if (!path || cfgModels.includes(path)) return;
-    cfgModels = [...cfgModels, path];
-    if (cfgModels.length === 1) cfgModel = path;
+  async function setCustomModel(path) {
+    const trimmed = path.trim();
+    if (!trimmed || cfgModels.includes(trimmed)) return;
+    // Replace any existing custom slot; keep catalog entries
+    cfgModels = [...cfgModels.filter(p => KNOWN_FILENAMES.some(fn => p.endsWith(fn))), trimmed];
+    cfgModel = trimmed;
     newModelPath = '';
     await saveModels();
+  }
+
+  async function browseCustomModel() {
+    const picked = await openFilePicker({ filters: [{ name: 'Whisper model', extensions: ['bin'] }] });
+    if (picked) await setCustomModel(picked);
   }
 
   async function removeModel(path) {
@@ -211,17 +218,10 @@ Reply with only the single word, lowercase, no punctuation.
     await saveModels();
   }
 
-  // Custom = paths in cfgModels not matching any known catalog filename.
-  const customPaths = $derived(
-    cfgModels.filter(p => !KNOWN_FILENAMES.some(fn => p.endsWith(fn)))
+  // Single custom slot — first path not matching a known catalog filename.
+  const customPath = $derived(
+    cfgModels.find(p => !KNOWN_FILENAMES.some(fn => p.endsWith(fn))) ?? ''
   );
-
-  async function refreshModels() {
-    const found = await commands.scanModelsDir();
-    const merged = [...new Set([...cfgModels, ...found])];
-    cfgModels = merged;
-    if (!cfgModel && merged.length > 0) cfgModel = merged[0];
-  }
 
   async function saveModels() {
     const cfg = await commands.getConfig();
@@ -301,7 +301,6 @@ Reply with only the single word, lowercase, no punctuation.
       commands.listAudioDevices(),
       commands.getLaunchAtLogin(),
     ]);
-    cfgBin               = cfg.whisper?.bin          ?? 'auto';
     cfgDevice            = cfg.audio?.device         ?? 'default';
     cfgHotkeyKey         = cfg.hotkey?.key           ?? 'right_option';
     cfgHotkeyMode        = cfg.hotkey?.mode          ?? 'hold';
@@ -734,81 +733,47 @@ Reply with only the single word, lowercase, no punctuation.
         {/each}
       </div>
 
-      <!-- Custom models -->
-      <div class="flex flex-col gap-0.5">
-        <span class="text-[var(--text-secondary)] text-sm mb-0.5">Custom</span>
-        <div class="max-h-24 overflow-y-auto">
-        {#each customPaths as path}
-          {@const isSelected = cfgModel === path}
-          <div class="flex items-center gap-2 py-1.5 border-b border-[var(--border,#2a2a2a)]">
-            <span class="flex-1 text-xs font-mono text-[var(--text-primary)] truncate" title={path}>
-              {path.split('/').at(-1)}
+      <!-- Custom model — single slot -->
+      <div class="flex flex-col gap-1.5">
+        <span class="text-[var(--text-secondary)] text-sm">Custom model</span>
+        {#if customPath}
+          <div class="flex items-center gap-2 px-3 py-2 rounded-lg border border-green-500/40 bg-green-500/10">
+            <span class="flex-1 text-xs font-mono text-green-400 truncate" title={customPath}>
+              {customPath.split('/').at(-1)}
             </span>
-            {#if isSelected}
-              <button disabled
-                class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap
-                       border-green-500 bg-green-500/20 text-[var(--text-primary)] cursor-default"
-              >Selected</button>
-            {:else}
-              <button
-                onclick={() => selectModel(path)}
-                class="shrink-0 text-[10px] px-2 py-1 rounded border whitespace-nowrap transition-colors
-                       border-[var(--accent)] bg-[var(--accent)]/20 text-[var(--text-primary)]
-                       hover:bg-[var(--accent)]/40"
-              >Install</button>
-            {/if}
+            <span class="shrink-0 text-[10px] font-medium text-green-400">Connected</span>
             <button
-              onclick={() => removeModel(path)}
-              title="Remove"
-              class="shrink-0 w-5 h-5 flex items-center justify-center rounded
-                     text-[var(--text-tertiary,#666)] hover:text-red-400
-                     hover:bg-[var(--surface-raised)] transition-colors text-xs"
+              onclick={() => removeModel(customPath)}
+              title="Clear custom model"
+              class="shrink-0 w-5 h-5 flex items-center justify-center rounded text-xs
+                     text-red-400 hover:bg-red-500/15 transition-colors"
             >×</button>
           </div>
-        {/each}
-        </div>
-
-        <!-- Add row -->
-        <div class="flex items-center gap-2 mt-1">
-          <input
-            bind:value={newModelPath}
-            onkeydown={(e) => e.key === 'Enter' && addModel()}
-            placeholder="Paste path to .bin file…"
-            class="flex-1 text-xs bg-[var(--surface-raised)] border border-[var(--border)]
-                   rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
-                   focus:border-[var(--accent)] placeholder:text-[var(--text-tertiary,#666)]"
-            spellcheck="false"
-          />
-          <button
-            onclick={addModel}
-            class="shrink-0 w-6 h-6 flex items-center justify-center rounded
-                   bg-[var(--accent)] text-white hover:opacity-90 transition-opacity
-                   text-base leading-none"
-            title="Add custom model"
-          >+</button>
-        </div>
+        {:else}
+          <div class="flex items-center gap-2">
+            <input
+              bind:value={newModelPath}
+              onkeydown={(e) => e.key === 'Enter' && setCustomModel(newModelPath)}
+              placeholder="Paste path to .bin file…"
+              class="flex-1 text-xs bg-[var(--surface-raised)] border border-[var(--border)]
+                     rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
+                     focus:border-[var(--accent)] placeholder:text-[var(--text-tertiary,#666)]"
+              spellcheck="false"
+            />
+            <button
+              onclick={browseCustomModel}
+              class="shrink-0 text-xs px-2.5 py-1.5 rounded border border-[var(--border,#2a2a2a)]
+                     text-[var(--text-secondary)] hover:border-[var(--accent)]
+                     hover:text-[var(--accent)] transition-colors whitespace-nowrap"
+            >Browse</button>
+          </div>
+        {/if}
       </div>
 
       <!-- No model selected warning -->
       {#if !cfgModel}
         <p class="text-[11px] text-red-400 text-center">No model selected — transcription will fail.</p>
       {/if}
-
-      <!-- Footer: directory hint + refresh -->
-      <div class="flex items-start gap-2 pt-0.5">
-        <p class="flex-1 text-[var(--text-tertiary,#666)] text-[10px] leading-relaxed">
-          Place <code class="font-mono">.bin</code> files in
-          <code class="font-mono">~/.config/librewin/turbotalk/models/</code>
-          then refresh to add them to the list above.
-        </p>
-        <button
-          onclick={refreshModels}
-          title="Scan models directory"
-          class="shrink-0 text-[10px] px-2 py-1 rounded border border-[var(--border,#2a2a2a)]
-                 text-[var(--text-secondary)] hover:border-[var(--accent)]
-                 hover:text-[var(--accent)] transition-colors whitespace-nowrap"
-        >↻ Refresh</button>
-      </div>
 
     </div>
   {/if}
@@ -1046,21 +1011,6 @@ Reply with only the single word, lowercase, no punctuation.
           <option value="10d">After 10 days</option>
           <option value="30d">After 30 days</option>
         </select>
-      </label>
-
-      <label class="flex flex-col gap-1">
-        <span class="text-[var(--text-secondary)] text-sm">Whisper binary</span>
-        <input
-          bind:value={cfgBin}
-          onchange={() => saveSettings()}
-          class="text-xs bg-[var(--surface-raised)] border border-[var(--border)]
-                 rounded px-2 py-1.5 text-[var(--text-primary)] outline-none
-                 focus:border-[var(--accent)]"
-          spellcheck="false"
-        />
-        <span class="text-[var(--text-tertiary,#666)] text-[10px]">
-          Overrides the bundled sidecar. Leave as "auto" to use the default.
-        </span>
       </label>
 
     </div>
