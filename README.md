@@ -6,9 +6,10 @@ Voice dictation for getting work done.
 
 ## Setup
 
-- Download a model from the Models tab. 
+- Download and install from the releases page.
+- Select a model from the Models tab. 
 - Set your trigger key and mode in Settings. 
-- Start dictating.
+- Start dictating. 
 
 ---
 
