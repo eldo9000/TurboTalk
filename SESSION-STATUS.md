@@ -1,7 +1,14 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-05-04
-**Current state:** v0.8 macOS beta package proof is now understood. The
+**Current state:** Win/Linux beta sprint partial loop landed (TASK-24, 28, 30, 31).
+Codebase is now structurally cross-platform-aware: target-triple sidecar lookup,
+per-platform bundle resources, host-aware preflight + artifact-rename scripts,
+unsigned-beta docs, and a 3-OS GH Actions release workflow. Mac happy path
+preserved. Win/Linux runtime impls (hotkey, paste, sidecar binaries, per-OS
+diagnostics) still deferred — TASK-25/26/27/29 remain in tasks/.
+
+v0.8 macOS beta package proof is now understood. The
 ad-hoc signed DMG exists at `dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg`
 with a passing `.sha256`. Packaged diagnostics confirmed mic input works and
 the bundled sidecar resolves from `/Applications/Turbo Talk.app/Contents/MacOS/whisper-cli`.
