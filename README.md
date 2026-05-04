@@ -13,51 +13,6 @@ Voice dictation for getting work done.
 
 ---
 
-### Permissions the app will request
-
-- **Microphone** — to capture audio while you hold the trigger key. Without
-  this, no recording happens.
-- **Accessibility** (System Settings → Privacy & Security → Accessibility) —
-  required twice over: (1) for the global push-to-talk hotkey, which uses a
-  `CGEventTap` to observe modifier-key flag changes, and (2) for the paste
-  step, which sends `Cmd+V` to the focused app via `System Events`. If you
-  see a `paste-error` toast saying "check Accessibility permission", this is
-  why.
-
-No other system permissions are requested. There is no Automation prompt
-per app, no Full Disk Access, no Screen Recording.
-
-### Local data
-
-- **Config + history:** `~/.config/librewin/turbotalk/` — holds
-  `config.toml` (settings) and `history.json` (last 50 dictations).
-- **Whisper models:** `~/.config/librewin/turbotalk/models/` — `.bin` files
-  downloaded via the Models tab live here.
-- **Audio temp files:** `turbotalk-*.wav` written to the system temp dir
-  (`/tmp` on macOS) for each dictation. Each file is deleted automatically
-  the moment its dictation finishes — successful, failed, or cancelled.
-- **Delete everything:** quit from the tray, then
-  `rm -rf ~/.config/librewin/turbotalk/`.
-
-### Known limitations
-
-- Apple Silicon only. No Intel-Mac, Windows, or Linux build.
-- Ad-hoc signed only — not Apple-notarized. Expect a Gatekeeper warning on
-  first launch.
-- No auto-updater. Re-download the DMG to update.
-- History is saved to disk by default, retained for 10 days. Configurable
-  in Settings — choose `restart` (clear on launch), `1d`, `5d`, `10d`, or
-  `30d`. Capped at 50 entries either way.
-- The Chaperone cleanup mode requires a local Ollama install. If you don't
-  run Ollama, leave cleanup on `Off` or `Simple`.
-
-### Feedback
-
-Personal-use beta — feedback by direct message until a public tracker
-opens.
-
----
-
 ## Why this exists
 
 Every other dictation tool is built around a feature list. You get a dropdown of 40 models, a settings panel with 12 tabs, and a history buried three clicks deep. They optimized for "supported" instead of "usable."
@@ -107,12 +62,6 @@ Raw Whisper output is good. It can be better. Three levels:
 
 ---
 
-## No cloud. No account. No telemetry.
-
-Everything runs on your machine. Metal-accelerated on Apple Silicon. Nothing leaves your network.
-
----
-
 ## For Engineers
 
 The parts that don't show up in a feature list but represent most of the real work, this is actually why Turbo Talk is well made:
@@ -125,6 +74,48 @@ The parts that don't show up in a feature list but represent most of the real wo
 - **Silero VAD session reuse.** VAD model initialization (ONNX session construction) is not paid on every dictation. The session is held and reused with per-call state isolation to ensure no speech bounds from a prior recording can influence the next.
 - **Persistent Whisper worker (in progress).** The current model spawns a fresh `whisper-cli` process per recording. Whisper's dominant cost is model load and Metal context setup — not inference. A persistent transcription worker that keeps the model warm between dictations is the next major latency win.
 
-## License
+---
 
-MIT.
+### Permissions the app will request
+
+- **Microphone** — to capture audio while you hold the trigger key. Without
+  this, no recording happens.
+- **Accessibility** (System Settings → Privacy & Security → Accessibility) —
+  required twice over: (1) for the global push-to-talk hotkey, which uses a
+  `CGEventTap` to observe modifier-key flag changes, and (2) for the paste
+  step, which sends `Cmd+V` to the focused app via `System Events`. If you
+  see a `paste-error` toast saying "check Accessibility permission", this is
+  why.
+
+No other system permissions are requested. There is no Automation prompt
+per app, no Full Disk Access, no Screen Recording.
+
+### Local data
+
+- **Config + history:** `~/.config/librewin/turbotalk/` — holds
+  `config.toml` (settings) and `history.json` (last 50 dictations).
+- **Whisper models:** `~/.config/librewin/turbotalk/models/` — `.bin` files
+  downloaded via the Models tab live here.
+- **Audio temp files:** `turbotalk-*.wav` written to the system temp dir
+  (`/tmp` on macOS) for each dictation. Each file is deleted automatically
+  the moment its dictation finishes — successful, failed, or cancelled.
+- **Delete everything:** quit from the tray, then
+  `rm -rf ~/.config/librewin/turbotalk/`.
+
+### Known limitations
+
+- Apple Silicon only. No Intel-Mac, Windows, or Linux build.
+- Ad-hoc signed only — not Apple-notarized. Expect a Gatekeeper warning on
+  first launch.
+- No auto-updater. Re-download the DMG to update.
+- History is saved to disk by default, retained for 10 days. Configurable
+  in Settings — choose `restart` (clear on launch), `1d`, `5d`, `10d`, or
+  `30d`. Capped at 50 entries either way.
+- The Chaperone cleanup mode requires a local Ollama install. If you don't
+  run Ollama, leave cleanup on `Off` or `Simple`.
+
+### Feedback
+
+Personal-use beta — feedback by direct message until a public tracker
+opens.
+
