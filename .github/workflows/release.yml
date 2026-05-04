@@ -60,6 +60,15 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Clone librewin-common sibling
+        shell: bash
+        run: |
+          # Repo-root Cargo.toml has a [patch] override redirecting
+          # librewin-common to ../Libre-Apps/common. CI only checks out
+          # TurboTalk-App, so we clone the sibling here before any cargo run.
+          cd "$GITHUB_WORKSPACE/.."
+          git clone --depth 1 --branch v0.1.3 https://github.com/eldo9000/Libre-Apps.git
+
       - name: Build Windows whisper-cli sidecar (static)
         if: matrix.os == 'windows-latest'
         shell: pwsh
