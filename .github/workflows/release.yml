@@ -2,22 +2,21 @@
 # TurboTalk — Unsigned Beta Release Pipeline
 # =============================================================================
 #
-# Builds unsigned beta artifacts for macOS (arm64), Windows (x64), and
-# Linux (x64) on tag push (v*), uploads them as workflow artifacts, and
-# attaches them to a draft GitHub release.
+# Builds unsigned beta artifacts for macOS (arm64) and Windows (x64) on
+# tag push (v*), uploads them as workflow artifacts, and attaches them to
+# a draft GitHub release.
 #
 # UNSIGNED. This is a personal-use beta — no Apple, Windows, or Linux
 # trust-chain credentials are referenced anywhere below.
 #
-# IMPORTANT — sidecar binaries:
-#   The Win/Linux legs of the matrix will FAIL until TASK-25/26/27 land:
-#     - TASK-25: Windows whisper.cpp sidecar binaries
-#     - TASK-26: Linux whisper.cpp sidecar binaries
-#     - TASK-27: `npm run fetch-sidecars` script that downloads the per-OS
-#                whisper binaries into `src-tauri/binaries/` at build time.
-#   Only the macOS leg is expected to succeed today. The workflow is wired
-#   now so that once those tasks land, no separate setup PR is needed —
-#   a tag push will Just Work.
+# Linux is intentionally excluded from this release. Add it back to the
+# matrix when the Linux runtime path (rdev under X11, AppImage system
+# deps) has been validated on real hardware.
+#
+# Whisper sidecar:
+#   - macOS arm64 binary is committed under src-tauri/binaries/.
+#   - Windows binary is built from source on the windows-latest runner
+#     during the workflow (static build, single .exe, no DLLs needed).
 #
 # Manual `workflow_dispatch` runs build but do NOT publish a release.
 # =============================================================================
@@ -42,8 +41,6 @@ jobs:
             target_label: macos-arm64
           - os: windows-latest
             target_label: windows-x64
-          - os: ubuntu-latest
-            target_label: linux-x64
 
     steps:
       - name: Checkout
@@ -63,21 +60,22 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Install Linux Tauri prerequisites
-        if: matrix.os == 'ubuntu-latest'
+      - name: Build Windows whisper-cli sidecar (static)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libxdo-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libfuse2
+          $whisperRef = "v1.7.5"
+          $whisperDir = "$env:RUNNER_TEMP\whisper.cpp"
+          git clone --depth 1 --branch $whisperRef https://github.com/ggerganov/whisper.cpp $whisperDir
+          Push-Location $whisperDir
+          cmake -B build -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_BUILD_TESTS=OFF
+          cmake --build build --config Release --target whisper-cli
+          Pop-Location
+          $exeSrc = Get-ChildItem -Path "$whisperDir\build" -Recurse -Filter "whisper-cli.exe" | Select-Object -First 1
+          if (-not $exeSrc) { throw "whisper-cli.exe not found after build" }
+          $dest = "$env:GITHUB_WORKSPACE\src-tauri\binaries\whisper-cli-x86_64-pc-windows-msvc.exe"
+          Copy-Item $exeSrc.FullName $dest -Force
+          & $dest --version
 
       - name: Install npm dependencies
         run: npm install
