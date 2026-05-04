@@ -99,15 +99,70 @@ pub fn paste(text: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Non-macOS stub. Returns an error containing the literal string
-/// `unsupported platform` so the UI banner can detect and surface the
-/// condition uniformly. A real Windows path would need clipboard + Ctrl+V
-/// (e.g. via `enigo`); a real Linux path would need separate X11 and
-/// Wayland handling. Neither is implemented.
+/// Windows + Linux/X11 paste implementation.
+///
+/// Writes `text` to the system clipboard via `arboard`, synthesizes a native
+/// `Ctrl+V` via `enigo`, then restores the prior clipboard contents on a
+/// best-effort basis. The 50 ms / 150 ms sleeps mirror the macOS branch:
+/// 50 ms after the clipboard write so the target app sees the new contents,
+/// 150 ms after the keystroke so paste completes before we overwrite the
+/// clipboard with the prior value.
+///
+/// Wayland is not supported in the beta — under `XDG_SESSION_TYPE=wayland`
+/// we return an error containing the literal substring `unsupported platform`
+/// (the test in this file and the UI banner both grep for that token).
 #[cfg(not(target_os = "macos"))]
-pub fn paste(_text: &str) -> anyhow::Result<()> {
-    let _ = _text;
-    anyhow::bail!("unsupported platform: paste is only implemented on macOS")
+pub fn paste(text: &str) -> anyhow::Result<()> {
+    use arboard::Clipboard;
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+
+    // Wayland detection (Linux only). On Windows this env var is unset, so the
+    // check is a no-op.
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(session) = std::env::var("XDG_SESSION_TYPE") {
+            if session.eq_ignore_ascii_case("wayland") {
+                tracing::warn!(
+                    "[paste] XDG_SESSION_TYPE=wayland — paste injection not supported in beta"
+                );
+                anyhow::bail!(
+                    "unsupported platform: paste under Wayland is not supported in this beta"
+                );
+            }
+        }
+    }
+
+    let mut cb = Clipboard::new()?;
+
+    // Save prior clipboard contents (best-effort — ignore if empty/non-text).
+    let prior = cb.get_text().ok();
+
+    cb.set_text(text)?;
+
+    // Small delay so the clipboard write is visible to the target app.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| anyhow::anyhow!("enigo init failed: {e}"))?;
+
+    enigo
+        .key(Key::Control, Direction::Press)
+        .map_err(|e| anyhow::anyhow!("enigo Ctrl press failed: {e}"))?;
+    let click_res = enigo.key(Key::Unicode('v'), Direction::Click);
+    // Always release Ctrl, even if the 'v' click failed, so we don't leave a
+    // modifier stuck down on the user's keyboard.
+    let release_res = enigo.key(Key::Control, Direction::Release);
+
+    click_res.map_err(|e| anyhow::anyhow!("enigo 'v' click failed: {e}"))?;
+    release_res.map_err(|e| anyhow::anyhow!("enigo Ctrl release failed: {e}"))?;
+
+    // Restore prior clipboard after a short delay so Ctrl+V has time to land.
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    if let Some(prev) = prior {
+        let _ = cb.set_text(prev);
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -123,17 +178,33 @@ mod tests {
         let _ = frontmost_app();
     }
 
-    /// On non-macOS targets, `paste()` must return an error whose message
+    /// Under Linux/Wayland, `paste()` must return an error whose message
     /// contains the literal string `unsupported platform` — the UI banner
-    /// relies on that token.
-    #[cfg(not(target_os = "macos"))]
+    /// relies on that token. We force-set `XDG_SESSION_TYPE=wayland` for
+    /// the duration of the test so the runtime detection branch fires.
+    ///
+    /// Note: env vars are process-wide. This test sets and restores
+    /// `XDG_SESSION_TYPE` around the call. It runs only on Linux because
+    /// the Wayland code path is gated to that target.
+    #[cfg(target_os = "linux")]
     #[test]
-    fn paste_returns_unsupported_platform_off_mac() {
+    fn paste_returns_unsupported_platform_under_wayland() {
+        let prior = std::env::var("XDG_SESSION_TYPE").ok();
+        std::env::set_var("XDG_SESSION_TYPE", "wayland");
+
         let err = paste("hello").unwrap_err();
+        let msg = err.to_string();
+
+        // Restore env var before asserting so a panic doesn't pollute the
+        // process for other tests.
+        match prior {
+            Some(v) => std::env::set_var("XDG_SESSION_TYPE", v),
+            None => std::env::remove_var("XDG_SESSION_TYPE"),
+        }
+
         assert!(
-            err.to_string().contains("unsupported platform"),
-            "expected 'unsupported platform' in error, got: {}",
-            err
+            msg.contains("unsupported platform"),
+            "expected 'unsupported platform' in error, got: {msg}"
         );
     }
 }
