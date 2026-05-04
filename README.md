@@ -4,6 +4,13 @@ Voice dictation for getting work done.
 
 ---
 
+<p align="center">
+  <img src="ss1.jpg" alt="TurboTalk screenshot 1" width="49%" />
+  <img src="ss2.jpg" alt="TurboTalk screenshot 2" width="49%" />
+</p>
+
+---
+
 ## Why this exists
 
 Every other dictation tool is built around a feature list. You get a dropdown of 40 models, a settings panel with 12 tabs, and a history buried three clicks deep. They optimized for "supported" instead of "usable."
