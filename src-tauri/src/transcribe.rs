@@ -57,17 +57,39 @@ fn is_allowed_whisper_path(p: &Path) -> bool {
     roots.iter().any(|root| canon.starts_with(root))
 }
 
+/// Build the list of candidate sidecar filenames to search for, in priority
+/// order. Tauri convention is to suffix the externalBin name with the target
+/// triple at bundle time (and `.exe` on Windows), so the per-target candidate
+/// matches what ends up in the release bundle. The unsuffixed `whisper-cli`
+/// candidate covers dev builds where the binary may have been dropped in
+/// `src-tauri/binaries/` without the triple suffix.
+///
+/// TARGET_TRIPLE is injected by `build.rs` from Cargo's `TARGET` build-script
+/// env var.
+fn sidecar_candidates() -> Vec<String> {
+    let triple = env!("TARGET_TRIPLE");
+    let exe_suffix = if triple.contains("windows") {
+        ".exe"
+    } else {
+        ""
+    };
+    vec![
+        format!("whisper-cli{}", exe_suffix),
+        format!("whisper-cli-{}{}", triple, exe_suffix),
+    ]
+}
+
 /// Locate the whisper-cli binary.
 /// Priority: bundled sidecar (next to exe) → dev binaries dir → configured path.
 /// The configured-path fallback is only honored if the path canonicalizes to
 /// a location inside an allowed root; otherwise an error is returned.
 fn find_whisper(configured_bin: &str) -> anyhow::Result<PathBuf> {
-    let sidecars = ["whisper-cli", "whisper-cli-aarch64-apple-darwin"];
+    let sidecars = sidecar_candidates();
 
     // Release bundle: sidecar is placed next to the main executable in Contents/MacOS/
     if let Ok(exe) = std::env::current_exe() {
         let parent = exe.parent().unwrap_or_else(|| Path::new("."));
-        for sidecar in sidecars {
+        for sidecar in &sidecars {
             let p = parent.join(sidecar);
             if p.exists() {
                 tracing::debug!("[transcribe] using bundled sidecar: {:?}", p);
@@ -77,7 +99,7 @@ fn find_whisper(configured_bin: &str) -> anyhow::Result<PathBuf> {
     }
 
     // Dev mode: sidecar lives in src-tauri/binaries/ at compile time
-    for sidecar in sidecars {
+    for sidecar in &sidecars {
         let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("binaries")
             .join(sidecar);
