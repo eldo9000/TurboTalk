@@ -13,27 +13,6 @@ Voice dictation for getting work done.
 
 ---
 
-## Release matrix
-
-First beta is **macOS on Apple Silicon only.** The hotkey and paste paths are
-implemented against macOS APIs (CGEventTap, `osascript`); on every other
-target they compile to honest "unsupported platform" stubs. No Windows or
-Linux build is shipped.
-
-| Platform | Architecture | First-beta status |
-|---|---|---|
-| macOS    | arm64 (Apple Silicon) | **supported (beta-1)** |
-| macOS    | x86_64 (Intel)        | not supported — no Intel sidecar built |
-| Windows  | x86_64                | not supported — deferred (no hotkey/paste implementation) |
-| Linux    | x86_64                | not supported — deferred (no hotkey/paste implementation) |
-
-### Install
-
-Download `TurboTalk-<version>-macos-arm64.dmg` from the release page, drag
-`TurboTalk.app` to `/Applications`, then **right-click → Open** the first
-time you launch it. Beta-1 builds are ad-hoc signed, so Gatekeeper will
-warn the first time. If you'd rather build from source, see `BUILD.md`.
-
 ### Permissions the app will request
 
 - **Microphone** — to capture audio while you hold the trigger key. Without
