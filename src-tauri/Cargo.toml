@@ -89,3 +89,12 @@ objc2               = "0.6"
 objc2-foundation    = "0.3"
 objc2-av-foundation = "0.3"
 block2              = "0.6"
+
+# Windows + Linux push-to-talk hotkey backend (TASK-25). `rdev` installs a
+# global keyboard hook (Win32 `SetWindowsHookEx` on Windows, X11 `XRecord` on
+# Linux) and surfaces raw `KeyPress` / `KeyRelease` events — exactly what
+# push-to-talk needs and what `tauri-plugin-global-shortcut` does not provide.
+# macOS keeps using CGEventTap directly; rdev is gated to non-mac targets so
+# we don't drag in a duplicate event-source on macOS.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+rdev = "0.5"

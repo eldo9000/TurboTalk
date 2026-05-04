@@ -1,41 +1,24 @@
 // Push-to-talk hotkey binding.
 //
-// Platform facade. The macOS implementation lives in the
-// `#[cfg(target_os = "macos")]` block below and uses CGEventTap to observe
-// modifier-key flag changes globally. Non-macOS targets compile a stub that
-// logs an "unsupported platform" error at startup and never invokes the
-// recorder. See `BETA-AUDIT-ROADMAP.md` Block 1 / TASK-2.
+// Platform facade. The lifecycle (recorder state machine, tray transitions,
+// `dictation-stage` events, focus tracking, cancel-pending race handling)
+// lives in `mod common` and is shared across all platforms. Each per-OS
+// `mod imp` only owns the OS-specific key-event source and calls into
+// `common::ptt_down(...)` / `common::ptt_up(...)`.
 //
-// Public surface preserved by both branches:
+// Public surface preserved by every branch:
 //   - `pub fn spawn(recorder, tray_icon, app, hotkey_state)` — the only
-//     entry point `lib.rs::run` calls into. On macOS it spawns the
-//     CGEventTap thread; on other platforms it logs and returns.
+//     entry point `lib.rs::run` calls into.
+//   - `pub fn accessibility_trusted() -> bool` — used by the onboarding
+//     readiness gate.
 
-#[cfg(target_os = "macos")]
-mod imp {
+mod common {
     use crate::audio::{DiscardReason, StopOutcome};
     use crate::recorder::{Recorder, RecorderError};
     use crate::tray::{self, TrayState};
-    use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
-    use core_graphics::event::{
-        CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
-        CGEventType, EventField,
-    };
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
-
     use tauri::{tray::TrayIcon, AppHandle, Emitter};
-
-    #[link(name = "ApplicationServices", kind = "framework")]
-    extern "C" {
-        fn AXIsProcessTrusted() -> bool;
-    }
-
-    pub fn accessibility_trusted() -> bool {
-        // SAFETY: AXIsProcessTrusted takes no pointers and only reports the
-        // current process' macOS Accessibility trust state.
-        unsafe { AXIsProcessTrusted() }
-    }
 
     /// Set by `ptt_up` when `rec.stop()` fails because the recorder wasn't
     /// Recording yet (key-up thread won the scheduler over key-down thread in
@@ -84,10 +67,10 @@ mod imp {
     }
 
     #[derive(Clone, serde::Serialize)]
-    struct UiError {
-        kind: &'static str,
-        message: String,
-        recoverable: bool,
+    pub(super) struct UiError {
+        pub kind: &'static str,
+        pub message: String,
+        pub recoverable: bool,
     }
 
     /// Cell shared between `ptt_down` and `ptt_up` so the upstroke worker can
@@ -98,34 +81,18 @@ mod imp {
     static FOCUS_AT_START: parking_lot::Mutex<Option<Option<String>>> =
         parking_lot::Mutex::new(None);
 
-    fn key_for_name(name: &str) -> (i64, CGEventFlags) {
-        match name {
-            "right_control" => (0x3E, CGEventFlags::CGEventFlagControl),
-            "right_command" => (0x36, CGEventFlags::CGEventFlagCommand),
-            "right_shift" => (0x3C, CGEventFlags::CGEventFlagShift),
-            _ => (0x3D, CGEventFlags::CGEventFlagAlternate), // right_option (default)
-        }
-    }
-
     /// Emit a UI-critical event. Logs at warn-level if the emit fails (e.g. no
     /// frontend listener is registered yet). Non-critical signals like
     /// `audio-level` can keep using fire-and-forget `let _ = app.emit(...)`.
-    fn emit_critical<P: serde::Serialize + Clone>(app: &AppHandle, event: &str, payload: P) {
+    pub(super) fn emit_critical<P: serde::Serialize + Clone>(
+        app: &AppHandle,
+        event: &str,
+        payload: P,
+    ) {
         if let Err(e) = app.emit(event, payload) {
             tracing::warn!("[hotkey] failed to emit {}: {:?}", event, e);
         }
     }
-
-    // All work that touches the audio pipeline must run off the CGEventTap thread.
-    // macOS disables event taps whose callback exceeds the per-event timeout, and
-    // `recorder.start()` (cpal stream open) plus `recorder.stop()` (downmix +
-    // resample + Silero VAD inference + WAV write) can take hundreds of ms to
-    // several seconds — well over the timeout. Synchronous calls in the tap
-    // callback led to the tap being disabled after 1-2 recordings, after which
-    // no key event reaches our code at all (silent dead hotkey).
-    //
-    // Both ptt_down and ptt_up therefore spawn a worker thread and return
-    // immediately. The tap callback finishes in microseconds.
 
     /// Cell shared between `ptt_down` and `ptt_up` so the upstroke worker can
     /// recover the `job_id` allocated by the downstroke worker. Holds `None`
@@ -133,7 +100,13 @@ mod imp {
     /// critical section is a single load/store and never blocks audio work.
     static CURRENT_JOB_ID: parking_lot::Mutex<Option<u64>> = parking_lot::Mutex::new(None);
 
-    fn ptt_down(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
+    // All work that touches the audio pipeline must run off the listener thread.
+    // On macOS the CGEventTap callback is timeout-bounded; on Windows/Linux the
+    // `rdev::listen` callback runs on the listener thread and any blocking work
+    // there would stall the global keyboard hook. Both ptt_down and ptt_up
+    // therefore spawn a worker thread and return immediately.
+
+    pub(super) fn ptt_down(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
         let rec = recorder.clone();
         let tray = tray_icon.clone();
         let app = app.clone();
@@ -188,7 +161,7 @@ mod imp {
         });
     }
 
-    fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
+    pub(super) fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
         let rec = recorder.clone();
         let tray = tray_icon.clone();
         let app = app.clone();
@@ -389,6 +362,40 @@ mod imp {
             }
         });
     }
+}
+
+#[cfg(target_os = "macos")]
+mod imp {
+    use super::common;
+    use crate::recorder::Recorder;
+    use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
+    use core_graphics::event::{
+        CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
+        CGEventType, EventField,
+    };
+    use std::sync::Arc;
+
+    use tauri::{tray::TrayIcon, AppHandle};
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXIsProcessTrusted() -> bool;
+    }
+
+    pub fn accessibility_trusted() -> bool {
+        // SAFETY: AXIsProcessTrusted takes no pointers and only reports the
+        // current process' macOS Accessibility trust state.
+        unsafe { AXIsProcessTrusted() }
+    }
+
+    fn key_for_name(name: &str) -> (i64, CGEventFlags) {
+        match name {
+            "right_control" => (0x3E, CGEventFlags::CGEventFlagControl),
+            "right_command" => (0x36, CGEventFlags::CGEventFlagCommand),
+            "right_shift" => (0x3C, CGEventFlags::CGEventFlagShift),
+            _ => (0x3D, CGEventFlags::CGEventFlagAlternate), // right_option (default)
+        }
+    }
 
     pub fn spawn(
         recorder: Arc<Recorder>,
@@ -421,15 +428,15 @@ mod imp {
                             if toggle_mode {
                                 if is_key_down {
                                     if recorder.is_recording() {
-                                        ptt_up(&recorder, &tray_icon, &app_for_callback);
+                                        common::ptt_up(&recorder, &tray_icon, &app_for_callback);
                                     } else {
-                                        ptt_down(&recorder, &tray_icon, &app_for_callback);
+                                        common::ptt_down(&recorder, &tray_icon, &app_for_callback);
                                     }
                                 }
                             } else if is_key_down {
-                                ptt_down(&recorder, &tray_icon, &app_for_callback);
+                                common::ptt_down(&recorder, &tray_icon, &app_for_callback);
                             } else {
-                                ptt_up(&recorder, &tray_icon, &app_for_callback);
+                                common::ptt_up(&recorder, &tray_icon, &app_for_callback);
                             }
                         }
                     }
@@ -449,10 +456,10 @@ mod imp {
                     let app_for_emit = app_for_error.clone();
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_millis(1200));
-                        emit_critical(
+                        common::emit_critical(
                             &app_for_emit,
                             "ui-error",
-                            UiError {
+                            common::UiError {
                                 kind: "hotkey-permission",
                                 message: message.to_string(),
                                 recoverable: true,
@@ -475,43 +482,181 @@ mod imp {
             CFRunLoop::run_current();
         });
     }
-
 }
 
 #[cfg(not(target_os = "macos"))]
 mod imp {
+    //! Windows + Linux/X11 push-to-talk via `rdev`.
+    //!
+    //! `rdev::listen` installs a global keyboard hook (Win32 `SetWindowsHookEx`
+    //! on Windows, X11 `XRecord` on Linux) and invokes the supplied callback
+    //! for every key event system-wide. We translate `KeyPress` / `KeyRelease`
+    //! against the configured hotkey into `common::ptt_down` / `common::ptt_up`.
+    //!
+    //! Wayland: `rdev` only supports X11. If `XDG_SESSION_TYPE=wayland` is set
+    //! we do NOT call `rdev::listen` (it would either crash or silently fail
+    //! to receive events). Instead we emit a `ui-error` so the frontend can
+    //! surface a clear "Wayland not supported" message.
+
+    use super::common;
     use crate::recorder::Recorder;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use tauri::{tray::TrayIcon, AppHandle};
 
-    /// Non-macOS stub. The current push-to-talk implementation is built on
-    /// CGEventTap, which is mac-only; Windows and Linux will need their own
-    /// implementations (raw input / evdev / global-hotkey crate) before this
-    /// compiles to a working hotkey path. Until then the app starts cleanly
-    /// but logs that the hotkey backend is unavailable on this platform.
-    ///
-    /// Signature must match the macOS `spawn` exactly so `lib.rs::run` can
-    /// keep its single call site unchanged.
-    pub fn spawn(
-        _recorder: Arc<Recorder>,
-        _tray_icon: TrayIcon,
-        _app: AppHandle,
-        _hotkey_state: Arc<parking_lot::RwLock<crate::settings::HotkeyConfig>>,
-    ) {
-        tracing::error!(
-            "[hotkey] unsupported platform — global push-to-talk hotkey is only \
-            implemented on macOS. The app will start but no hotkey will be bound."
-        );
+    pub fn accessibility_trusted() -> bool {
+        // Windows: no equivalent permission gate — global hooks just work.
+        // Linux/X11: same. Linux/Wayland: we explicitly mark unsupported in
+        // `spawn`, but there is no per-process trust bit to consult; return
+        // `false` only when we know we cannot bind at all.
+        #[cfg(target_os = "linux")]
+        {
+            if is_wayland() {
+                return false;
+            }
+        }
+        true
     }
 
+    #[cfg(target_os = "linux")]
+    fn is_wayland() -> bool {
+        std::env::var("XDG_SESSION_TYPE")
+            .map(|v| v.eq_ignore_ascii_case("wayland"))
+            .unwrap_or(false)
+    }
+
+    /// Map config key names (shared with macOS) to `rdev::Key` variants.
+    /// The default (and the only canonical TurboTalk key) is `right_option`,
+    /// which on Windows/Linux is the Right Alt key — `rdev::Key::AltGr`.
+    fn key_for_name(name: &str) -> rdev::Key {
+        match name {
+            "right_control" => rdev::Key::ControlRight,
+            "right_command" => rdev::Key::MetaRight,
+            "right_shift" => rdev::Key::ShiftRight,
+            // "right_option" or anything unknown → Right Alt (AltGr on Win/X11).
+            _ => rdev::Key::AltGr,
+        }
+    }
+
+    pub fn spawn(
+        recorder: Arc<Recorder>,
+        tray_icon: TrayIcon,
+        app: AppHandle,
+        hotkey_state: Arc<parking_lot::RwLock<crate::settings::HotkeyConfig>>,
+    ) {
+        // Wayland fast-fail: emit a clear ui-error and return without binding.
+        #[cfg(target_os = "linux")]
+        {
+            if is_wayland() {
+                let app_for_emit = app.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(1200));
+                    common::emit_critical(
+                        &app_for_emit,
+                        "ui-error",
+                        common::UiError {
+                            kind: "hotkey-unsupported",
+                            message: "Push-to-talk on Linux requires X11. \
+                                Wayland sessions are not supported. Log out and pick \
+                                an X11 / Xorg session from your display manager."
+                                .to_string(),
+                            recoverable: false,
+                        },
+                    );
+                });
+                tracing::error!(
+                    "[hotkey] Wayland session detected — global push-to-talk hook \
+                    is not available on Wayland."
+                );
+                return;
+            }
+        }
+
+        // Clone an app handle for the failure path before moving `app` into
+        // the listener closure.
+        let app_for_error = app.clone();
+
+        std::thread::spawn(move || {
+            // Track the current logical hotkey state so we don't double-fire on
+            // OS auto-repeat (Windows in particular re-emits KeyPress while the
+            // key is held). `rdev` does not deduplicate.
+            let down = Arc::new(AtomicBool::new(false));
+
+            // The `rdev::listen` callback is `Fn + 'static + Send`, owns
+            // everything it captures, and runs on the listener thread. All
+            // heavy work is delegated to `common::ptt_down` / `ptt_up`, which
+            // already spawn worker threads internally.
+            let recorder = recorder;
+            let tray_icon = tray_icon;
+            let app = app;
+            let hotkey_state = hotkey_state;
+            let down_for_cb = down.clone();
+            let app_for_error = app_for_error;
+
+            let result = rdev::listen(move |event: rdev::Event| {
+                // Read current config under RwLock — nanoseconds, uncontended.
+                let (target_key, toggle_mode) = {
+                    let hk = hotkey_state.read();
+                    (key_for_name(&hk.key), hk.mode == "toggle")
+                };
+
+                match event.event_type {
+                    rdev::EventType::KeyPress(key) if key == target_key => {
+                        // De-dup OS auto-repeat: only act on the *transition*
+                        // from up→down. Subsequent KeyPress events while held
+                        // are ignored.
+                        let was_down = down_for_cb.swap(true, Ordering::AcqRel);
+                        if was_down {
+                            return;
+                        }
+                        if toggle_mode {
+                            if recorder.is_recording() {
+                                common::ptt_up(&recorder, &tray_icon, &app);
+                            } else {
+                                common::ptt_down(&recorder, &tray_icon, &app);
+                            }
+                        } else {
+                            common::ptt_down(&recorder, &tray_icon, &app);
+                        }
+                    }
+                    rdev::EventType::KeyRelease(key) if key == target_key => {
+                        let was_down = down_for_cb.swap(false, Ordering::AcqRel);
+                        if !was_down {
+                            return;
+                        }
+                        if !toggle_mode {
+                            common::ptt_up(&recorder, &tray_icon, &app);
+                        }
+                        // Toggle mode: KeyRelease is a no-op; toggling happens
+                        // on every KeyPress.
+                    }
+                    _ => {}
+                }
+            });
+
+            if let Err(e) = result {
+                tracing::error!("[hotkey] rdev::listen failed: {:?}", e);
+                let _ = down; // closure consumed `down_for_cb`; avoid unused warning
+                // Surface to UI via the cloned-outside-thread `app_for_error`.
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(1200));
+                    common::emit_critical(
+                        &app_for_error,
+                        "ui-error",
+                        common::UiError {
+                            kind: "hotkey-bind-failed",
+                            message:
+                                "Push-to-talk hotkey could not be bound. Restart Turbo Talk and \
+                                try again."
+                                    .to_string(),
+                            recoverable: true,
+                        },
+                    );
+                });
+            }
+        });
+    }
 }
 
-pub use imp::spawn;
-
-#[cfg(target_os = "macos")]
 pub use imp::accessibility_trusted;
-
-#[cfg(not(target_os = "macos"))]
-pub fn accessibility_trusted() -> bool {
-    false
-}
+pub use imp::spawn;
