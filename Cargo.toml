@@ -9,7 +9,7 @@ await_holding_lock   = "deny"
 needless_collect     = "warn"
 
 [patch."https://github.com/eldo9000/Libre-Apps.git"]
-librewin-common = { path = "../Libre-Apps/common" }
+librewin-common = { path = "vendor/librewin-common" }
 
 [profile.release]
 panic = "abort"
