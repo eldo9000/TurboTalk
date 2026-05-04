@@ -1,0 +1,119 @@
+# =============================================================================
+# TurboTalk — Unsigned Beta Release Pipeline
+# =============================================================================
+#
+# Builds unsigned beta artifacts for macOS (arm64), Windows (x64), and
+# Linux (x64) on tag push (v*), uploads them as workflow artifacts, and
+# attaches them to a draft GitHub release.
+#
+# UNSIGNED. This is a personal-use beta — no Apple, Windows, or Linux
+# trust-chain credentials are referenced anywhere below.
+#
+# IMPORTANT — sidecar binaries:
+#   The Win/Linux legs of the matrix will FAIL until TASK-25/26/27 land:
+#     - TASK-25: Windows whisper.cpp sidecar binaries
+#     - TASK-26: Linux whisper.cpp sidecar binaries
+#     - TASK-27: `npm run fetch-sidecars` script that downloads the per-OS
+#                whisper binaries into `src-tauri/binaries/` at build time.
+#   Only the macOS leg is expected to succeed today. The workflow is wired
+#   now so that once those tasks land, no separate setup PR is needed —
+#   a tag push will Just Work.
+#
+# Manual `workflow_dispatch` runs build but do NOT publish a release.
+# =============================================================================
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build (${{ matrix.target_label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target_label: macos-arm64
+          - os: windows-latest
+            target_label: windows-x64
+          - os: ubuntu-latest
+            target_label: linux-x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux Tauri prerequisites
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libfuse2
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Package
+        run: npm run package
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: turbotalk-${{ matrix.target_label }}
+          path: dist-artifacts/*
+          if-no-files-found: error
+
+  release:
+    name: draft release
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+
+      - name: Create draft GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            dist-artifacts/**/* \
+            --draft \
+            --title "${{ github.ref_name }}" \
+            --notes-from-tag
