@@ -50,33 +50,36 @@ pub struct DiagnosticsResult {
 /// `transcribe.rs::find_whisper`, but without failing on a bad configured path.
 /// Returns `(resolved_path_string, exists_and_executable)`.
 fn check_sidecar() -> (String, bool) {
-    let sidecar = "whisper-cli-aarch64-apple-darwin";
+    let sidecars = ["whisper-cli", "whisper-cli-aarch64-apple-darwin"];
 
     // Release bundle: next to the running executable.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            let p = parent.join(sidecar);
-            if p.exists() {
-                let ok = is_executable(&p);
-                return (p.to_string_lossy().into_owned(), ok);
+            for sidecar in sidecars {
+                let p = parent.join(sidecar);
+                if p.exists() {
+                    let ok = is_executable(&p);
+                    return (p.to_string_lossy().into_owned(), ok);
+                }
             }
         }
     }
 
     // Dev mode: src-tauri/binaries/ at compile time.
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("binaries")
-        .join(sidecar);
-    if dev.exists() {
-        let ok = is_executable(&dev);
-        return (dev.to_string_lossy().into_owned(), ok);
+    for sidecar in sidecars {
+        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries")
+            .join(sidecar);
+        if dev.exists() {
+            let ok = is_executable(&dev);
+            return (dev.to_string_lossy().into_owned(), ok);
+        }
     }
 
     (
         format!(
-            "not found (checked exe dir and {}/binaries/{})",
-            env!("CARGO_MANIFEST_DIR"),
-            sidecar
+            "not found (checked exe dir and {}/binaries for whisper-cli)",
+            env!("CARGO_MANIFEST_DIR")
         ),
         false,
     )

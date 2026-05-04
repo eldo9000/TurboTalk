@@ -16,6 +16,7 @@ pub mod cleanup;
 pub mod diagnostics;
 pub mod hotkey;
 pub mod paste;
+pub mod permissions;
 pub mod recorder;
 pub mod settings;
 pub mod theme;
@@ -426,6 +427,11 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         cancel_recording,
         open_data_folder,
         diagnostics::run_diagnostics,
+        permissions::check_readiness,
+        permissions::request_microphone_permission,
+        permissions::open_system_settings,
+        permissions::restart_app,
+        permissions::prompt_for_accessibility,
     ])
 }
 
@@ -475,6 +481,11 @@ pub fn run() {
             cancel_recording,
             open_data_folder,
             diagnostics::run_diagnostics,
+            permissions::check_readiness,
+            permissions::request_microphone_permission,
+            permissions::open_system_settings,
+            permissions::restart_app,
+            permissions::prompt_for_accessibility,
         ])
         .setup(|app| {
             // ── Tray icon ──────────────────────────────────────────────────
@@ -521,6 +532,21 @@ pub fn run() {
                     } = event
                     {
                         let app = tray.app_handle();
+                        // If recording is active, cancel it instead of opening the window.
+                        // cancel() joins the feeder thread — must run off the main thread
+                        // or the app freezes. Same pattern as ptt_down / ptt_up.
+                        let rec = app.state::<RecorderState>();
+                        if matches!(rec.inner().state(), recorder::State::Recording) {
+                            let rec2  = Arc::clone(rec.inner());
+                            let tray2 = tray.clone();
+                            let app2  = app.clone();
+                            std::thread::spawn(move || {
+                                rec2.cancel();
+                                let _ = tray2.set_icon(Some(tray::make_icon(tray::TrayState::Idle)));
+                                let _ = app2.emit("recording-cancelled", ());
+                            });
+                            return;
+                        }
                         if let Some(win) = app.get_webview_window("main") {
                             center_top(&win);
                             let _ = win.show();
@@ -566,6 +592,11 @@ pub fn run() {
             // ── Shared hotkey state — updated live when settings are saved ──
             let hotkey_state: HotkeyState = Arc::new(RwLock::new(cfg.hotkey.clone()));
             app.manage(hotkey_state.clone());
+
+            // ── Main window — position at launch same as tray-click ──────────
+            if let Some(win) = app.get_webview_window("main") {
+                center_top(&win);
+            }
 
             // ── Overlay — cursor-transparent so clicks always pass through ──
             if let Some(overlay) = app.get_webview_window("overlay") {

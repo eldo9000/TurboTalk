@@ -37,16 +37,16 @@ npm run package
 Expected output paths:
 
 ```
-dist-artifacts/TurboTalk-0.0.1-macos-arm64.dmg
-dist-artifacts/TurboTalk-0.0.1-macos-arm64.dmg.sha256
+dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg
+dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg.sha256
 ```
 
 Verify the DMG is intact with
-`shasum -a 256 -c dist-artifacts/TurboTalk-0.0.1-macos-arm64.dmg.sha256`
-(expect `TurboTalk-0.0.1-macos-arm64.dmg: OK`).
+`shasum -a 256 -c dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg.sha256`
+(expect `TurboTalk-0.8.0-macos-arm64.dmg: OK`).
 
 `dist-artifacts/` is gitignored. The original Tauri-named DMG remains in
-`src-tauri/target/release/bundle/dmg/` if you need it.
+`target/release/bundle/dmg/` if you need it.
 
 ## Artifact naming convention
 
@@ -56,7 +56,7 @@ TurboTalk-<version>-<os>-<arch>.<ext>
 
 | Field | Source | Example |
 |---|---|---|
-| `<version>` | `package.json` `version` (must match `src-tauri/tauri.conf.json`) | `0.0.1` |
+| `<version>` | `package.json` `version` (must match `src-tauri/tauri.conf.json`) | `0.8.0` |
 | `<os>` | platform identifier | `macos`, `windows`, `linux` |
 | `<arch>` | user-facing arch label | `arm64`, `x64` |
 | `<ext>` | platform-native installer | `dmg`, `exe`, `AppImage` |
@@ -72,7 +72,7 @@ After `npm run package` finishes, verify the DMG actually works. This is
 the Block 2 proof gate from `BETA-AUDIT-ROADMAP.md` — until you have
 done this, the build is not proven.
 
-- Open `dist-artifacts/TurboTalk-0.0.1-macos-arm64.dmg`.
+- Open `dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg`.
 - Drag `Turbo Talk.app` to `/Applications`.
 - The build is ad-hoc signed, so launch with right-click → Open the
   first time and accept the Gatekeeper warning.
@@ -216,7 +216,7 @@ waiting on Apple, not stuck.
 Expected output (same path as the dev build):
 
 ```
-dist-artifacts/TurboTalk-0.0.1-macos-arm64.dmg
+dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg
 ```
 
 ### Verify the result
@@ -226,10 +226,10 @@ Run these on the build machine **before** sending the DMG to anyone:
 ```bash
 # Verifies the DMG itself is signed and notarized.
 spctl -a -t open --context context:primary-signature -v \
-  dist-artifacts/TurboTalk-0.0.1-macos-arm64.dmg
+  dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg
 
 # Verifies the .app inside the DMG (mount the DMG first).
-hdiutil attach dist-artifacts/TurboTalk-0.0.1-macos-arm64.dmg
+hdiutil attach dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg
 spctl -a -vv "/Volumes/Turbo Talk/Turbo Talk.app"
 codesign -dv --verbose=4 "/Volumes/Turbo Talk/Turbo Talk.app"
 hdiutil detach "/Volumes/Turbo Talk"
@@ -238,12 +238,12 @@ hdiutil detach "/Volumes/Turbo Talk"
 Healthy `spctl` output for the DMG looks like:
 
 ```
-dist-artifacts/TurboTalk-0.0.1-macos-arm64.dmg: accepted
+dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg: accepted
 source=Notarized Developer ID
 ```
 
 If you see `source=Developer ID` (no "Notarized"), the staple failed —
-re-run `xcrun stapler staple dist-artifacts/TurboTalk-0.0.1-macos-arm64.dmg`
+re-run `xcrun stapler staple dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg`
 and re-verify.
 
 If you see `rejected`, the cert chain is bad or the notary submission

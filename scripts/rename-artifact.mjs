@@ -4,7 +4,7 @@
 // Wired via package.json "package" script (preflight && tauri build && this).
 // macOS-only today: TurboTalk's first beta is mac arm64 (see BETA-AUDIT-ROADMAP.md).
 
-import { readFileSync, mkdirSync, copyFileSync, writeFileSync, statSync } from 'node:fs';
+import { readFileSync, mkdirSync, copyFileSync, writeFileSync, statSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -23,11 +23,12 @@ const version = pkg.version;
 // productName comes from src-tauri/tauri.conf.json ("Turbo Talk").
 // archAlias is "aarch64" for arm64, "x64" for Intel.
 const archAlias = process.arch === 'arm64' ? 'aarch64' : process.arch === 'x64' ? 'x64' : process.arch;
-const sourceDmg = resolve(
-  repoRoot,
-  'src-tauri/target/release/bundle/dmg',
-  `Turbo Talk_${version}_${archAlias}.dmg`,
-);
+const dmgName = `Turbo Talk_${version}_${archAlias}.dmg`;
+const candidateDmgPaths = [
+  resolve(repoRoot, 'target/release/bundle/dmg', dmgName),
+  resolve(repoRoot, 'src-tauri/target/release/bundle/dmg', dmgName),
+];
+const sourceDmg = candidateDmgPaths.find((path) => existsSync(path)) ?? candidateDmgPaths[0];
 
 try {
   const st = statSync(sourceDmg);
@@ -37,7 +38,10 @@ try {
   }
 } catch {
   console.error(`[rename-artifact] expected DMG not found: ${sourceDmg}`);
-  console.error('[rename-artifact] did `tauri build` succeed? Check src-tauri/target/release/bundle/dmg/.');
+  console.error('[rename-artifact] did `tauri build` succeed? Checked:');
+  for (const candidatePath of candidateDmgPaths) {
+    console.error(`[rename-artifact] - ${candidatePath}`);
+  }
   process.exit(1);
 }
 

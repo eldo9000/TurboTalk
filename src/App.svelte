@@ -11,6 +11,17 @@
   // structs in `src-tauri/src/settings.rs`. Adding/removing/renaming a field
   // there produces a TypeScript error here.
   import { commands } from './bindings.ts';
+  import Onboarding from './Onboarding.svelte';
+
+  // First-launch readiness gate. Set to true on mount and on every window
+  // focus if any prerequisite (Accessibility, Microphone, model) regresses.
+  // Onboarding component clears it via onComplete when all three pass.
+  let showOnboarding = $state(true);
+
+  async function recheckReadiness() {
+    const r = await commands.checkReadiness();
+    showOnboarding = !r.ready;
+  }
 
   // Theme — override OS setting with user preference
   let cfgTheme = $state('auto');
@@ -106,6 +117,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfgHotkeyKey = hotkeyKeyPart.startsWith('numpad_') ? hotkeyKeyPart : `${hotkeySide}_${hotkeyKeyPart}`;
     saveSettings();
   }
+
   let cfgHistoryAutoDelete = $state('10d');
   let cfgSaveHistory       = $state(true);
   let showAdvanced         = $state(false);
@@ -411,9 +423,13 @@ Reply with only the single word, lowercase, no punctuation.
     activeTab = 'modes';
     await openModes();
     cfgCleanupMode = 'chaperone';
+    // Expand DOM to the two-column width so the right panel (textareas) is
+    // laid out at its actual display width before we capture scrollHeight.
+    document.documentElement.style.minWidth = `${WINDOW_W * 2}px`;
     await tick();
     await new Promise(r => requestAnimationFrame(r));
     if (outerEl) settingsH = outerEl.scrollHeight;
+    document.documentElement.style.minWidth = '';
     cfgCleanupMode = savedMode;
     activeTab = 'history';
     await tick();
@@ -515,8 +531,19 @@ Reply with only the single word, lowercase, no punctuation.
     }).then(u => unlisteners.push(u));
     listen('open-history', () => switchTab('history')).then(u => unlisteners.push(u));
 
+    // Re-check readiness on window focus — catches "user revoked permission
+    // between sessions" or "model file deleted" without paying for constant
+    // polling. Cheap because checkReadiness is one filesystem stat + two
+    // syscalls.
+    const onFocus = () => { recheckReadiness(); };
+    window.addEventListener('focus', onFocus);
+    // Initial check — replaces the default `showOnboarding = true` once the
+    // backend confirms what's actually granted.
+    recheckReadiness();
+
     return () => {
       window.removeEventListener('keydown', handleKeydown);
+      window.removeEventListener('focus', onFocus);
       unlisteners.forEach(u => u());
     };
   });
@@ -525,12 +552,21 @@ Reply with only the single word, lowercase, no punctuation.
 <div bind:this={outerEl} class="flex flex-col bg-[var(--surface)] {settingsH > 0 || activeTab === 'history' ? 'h-full overflow-hidden' : ''}"
 >
 
-  <!-- ui-error toast stack — fixed top-center, dismissible -->
+  <!-- ui-error toast stack — fixed top-center. Permission-related kinds
+       deep-link to the relevant System Settings pane on click; everything
+       else just dismisses. -->
   {#if uiErrors.length > 0}
     <div class="fixed top-12 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-1.5 pointer-events-none w-[calc(100%-1.5rem)] max-w-[400px]">
       {#each uiErrors as err (err.id)}
         <button
-          onclick={() => { uiErrors = uiErrors.filter(x => x.id !== err.id); }}
+          onclick={async () => {
+            if (err.kind === 'hotkey-permission') {
+              await commands.openSystemSettings('accessibility');
+            } else if (err.kind === 'mic-permission') {
+              await commands.openSystemSettings('microphone');
+            }
+            uiErrors = uiErrors.filter(x => x.id !== err.id);
+          }}
           class="pointer-events-auto px-3 py-2 rounded-lg flex items-center justify-between gap-2 text-left
                  bg-red-500/10 border border-red-500/25 backdrop-blur-sm
                  hover:bg-red-500/15 transition-colors cursor-pointer"
@@ -538,11 +574,21 @@ Reply with only the single word, lowercase, no punctuation.
           <div class="flex flex-col gap-0.5 min-w-0">
             <span class="text-[10px] uppercase tracking-wide text-red-400/70 font-mono">{err.kind}</span>
             <span class="text-[11px] text-red-400 leading-snug">{err.message}</span>
+            {#if err.kind === 'hotkey-permission' || err.kind === 'mic-permission'}
+              <span class="text-[10px] text-red-400/60 leading-snug">Click to open System Settings →</span>
+            {/if}
           </div>
           <span class="shrink-0 text-red-400/60 hover:text-red-400 text-base leading-none">×</span>
         </button>
       {/each}
     </div>
+  {/if}
+
+  <!-- Readiness gate — shown until Accessibility, Microphone, and a model
+       are all green. Re-mounted when readiness regresses (e.g. user revoked
+       a permission between sessions). -->
+  {#if showOnboarding}
+    <Onboarding onComplete={() => { showOnboarding = false; }} />
   {/if}
 
   <!-- Titlebar -->
@@ -571,10 +617,10 @@ Reply with only the single word, lowercase, no punctuation.
       {#each ['history', 'models', 'modes', 'settings'] as tab}
         <button
           onclick={() => switchTab(tab)}
-          class="relative px-3 h-full text-[12px] font-medium capitalize transition-colors pointer-events-auto
+          class="relative px-3 h-full text-[12px] font-medium capitalize transition-[color,opacity] pointer-events-auto
                  {activeTab === tab
                    ? 'text-[var(--text-primary)]'
-                   : 'text-[var(--text-tertiary,#666)] hover:text-[var(--text-secondary)]'}"
+                   : 'text-[var(--text-secondary)] opacity-40 hover:opacity-90'}"
         >
           {tab}
           {#if activeTab === tab}
@@ -638,7 +684,7 @@ Reply with only the single word, lowercase, no punctuation.
         <div class="shrink-0 flex justify-center px-3 py-2 border-t border-[var(--border)]">
           <button
             onclick={clearHistory}
-            class="text-[11px] text-[var(--text-muted)] hover:text-red-400 transition-colors"
+            class="text-[11px] font-medium text-[var(--text-muted)] hover:text-red-400 transition-colors"
           >Clear all</button>
         </div>
       {/if}
@@ -892,8 +938,9 @@ Reply with only the single word, lowercase, no punctuation.
             <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Chaperone</p>
 
             <div class="space-y-1">
-              <label class="text-[var(--text-muted)]">Ollama URL</label>
+              <label for="ollama-url" class="text-[var(--text-muted)]">Ollama URL</label>
               <input
+                id="ollama-url"
                 bind:value={cfgOllamaUrl}
                 onchange={() => saveModes()}
                 class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
@@ -904,8 +951,9 @@ Reply with only the single word, lowercase, no punctuation.
             </div>
 
             <div class="space-y-1">
-              <label class="text-[var(--text-muted)]">Classifier model</label>
+              <label for="classifier-model" class="text-[var(--text-muted)]">Classifier model</label>
               <input
+                id="classifier-model"
                 bind:value={cfgLlmModel}
                 onchange={() => saveModes()}
                 placeholder="llama3.2:3b"
@@ -928,8 +976,9 @@ Reply with only the single word, lowercase, no punctuation.
         <div class="flex-1 overflow-y-auto px-4 py-3 space-y-3 adv-panel-in">
 
           <div class="space-y-1">
-            <label class="text-[var(--text-muted)]">Custom vocabulary</label>
+            <label for="custom-vocabulary" class="text-[var(--text-muted)]">Custom vocabulary</label>
             <textarea
+              id="custom-vocabulary"
               bind:value={cfgVocabulary}
               onchange={() => saveModes()}
               rows="4"
@@ -943,8 +992,9 @@ Reply with only the single word, lowercase, no punctuation.
           </div>
 
           <div class="space-y-1">
-            <label class="text-[var(--text-muted)]">Classifier prompt</label>
+            <label for="classifier-prompt" class="text-[var(--text-muted)]">Classifier prompt</label>
             <textarea
+              id="classifier-prompt"
               bind:value={cfgClassifierPrompt}
               onchange={() => saveModes()}
               rows="10"
@@ -1080,8 +1130,9 @@ Reply with only the single word, lowercase, no punctuation.
           </div>
         </div>
         <div class="space-y-1">
-          <label class="block text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Auto-delete history</label>
+          <label for="history-auto-delete" class="block text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Auto-delete history</label>
           <select
+            id="history-auto-delete"
             bind:value={cfgHistoryAutoDelete}
             onchange={() => saveSettings()}
             disabled={!cfgSaveHistory}
@@ -1121,26 +1172,32 @@ Reply with only the single word, lowercase, no punctuation.
           />
           <span class="text-[var(--text-secondary)]">Launch at login</span>
         </label>
-        <div class="flex items-center gap-2 pt-0.5">
-          <button
-            onclick={copyDiagnostics}
-            class="px-3 py-1 rounded border border-[var(--border)] text-[11px] font-medium
-                   text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--accent)]
-                   transition-colors whitespace-nowrap"
-          >Copy diagnostics</button>
-          {#if copiedDiagnostics}
-            <span class="text-[11px] text-[var(--accent)]">Copied</span>
-          {/if}
-        </div>
-        <div class="flex items-center gap-2">
-          <button
-            onclick={() => commands.openDataFolder()}
-            class="px-3 py-1 rounded border border-[var(--border)] text-[11px] font-medium
-                   text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--accent)]
-                   transition-colors whitespace-nowrap"
-          >Open data folder</button>
-        </div>
       </div>
+
+      {#if import.meta.env.DEV}
+        <div class="px-4 py-3 space-y-2 border-t border-red-500/20 mt-auto">
+          <p class="text-[10px] font-semibold uppercase tracking-widest text-red-400/70">Dev</p>
+          <div class="flex items-center gap-2">
+            <button
+              onclick={copyDiagnostics}
+              class="px-3 py-1 rounded border border-red-500/30 text-[11px] font-medium
+                     text-red-400/80 hover:text-red-300
+                     hover:border-red-500/70 transition-colors whitespace-nowrap"
+            >Copy diagnostics</button>
+            {#if copiedDiagnostics}
+              <span class="text-[11px] text-red-400/70">Copied</span>
+            {/if}
+          </div>
+          <div class="flex items-center gap-2">
+            <button
+              onclick={() => commands.openDataFolder()}
+              class="px-3 py-1 rounded border border-red-500/30 text-[11px] font-medium
+                     text-red-400/80 hover:text-red-300
+                     hover:border-red-500/70 transition-colors whitespace-nowrap"
+            >Open data folder</button>
+          </div>
+        </div>
+      {/if}
 
     </div>
   {/if}
@@ -1149,31 +1206,38 @@ Reply with only the single word, lowercase, no punctuation.
   {#if aboutOpen}
     <div
       class="about-backdrop {aboutClosing ? 'about-backdrop-out' : 'about-backdrop-in'}"
-      onclick={closeAbout}
+      onclick={(event) => {
+        if (event.target === event.currentTarget) {
+          closeAbout();
+        }
+      }}
+      onkeydown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ' || event.key === 'Escape') {
+          event.preventDefault();
+          closeAbout();
+        }
+      }}
       role="button"
-      tabindex="-1"
+      tabindex="0"
       aria-label="Close about"
     >
       <div
         class="about-card {aboutClosing ? 'about-card-out' : 'about-card-in'}"
         role="dialog"
         aria-modal="true"
+        tabindex="-1"
       >
         <div class="flex flex-col items-center gap-0.5 pb-3 border-b border-[var(--border)]">
           <span class="text-[18px] font-semibold tracking-tight text-[var(--text-primary)]">Turbo Talk</span>
-          <span class="text-[10px] text-[var(--text-muted)] tabular-nums">v0.0.1</span>
+          <span class="text-[10px] text-[var(--text-muted)] tabular-nums">v0.8.0</span>
           <p class="text-[var(--text-secondary)] text-[11px] leading-snug mt-1.5 text-center">
             Personal voice dictation for macOS.<br>Speak anywhere, paste everywhere.
           </p>
         </div>
         <div class="flex flex-col gap-0 pt-2.5">
-          <div class="flex justify-between items-center py-1 border-b border-[var(--border-subtle,rgba(255,255,255,0.06))]">
+          <div class="flex justify-between items-center py-1">
             <span class="text-[10px] text-[var(--text-muted)]">Powered by</span>
             <span class="text-[10px] text-[var(--text-secondary)]">whisper.cpp · Ollama</span>
-          </div>
-          <div class="flex justify-between items-center py-1">
-            <span class="text-[10px] text-[var(--text-muted)]">Hotkey</span>
-            <span class="text-[10px] text-[var(--text-secondary)]">{KEY_DISPLAY[cfgHotkeyKey] ?? cfgHotkeyKey} · {cfgHotkeyMode === 'toggle' ? 'toggle' : 'hold'}</span>
           </div>
         </div>
       </div>
