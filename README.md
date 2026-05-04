@@ -17,11 +17,9 @@ Voice dictation for getting work done.
 
 Every other dictation tool is built around a feature list. You get a dropdown of 40 models, a settings panel with 12 tabs, and a history buried three clicks deep. They optimized for "supported" instead of "usable."
 
-TurboTalk is built the other way. Every decision starts with: *does this get in the way?* If yes, cut it.
-
 ---
 
-## The things that actually matter
+## Features
 
 ### History you can reach in one click
 
