@@ -4,13 +4,56 @@ Voice dictation for getting work done.
 
 ---
 
-## Setup
+## Supported platforms
+
+| OS | Arch | Install | Signed? | Known limits |
+|---|---|---|---|---|
+| macOS 12+ | arm64 (Apple Silicon) | `.dmg` | Ad-hoc only (not notarized) | First launch needs right-click → Open |
+| Windows 10 (1809+) / 11 | x64 | `.exe` (NSIS) — **beta in progress** | Unsigned | SmartScreen warns on first run; needs WebView2 runtime |
+| Linux | x64 | `.AppImage` — **beta in progress** | Unsigned | **X11 only — Wayland not supported.** Needs FUSE (`libfuse2`) |
+
+Windows and Linux artifacts are not yet published to the releases page. The build procedures are in `RELEASING.md` and will produce real artifacts once the bundled Whisper sidecar binaries for those platforms land. Until then, only the macOS DMG is downloadable.
+
+---
+
+## Install — macOS
 
 1. Download the DMG from the [releases page](https://github.com/eldo9000/TurboTalk-App/releases) and drag `Turbo Talk.app` into `/Applications`.
-2. First launch — right-click → **Open** (the beta is ad-hoc signed, not yet Apple-notarized; macOS will refuse a normal double-click the first time).
-3. Walk through the three-step onboarding wizard: grant Accessibility → grant Microphone → pick a transcription model (the recommended one is the right answer for almost everyone).
-4. Open Settings, set your trigger key — left or right Option / Control / Command / Shift, or any numpad key — and choose hold-to-talk or toggle.
-5. Start dictating.
+2. First launch: **right-click → Open** (the beta is ad-hoc signed, not notarized — macOS will refuse a normal double-click the first time).
+3. Walk through the three-step onboarding wizard: grant Accessibility → grant Microphone → pick a transcription model.
+4. Open Settings, set your trigger key, choose hold-to-talk or toggle.
+5. Open TextEdit, hold the trigger key, say "hello world", release — your sentence appears at the cursor.
+
+## Install — Windows
+
+> Beta in progress — once the Win sidecar binary is bundled, the `.exe` will appear on the releases page.
+
+1. Download `TurboTalk-<version>-windows-x64-setup.exe` from the releases page.
+2. Double-click. Windows SmartScreen will show **"Windows protected your PC"** because the installer is unsigned. Click **More info → Run anyway** to proceed.
+3. Complete the NSIS installer.
+4. If the app fails to launch with a WebView2 error (most common on Windows 10), install the WebView2 Evergreen runtime from <https://developer.microsoft.com/microsoft-edge/webview2/>. Windows 11 ships with it preinstalled.
+5. Launch TurboTalk from the Start menu, complete onboarding, set your trigger key.
+6. Open Notepad, hold the trigger key, say "hello world", release — your sentence appears at the cursor.
+
+## Install — Linux (X11)
+
+> Beta in progress — once the Linux sidecar binary is bundled, the AppImage will appear on the releases page.
+
+1. **Confirm you are on an X11 session.** Run `echo $XDG_SESSION_TYPE` — it must print `x11`. If it prints `wayland`, log out and pick the "Xorg" or "X11" variant of your desktop at the login screen. See the Wayland note below.
+2. Install FUSE if your distro doesn't have it: `sudo apt install libfuse2` (Debian/Ubuntu) or your distro's equivalent. AppImage requires FUSE to run.
+3. Download `TurboTalk-<version>-linux-x64.AppImage`, mark it executable, and run it:
+
+   ```bash
+   chmod +x TurboTalk-<version>-linux-x64.AppImage
+   ./TurboTalk-<version>-linux-x64.AppImage
+   ```
+
+4. Complete onboarding, set your trigger key.
+5. Open `gedit` (or any text editor), hold the trigger key, say "hello world", release — your sentence appears at the cursor.
+
+### Wayland note
+
+Wayland is not supported and is not on the roadmap for this beta. Wayland compositors deliberately block the kind of system-wide keystroke injection TurboTalk needs to paste your transcript into the focused app — that's a security feature of the protocol, not an app bug. On X11, those primitives (`xtest` / `XSendEvent`) work; on Wayland, the compositor refuses them and there is no portable replacement. If your distro defaults to Wayland, log out and choose the X11 / Xorg variant of your desktop at the login screen.
 
 ---
 
@@ -28,7 +71,7 @@ Your last 50 dictations are on the History tab. Click any entry to copy it. That
 
 ### A UI you can actually read
 
-Zoom from 100% to 200% in 25% steps with `Cmd+=` and `Cmd+−`. Resets to 100% with `Cmd+0`. Zoom level persists. If you're dictating from across the room or you just want bigger text, you get bigger text — without touching a settings page.
+Zoom from 100% to 200% in 25% steps with `Cmd+=` and `Cmd+−` (Ctrl on Win/Linux). Resets to 100% with `Cmd+0` / `Ctrl+0`. Zoom level persists. If you're dictating from across the room or you just want bigger text, you get bigger text — without touching a settings page.
 
 ### Three models, one obvious choice
 
@@ -46,10 +89,10 @@ If you already have a Whisper `.bin` file you trust, paste the path. It works.
 
 ### Stays out of your way
 
-- **Fully customizable trigger key.** Press-and-hold or toggle. Left or right Option, Control, Command, or Shift, or any numpad key. The overlay shows a waveform while you speak and "Transcribing…" while it works. Then it disappears.
-- **Red dot in the titlebar** while recording. Amber while transcribing. Gone when done. You always know the state.
+- **Fully customizable trigger key.** Press-and-hold or toggle. On macOS: left or right Option, Control, Command, or Shift, or any numpad key. On Windows/Linux: equivalent modifiers (Alt, Ctrl, Shift, Win/Super) and numpad keys.
+- **Status indicator in the titlebar/tray** while recording and transcribing. You always know the state.
 - **Close hides to tray.** The app doesn't quit when you close the window — it's still listening for your hotkey. Quit from the tray when you actually mean it.
-- **Error toasts are specific and clickable.** "Recording too short" tells you the duration. A missing-permission toast deep-links you straight to the right pane in System Settings — no hunting.
+- **Error toasts are specific and clickable.** "Recording too short" tells you the duration. A missing-permission toast deep-links you straight to the right system settings pane — no hunting.
 
 ### Cleans up your speech (optionally)
 
@@ -74,25 +117,39 @@ A simple app is not an excuse for sloppy work. The parts that don't show up in a
 
 ### Permissions the app will request
 
-The onboarding wizard walks you through both. You should never have to find these manually.
+The onboarding wizard walks you through whatever your platform requires. You should never have to find these manually.
 
-- **Microphone** — to capture audio while you hold the trigger key. Without this, no recording happens.
+**macOS**
+
+- **Microphone** — to capture audio while you hold the trigger key.
 - **Accessibility** (System Settings → Privacy & Security → Accessibility) — required twice over: (1) for the global push-to-talk hotkey, which uses a `CGEventTap` to observe modifier-key flag changes, and (2) for the paste step, which sends `Cmd+V` to the focused app via `System Events`. If you see a `paste-error` toast saying "check Accessibility permission", this is why.
 
-No other system permissions are requested. There is no Automation prompt per app, no Full Disk Access, no Screen Recording.
+No other macOS system permissions are requested. There is no Automation prompt per app, no Full Disk Access, no Screen Recording.
+
+**Windows**
+
+- **Microphone** — Settings → Privacy & security → Microphone. Windows will prompt the first time TurboTalk records.
+- No other system permissions are needed. Global hotkey + paste injection do not require any explicit grant on Windows.
+
+**Linux (X11)**
+
+- No system permissions are requested. PulseAudio/PipeWire grants mic access by default, and X11 allows the global hotkey + paste injection without explicit per-app permission.
 
 ### Local data
 
-- **Config + history:** `~/.config/librewin/turbotalk/` — holds `config.toml` (settings) and `history.json` (last 50 dictations).
-- **Whisper models:** `~/.config/librewin/turbotalk/models/` — `.bin` files downloaded via the Models tab live here.
-- **Audio temp files:** `turbotalk-*.wav` written to the system temp dir (`/tmp` on macOS) for each dictation. Each file is deleted automatically the moment its dictation finishes — successful, failed, or cancelled.
-- **Delete everything:** quit from the tray, then `rm -rf ~/.config/librewin/turbotalk/`.
+- **Config + history (macOS):** `~/.config/librewin/turbotalk/` — holds `config.toml` (settings) and `history.json` (last 50 dictations).
+- **Config + history (Windows):** `%APPDATA%\librewin\turbotalk\` — same files.
+- **Config + history (Linux):** `~/.config/librewin/turbotalk/` — same files.
+- **Whisper models:** under the same `librewin/turbotalk/models/` directory — `.bin` files downloaded via the Models tab live here.
+- **Audio temp files:** `turbotalk-*.wav` written to the system temp dir (`/tmp` on macOS/Linux, `%TEMP%` on Windows) for each dictation. Each file is deleted automatically the moment its dictation finishes — successful, failed, or cancelled.
+- **Delete everything:** quit from the tray, then delete the `librewin/turbotalk/` directory listed for your platform above.
 
 ### Known limitations
 
-- Apple Silicon only. No Intel-Mac, Windows, or Linux build.
-- Ad-hoc signed only — not Apple-notarized. Expect a Gatekeeper warning on first launch (right-click → Open the first time).
-- No auto-updater. Re-download the DMG to update.
+- **macOS:** Apple Silicon only. Ad-hoc signed only — not Apple-notarized. Expect a Gatekeeper warning on first launch (right-click → Open the first time).
+- **Windows:** Unsigned `.exe` — SmartScreen will show a "Windows protected your PC" warning the first time you run the installer. Click **More info → Run anyway** to proceed. WebView2 runtime is required (preinstalled on Windows 11; Windows 10 users may need <https://developer.microsoft.com/microsoft-edge/webview2/>).
+- **Linux:** X11 only — **Wayland is not supported.** AppImage requires FUSE (`libfuse2` on Debian/Ubuntu). Tray-icon support depends on your desktop's AppIndicator support (GNOME may need an extension).
+- **All platforms:** No auto-updater. Re-download to update.
 - History is saved to disk by default, retained for 10 days. Configurable in Settings — choose `restart` (clear on launch), `1d`, `5d`, `10d`, or `30d`. Capped at 50 entries either way.
 - The Chaperone cleanup mode requires a local Ollama install. If you don't run Ollama, leave cleanup on `Off` or `Simple`.
 
