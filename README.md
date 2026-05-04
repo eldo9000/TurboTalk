@@ -63,16 +63,12 @@ Raw Whisper output is good. It can be better. Three levels:
 
 ## For Engineers
 
-The parts that don't show up in a feature list but represent most of the real work — and why this isn't a vibe-coded weekend project:
+A simple app is not an excuse for sloppy work. The parts that don't show up in a feature list but represent most of the real effort:
 
-- **First-launch can't fail silently.** A three-step readiness gate (Accessibility, Microphone, a working transcription model) sits in front of the main UI. The hotkey doesn't get bound, the recorder doesn't get spawned, until all three are green. If you revoke a permission later or delete the model file, the wizard re-arms the next time you click back into the window — no dead push-to-talk that takes ten minutes to diagnose.
-- **One audio path, no codec gymnastics.** Whatever mic you record from — built-in, AirPods, USB interface — every recording hits the same fixed six-stage pipeline before Whisper sees it. Same sample rate, same loudness target, same trim rules. A bug in one mic isn't a bug in all of them.
-- **Every dictation logs its own timing.** Each stage (downmix, resample, voice-activity trim, normalize, write, transcribe, paste) is timed and stamped with a per-job id. Performance work runs against measured numbers, not vibes.
-- **You can't start two dictations at once.** The recorder is a six-state lifecycle. Mash the hotkey while one's in flight and you get a "busy" event — never a phantom second job racing the first one's paste.
-- **The paste destination is verified, not assumed.** The frontmost app is captured when recording starts and again immediately before paste. If they're different, you get a banner — the transcript still goes through, but you know the focus changed and can react. No silent paste into the wrong window.
-- **Hot models stay hot.** The voice-activity-detection session is built once and reused across every recording, so each dictation doesn't pay a cold-start tax for an ONNX session it just tore down.
-- **Local-only by design.** All transcription, cleanup, history — your machine, every time. No cloud calls, no telemetry, no analytics. The optional Chaperone cleanup uses a local Ollama install; everything else is fully offline.
-- **Manual updates are a deliberate choice.** Auto-update is a code-execution channel into your machine. Until there's a long-lived signing key with a documented rotation/loss procedure and stable artifact hosting, shipping new versions = re-download the DMG. Slower, but a known quantity.
+- **Tight code, real security review.** Every IPC boundary, file read, shell-out, and untrusted-input path has been audited for the obvious bug classes. No opaque cloud SDKs in the dependency graph. Local-only by design — no cloud calls, no telemetry, no analytics — and that's enforced at the architecture level, not buried in a privacy policy.
+- **Built to not freeze under fire.** Dictation is rapid-fire — you'll mash the hotkey before the last paste finishes, switch focus mid-recording, walk away with AirPods still on. Every one of those paths has an explicit handler that recovers cleanly. You'll see a banner; you won't see a hang. The recorder is a single-job state machine, so a phantom second recording can't race the first one's paste.
+- **One deliberate audio chain.** Whatever mic you record from, every recording hits the same fixed pipeline before Whisper sees it: downmix → resample to 16 kHz → voice-activity trim → loudness normalize → clean WAV. Same shape in, same accuracy out. Each stage is timed per dictation, so optimization runs on measured numbers, not vibes.
+- **Power users aren't an afterthought.** Chaperone mode routes your transcript through a local Ollama model with your own vocabulary list, your own classifier prompt, and per-context formatting (prose vs. code vs. shell command). Off and Simple modes are there if you don't need it — the headroom is there if you do.
 
 ---
 
