@@ -6,10 +6,11 @@ Voice dictation for getting work done.
 
 ## Setup
 
-- Download and install from the releases page.
-- Select a model from the Models tab. 
-- Set your trigger key and mode in Settings. 
-- Start dictating. 
+1. Download the DMG from the [releases page](https://github.com/eldo9000/TurboTalk-App/releases) and drag `Turbo Talk.app` into `/Applications`.
+2. First launch — right-click → **Open** (the beta is ad-hoc signed, not yet Apple-notarized; macOS will refuse a normal double-click the first time).
+3. Walk through the three-step onboarding wizard: grant Accessibility → grant Microphone → pick a transcription model (the recommended one is the right answer for almost everyone).
+4. Open Settings, set your trigger key — left or right Option / Control / Command / Shift, or any numpad key — and choose hold-to-talk or toggle.
+5. Start dictating.
 
 ---
 
@@ -27,7 +28,7 @@ Your last 50 dictations are on the History tab. Click any entry to copy it. That
 
 ### A UI you can actually read
 
-Zoom from 100% to 180% with `Cmd+` and `Cmd+−`. Resets to 100% with `Cmd+0`. Zoom level persists. If you're dictating from across the room or you just want bigger text, you get bigger text — without touching a settings page.
+Zoom from 100% to 200% in 25% steps with `Cmd+=` and `Cmd+−`. Resets to 100% with `Cmd+0`. Zoom level persists. If you're dictating from across the room or you just want bigger text, you get bigger text — without touching a settings page.
 
 ### Three models, one obvious choice
 
@@ -45,10 +46,10 @@ If you already have a Whisper `.bin` file you trust, paste the path. It works.
 
 ### Stays out of your way
 
-- **Fully customizable trigger key.** Press-and-hold, toggle, or whatever combination works for how you dictate. Choose from Right Option, Control, Command, or Shift. The overlay shows a waveform while you speak and "Transcribing…" while it works. Then it disappears.
+- **Fully customizable trigger key.** Press-and-hold or toggle. Left or right Option, Control, Command, or Shift, or any numpad key. The overlay shows a waveform while you speak and "Transcribing…" while it works. Then it disappears.
 - **Red dot in the titlebar** while recording. Amber while transcribing. Gone when done. You always know the state.
 - **Close hides to tray.** The app doesn't quit when you close the window — it's still listening for your hotkey. Quit from the tray when you actually mean it.
-- **Error toasts are specific.** "Recording too short" tells you the duration. "Paste failed" tells you to check Accessibility permissions. No generic "something went wrong."
+- **Error toasts are specific and clickable.** "Recording too short" tells you the duration. A missing-permission toast deep-links you straight to the right pane in System Settings — no hunting.
 
 ### Cleans up your speech (optionally)
 
@@ -62,58 +63,43 @@ Raw Whisper output is good. It can be better. Three levels:
 
 ## For Engineers
 
-The parts that don't show up in a feature list but represent most of the real work, this is actually why Turbo Talk is well made:
+The parts that don't show up in a feature list but represent most of the real work — and why this isn't a vibe-coded weekend project:
 
-- **Explicit audio pipeline contract.** Every recording goes through a fixed, non-negotiable path: native mic capture → downmix mono → resample to 16 kHz → Silero VAD trim → min-duration reject → peak normalize to −1 dBFS → write 16 kHz mono 16-bit PCM WAV. This order is documented, tested, and enforced with named constants. No codec detours. No "supported formats." One correct format for Whisper.
-- **Stage timing on every dictation.** Post-release audio finalization is instrumented: downmix, resample, VAD, normalize, and WAV write each emit a timing entry. Optimization decisions are based on measured evidence, not assumptions.
-- **Strictly one in-flight dictation job.** The recorder has a full 6-state lifecycle: `Ready → Recording → FinalizingAudio → Transcribing → Cleaning → Pasting → Ready`. Pressing the hotkey while a job is in any non-Ready state is handled explicitly — a `dictation-busy` event fires, no second job spawns. The foundation for a deliberate queue is there when it's needed.
-- **Transcription, cleanup, and paste are separate named stages.** Whisper runs and returns raw text. Cleanup runs as its own stage. Paste runs as its own stage. Each has its own lifecycle state transition and its own timing. "Transcribing" means Whisper only — not Whisper-plus-postprocessing silently bundled together.
-- **Paste target is observable.** The frontmost app is captured at recording start and again immediately before paste. Both are logged with the job id. If focus changed between the two, a `focus-changed-before-paste` event fires and surfaces a recoverable UI banner. No silent paste into the wrong window.
-- **Silero VAD session reuse.** VAD model initialization (ONNX session construction) is not paid on every dictation. The session is held and reused with per-call state isolation to ensure no speech bounds from a prior recording can influence the next.
-- **Persistent Whisper worker (in progress).** The current model spawns a fresh `whisper-cli` process per recording. Whisper's dominant cost is model load and Metal context setup — not inference. A persistent transcription worker that keeps the model warm between dictations is the next major latency win.
+- **First-launch can't fail silently.** A three-step readiness gate (Accessibility, Microphone, a working transcription model) sits in front of the main UI. The hotkey doesn't get bound, the recorder doesn't get spawned, until all three are green. If you revoke a permission later or delete the model file, the wizard re-arms the next time you click back into the window — no dead push-to-talk that takes ten minutes to diagnose.
+- **One audio path, no codec gymnastics.** Whatever mic you record from — built-in, AirPods, USB interface — every recording hits the same fixed six-stage pipeline before Whisper sees it. Same sample rate, same loudness target, same trim rules. A bug in one mic isn't a bug in all of them.
+- **Every dictation logs its own timing.** Each stage (downmix, resample, voice-activity trim, normalize, write, transcribe, paste) is timed and stamped with a per-job id. Performance work runs against measured numbers, not vibes.
+- **You can't start two dictations at once.** The recorder is a six-state lifecycle. Mash the hotkey while one's in flight and you get a "busy" event — never a phantom second job racing the first one's paste.
+- **The paste destination is verified, not assumed.** The frontmost app is captured when recording starts and again immediately before paste. If they're different, you get a banner — the transcript still goes through, but you know the focus changed and can react. No silent paste into the wrong window.
+- **Hot models stay hot.** The voice-activity-detection session is built once and reused across every recording, so each dictation doesn't pay a cold-start tax for an ONNX session it just tore down.
+- **Local-only by design.** All transcription, cleanup, history — your machine, every time. No cloud calls, no telemetry, no analytics. The optional Chaperone cleanup uses a local Ollama install; everything else is fully offline.
+- **Manual updates are a deliberate choice.** Auto-update is a code-execution channel into your machine. Until there's a long-lived signing key with a documented rotation/loss procedure and stable artifact hosting, shipping new versions = re-download the DMG. Slower, but a known quantity.
 
 ---
 
 ### Permissions the app will request
 
-- **Microphone** — to capture audio while you hold the trigger key. Without
-  this, no recording happens.
-- **Accessibility** (System Settings → Privacy & Security → Accessibility) —
-  required twice over: (1) for the global push-to-talk hotkey, which uses a
-  `CGEventTap` to observe modifier-key flag changes, and (2) for the paste
-  step, which sends `Cmd+V` to the focused app via `System Events`. If you
-  see a `paste-error` toast saying "check Accessibility permission", this is
-  why.
+The onboarding wizard walks you through both. You should never have to find these manually.
 
-No other system permissions are requested. There is no Automation prompt
-per app, no Full Disk Access, no Screen Recording.
+- **Microphone** — to capture audio while you hold the trigger key. Without this, no recording happens.
+- **Accessibility** (System Settings → Privacy & Security → Accessibility) — required twice over: (1) for the global push-to-talk hotkey, which uses a `CGEventTap` to observe modifier-key flag changes, and (2) for the paste step, which sends `Cmd+V` to the focused app via `System Events`. If you see a `paste-error` toast saying "check Accessibility permission", this is why.
+
+No other system permissions are requested. There is no Automation prompt per app, no Full Disk Access, no Screen Recording.
 
 ### Local data
 
-- **Config + history:** `~/.config/librewin/turbotalk/` — holds
-  `config.toml` (settings) and `history.json` (last 50 dictations).
-- **Whisper models:** `~/.config/librewin/turbotalk/models/` — `.bin` files
-  downloaded via the Models tab live here.
-- **Audio temp files:** `turbotalk-*.wav` written to the system temp dir
-  (`/tmp` on macOS) for each dictation. Each file is deleted automatically
-  the moment its dictation finishes — successful, failed, or cancelled.
-- **Delete everything:** quit from the tray, then
-  `rm -rf ~/.config/librewin/turbotalk/`.
+- **Config + history:** `~/.config/librewin/turbotalk/` — holds `config.toml` (settings) and `history.json` (last 50 dictations).
+- **Whisper models:** `~/.config/librewin/turbotalk/models/` — `.bin` files downloaded via the Models tab live here.
+- **Audio temp files:** `turbotalk-*.wav` written to the system temp dir (`/tmp` on macOS) for each dictation. Each file is deleted automatically the moment its dictation finishes — successful, failed, or cancelled.
+- **Delete everything:** quit from the tray, then `rm -rf ~/.config/librewin/turbotalk/`.
 
 ### Known limitations
 
 - Apple Silicon only. No Intel-Mac, Windows, or Linux build.
-- Ad-hoc signed only — not Apple-notarized. Expect a Gatekeeper warning on
-  first launch.
+- Ad-hoc signed only — not Apple-notarized. Expect a Gatekeeper warning on first launch (right-click → Open the first time).
 - No auto-updater. Re-download the DMG to update.
-- History is saved to disk by default, retained for 10 days. Configurable
-  in Settings — choose `restart` (clear on launch), `1d`, `5d`, `10d`, or
-  `30d`. Capped at 50 entries either way.
-- The Chaperone cleanup mode requires a local Ollama install. If you don't
-  run Ollama, leave cleanup on `Off` or `Simple`.
+- History is saved to disk by default, retained for 10 days. Configurable in Settings — choose `restart` (clear on launch), `1d`, `5d`, `10d`, or `30d`. Capped at 50 entries either way.
+- The Chaperone cleanup mode requires a local Ollama install. If you don't run Ollama, leave cleanup on `Off` or `Simple`.
 
 ### Feedback
 
-Personal-use beta — feedback by direct message until a public tracker
-opens.
-
+Personal-use beta — feedback by direct message until a public tracker opens.
