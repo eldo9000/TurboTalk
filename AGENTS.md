@@ -18,7 +18,7 @@
 
 TurboTalk is a personal-use voice dictation utility for macOS. Push-to-talk hotkey → record mic → local Whisper transcription → optional LLM cleanup → paste into the focused app.
 
-It is **not currently a Libre product.** Personal-use scope. If it earns its place, it gets promoted. Until then: private repo, MIT license, no public release.
+It is **not currently a Libre product.** Personal-use scope. If it earns its place, it gets promoted. Until then: private repo, GPL-3.0 license, no public release.
 
 It consumes the Libre-Apps shared foundation (`librewin-common`, `@libre/ui`) but is otherwise standalone.
 
