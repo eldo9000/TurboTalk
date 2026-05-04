@@ -40,6 +40,38 @@ export const commands = {
 	 */
 	openDataFolder: () => typedError<null, string>(__TAURI_INVOKE("open_data_folder")),
 	runDiagnostics: () => __TAURI_INVOKE<DiagnosticsResult>("run_diagnostics"),
+	checkReadiness: () => __TAURI_INVOKE<Readiness>("check_readiness"),
+	/**
+	 *  Trigger the native macOS microphone prompt. Resolves to the new status
+	 *  once the user dismisses the alert. If permission is already determined
+	 *  (granted or denied), AVFoundation calls back synchronously with the
+	 *  existing value — no second prompt is shown.
+	 */
+	requestMicrophonePermission: () => __TAURI_INVOKE<PermissionStatus>("request_microphone_permission"),
+	/**
+	 *  Open a specific pane in macOS System Settings. `pane` is one of:
+	 *    "accessibility" | "microphone" | "input_monitoring"
+	 *  Anything else returns an error so the frontend sees a typed failure
+	 *  instead of silently launching the wrong pane.
+	 */
+	openSystemSettings: (pane: string) => typedError<null, string>(__TAURI_INVOKE("open_system_settings", { pane })),
+	/**
+	 *  Restart the app. Used by the onboarding flow after the user grants
+	 *  Accessibility — `AXIsProcessTrusted()` caches per-process, so a relaunch
+	 *  is the only way to re-evaluate.
+	 */
+	restartApp: () => __TAURI_INVOKE<void>("restart_app"),
+	/**
+	 *  Trigger the native macOS Accessibility prompt. Side-effect: auto-adds
+	 *  the app to the Privacy & Security → Accessibility list (toggled off) so
+	 *  the user has something to enable. Called from the onboarding flow on
+	 *  step 1 before deep-linking to System Settings.
+	 * 
+	 *  Returns the trust status as observed at call time. AXIsProcessTrusted
+	 *  caches per-process, so this will keep returning `Denied` until the user
+	 *  grants and the app is restarted.
+	 */
+	promptForAccessibility: () => __TAURI_INVOKE<PermissionStatus>("prompt_for_accessibility"),
 };
 
 /* Types */
@@ -143,6 +175,19 @@ export type HistoryEntry = {
 export type HotkeyConfig = {
 	key: string,
 	mode: string,
+};
+
+export type PermissionStatus = "granted" | "denied" | "not_determined" | "unsupported";
+
+export type Readiness = {
+	accessibility: PermissionStatus,
+	microphone: PermissionStatus,
+	model_present: boolean,
+	/**
+	 *  True iff all three gates pass — frontend uses this as the
+	 *  "show onboarding vs. show main UI" switch.
+	 */
+	ready: boolean,
 };
 
 export type WhisperConfig = {

@@ -1,6 +1,6 @@
 [package]
 name = "turbotalk"
-version = "0.0.1"
+version = "0.8.0"
 description = "TurboTalk — personal voice dictation utility"
 authors = ["IronTree Software"]
 edition = "2021"
@@ -84,3 +84,8 @@ tauri-specta      = { version = "=2.0.0-rc.24", features = ["derive", "typescrip
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics   = "0.24"
 core-foundation = "0.10"
+# Microphone TCC status query + native prompt (first-launch onboarding).
+objc2               = "0.6"
+objc2-foundation    = "0.3"
+objc2-av-foundation = "0.3"
+block2              = "0.6"

@@ -8,7 +8,8 @@ What this project can honestly claim today. Updated when a claim changes.
 
 ## What works end-to-end
 
-**Full dictation loop** — confirmed 2026-05-01 on macOS 26.4.1 (Apple M4):
+**Full dictation loop** — confirmed 2026-05-01 on macOS 26.4.1 (Apple M4);
+confirmed again by user during v0.8 beta prep on 2026-05-03:
 
 1. Hold Right Alt → mic opens (<200ms), red dot pulses
 2. Speak → audio captured 24 kHz mono F32 via cpal
@@ -17,6 +18,24 @@ What this project can honestly claim today. Updated when a claim changes.
 5. Prior clipboard contents are restored after paste
 
 Proof: `[audio] wrote 42240 samples` (1.76s voice), transcript landed in Notes.app.
+
+## v0.8 beta packaging status — confirmed 2026-05-04
+
+- `npm run package` builds the production frontend, release Rust binary,
+  `Turbo Talk.app`, and macOS arm64 DMG.
+- v0.8 intentionally skips Apple Developer credentials, so the beta is
+  ad-hoc signed and not notarized.
+- The final canonical artifact exists at
+  `dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg` with a matching `.sha256`;
+  `shasum -a 256 -c` passes when run from `dist-artifacts/`.
+- Packaged app diagnostics confirmed microphone input works, model exists, and
+  the bundled sidecar resolves from
+  `/Applications/Turbo Talk.app/Contents/MacOS/whisper-cli`.
+- Packaged global hotkey works after the installed app is manually removed and
+  re-added in macOS Accessibility settings.
+- Temporary beta troubleshooting controls were removed after proof: no
+  production-visible manual record button, copied mic probe details, or debug
+  log command remain.
 
 ## M2 also working — confirmed 2026-05-01
 
@@ -44,8 +63,8 @@ Proof: `[audio] wrote 42240 samples` (1.76s voice), transcript landed in Notes.a
 
 ## What is explicitly not working
 
-- Whisper ships as Homebrew dependency — not bundled as Tauri sidecar yet
-- Codesigning / notarization (M4)
+- Windows/Linux Whisper sidecars are not bundled yet
+- Developer ID codesigning / notarization is intentionally deferred for v0.8
 - Cross-platform paste (Windows / Linux)
 
 ## Key technical decisions

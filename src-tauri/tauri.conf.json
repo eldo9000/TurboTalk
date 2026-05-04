@@ -1,6 +1,6 @@
 {
   "productName": "Turbo Talk",
-  "version": "0.0.1",
+  "version": "0.8.0",
   "identifier": "io.librewin.turbotalk",
   "build": {
     "frontendDist": "../dist",
@@ -58,7 +58,8 @@
     "macOS": {
       "signingIdentity": "-",
       "hardenedRuntime": true,
-      "entitlements": "entitlements.plist"
+      "entitlements": "entitlements.plist",
+      "infoPlist": "Info.plist"
     },
     "icon": [
       "icons/32x32.png",

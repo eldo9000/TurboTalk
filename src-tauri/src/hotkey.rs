@@ -14,17 +14,35 @@
 #[cfg(target_os = "macos")]
 mod imp {
     use crate::audio::{DiscardReason, StopOutcome};
-    use crate::recorder::Recorder;
+    use crate::recorder::{Recorder, RecorderError};
     use crate::tray::{self, TrayState};
     use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
     use core_graphics::event::{
         CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
         CGEventType, EventField,
     };
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
 
     use tauri::{tray::TrayIcon, AppHandle, Emitter};
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXIsProcessTrusted() -> bool;
+    }
+
+    pub fn accessibility_trusted() -> bool {
+        // SAFETY: AXIsProcessTrusted takes no pointers and only reports the
+        // current process' macOS Accessibility trust state.
+        unsafe { AXIsProcessTrusted() }
+    }
+
+    /// Set by `ptt_up` when `rec.stop()` fails because the recorder wasn't
+    /// Recording yet (key-up thread won the scheduler over key-down thread in
+    /// hold mode). `ptt_down` checks this immediately after `rec.start()` and
+    /// cancels the recording instead of showing the overlay, preventing the
+    /// "quick tap → overlay stuck forever" bug.
+    static CANCEL_PENDING: AtomicBool = AtomicBool::new(false);
 
     /// Monotonically-increasing identifier attached to every accepted dictation
     /// job. Incremented exactly once per successful `recorder.start()` so that
@@ -63,6 +81,13 @@ mod imp {
         job_id: u64,
         focus_at_start: Option<String>,
         focus_at_paste: Option<String>,
+    }
+
+    #[derive(Clone, serde::Serialize)]
+    struct UiError {
+        kind: &'static str,
+        message: String,
+        recoverable: bool,
     }
 
     /// Cell shared between `ptt_down` and `ptt_up` so the upstroke worker can
@@ -132,7 +157,16 @@ mod imp {
                 emit_critical(&app, "dictation-busy", rec.state().to_string());
                 return;
             }
-            // Recording was accepted — allocate this job's id.
+            // Recording was accepted. Check if key-up already arrived while
+            // this thread was waiting to be scheduled (quick-tap race in hold
+            // mode). If so, cancel immediately — don't show the overlay.
+            if CANCEL_PENDING.swap(false, Ordering::AcqRel) {
+                rec.cancel();
+                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                return;
+            }
+
+            // Allocate this job's id.
             let job_id = next_job_id();
             *CURRENT_JOB_ID.lock() = Some(job_id);
 
@@ -332,10 +366,20 @@ mod imp {
                     }
                 }
                 Err(e) => {
-                    // Illegal transition (e.g. stop while not Recording) or audio
-                    // pipeline error. The recorder has already returned itself to
-                    // Ready on the error arm. Do NOT emit ptt-up. Restore the tray
-                    // defensively in case this was an audio failure mid-job.
+                    // If stop() failed because the recorder wasn't in Recording
+                    // state yet, this is the quick-tap race: our thread ran before
+                    // ptt_down's thread called start(). Set CANCEL_PENDING so that
+                    // ptt_down cancels as soon as it starts rather than leaving the
+                    // overlay stuck with no future ptt_up to clean it up.
+                    if matches!(
+                        e,
+                        RecorderError::IllegalTransition {
+                            from: crate::recorder::State::Ready,
+                            ..
+                        }
+                    ) {
+                        CANCEL_PENDING.store(true, Ordering::Release);
+                    }
                     tracing::warn!("[hotkey job_id={:?}] stop ignored: {}", job_id_opt, e);
                     let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
                     if let Some(job_id) = job_id_opt {
@@ -353,6 +397,8 @@ mod imp {
         hotkey_state: Arc<parking_lot::RwLock<crate::settings::HotkeyConfig>>,
     ) {
         std::thread::spawn(move || {
+            let app_for_callback = app.clone();
+            let app_for_error = app.clone();
             let tap = match CGEventTap::new(
                 CGEventTapLocation::HID,
                 CGEventTapPlacement::HeadInsertEventTap,
@@ -375,15 +421,15 @@ mod imp {
                             if toggle_mode {
                                 if is_key_down {
                                     if recorder.is_recording() {
-                                        ptt_up(&recorder, &tray_icon, &app);
+                                        ptt_up(&recorder, &tray_icon, &app_for_callback);
                                     } else {
-                                        ptt_down(&recorder, &tray_icon, &app);
+                                        ptt_down(&recorder, &tray_icon, &app_for_callback);
                                     }
                                 }
                             } else if is_key_down {
-                                ptt_down(&recorder, &tray_icon, &app);
+                                ptt_down(&recorder, &tray_icon, &app_for_callback);
                             } else {
-                                ptt_up(&recorder, &tray_icon, &app);
+                                ptt_up(&recorder, &tray_icon, &app_for_callback);
                             }
                         }
                     }
@@ -393,10 +439,26 @@ mod imp {
             ) {
                 Ok(t) => t,
                 Err(()) => {
-                    tracing::error!(
-                        "[hotkey] CGEventTap failed — grant Accessibility permission in \
-                         System Settings → Privacy & Security → Accessibility, then restart"
-                    );
+                    let trusted = accessibility_trusted();
+                    let message = if trusted {
+                        "Record trigger failed to start. Restart Turbo Talk and try again."
+                    } else {
+                        "Record trigger needs Accessibility permission. Add Turbo Talk in System Settings -> Privacy & Security -> Accessibility, then quit and reopen the app."
+                    };
+                    tracing::error!("[hotkey] CGEventTap failed (accessibility_trusted={trusted})");
+                    let app_for_emit = app_for_error.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(1200));
+                        emit_critical(
+                            &app_for_emit,
+                            "ui-error",
+                            UiError {
+                                kind: "hotkey-permission",
+                                message: message.to_string(),
+                                recoverable: true,
+                            },
+                        );
+                    });
                     return;
                 }
             };
@@ -413,6 +475,7 @@ mod imp {
             CFRunLoop::run_current();
         });
     }
+
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -437,9 +500,18 @@ mod imp {
     ) {
         tracing::error!(
             "[hotkey] unsupported platform — global push-to-talk hotkey is only \
-             implemented on macOS. The app will start but no hotkey will be bound."
+            implemented on macOS. The app will start but no hotkey will be bound."
         );
     }
+
 }
 
 pub use imp::spawn;
+
+#[cfg(target_os = "macos")]
+pub use imp::accessibility_trusted;
+
+#[cfg(not(target_os = "macos"))]
+pub fn accessibility_trusted() -> bool {
+    false
+}

@@ -62,24 +62,29 @@ fn is_allowed_whisper_path(p: &Path) -> bool {
 /// The configured-path fallback is only honored if the path canonicalizes to
 /// a location inside an allowed root; otherwise an error is returned.
 fn find_whisper(configured_bin: &str) -> anyhow::Result<PathBuf> {
-    let sidecar = "whisper-cli-aarch64-apple-darwin";
+    let sidecars = ["whisper-cli", "whisper-cli-aarch64-apple-darwin"];
 
     // Release bundle: sidecar is placed next to the main executable in Contents/MacOS/
     if let Ok(exe) = std::env::current_exe() {
-        let p = exe.parent().unwrap_or_else(|| Path::new(".")).join(sidecar);
-        if p.exists() {
-            tracing::debug!("[transcribe] using bundled sidecar: {:?}", p);
-            return Ok(p);
+        let parent = exe.parent().unwrap_or_else(|| Path::new("."));
+        for sidecar in sidecars {
+            let p = parent.join(sidecar);
+            if p.exists() {
+                tracing::debug!("[transcribe] using bundled sidecar: {:?}", p);
+                return Ok(p);
+            }
         }
     }
 
     // Dev mode: sidecar lives in src-tauri/binaries/ at compile time
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("binaries")
-        .join(sidecar);
-    if dev.exists() {
-        tracing::debug!("[transcribe] using dev sidecar: {:?}", dev);
-        return Ok(dev);
+    for sidecar in sidecars {
+        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries")
+            .join(sidecar);
+        if dev.exists() {
+            tracing::debug!("[transcribe] using dev sidecar: {:?}", dev);
+            return Ok(dev);
+        }
     }
 
     // Last resort: configured path. Validated against the allow-list to prevent

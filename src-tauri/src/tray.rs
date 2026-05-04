@@ -12,7 +12,10 @@ pub fn make_icon(state: TrayState) -> Image<'static> {
 
     match state {
         TrayState::Idle => draw_tt(&mut px, size),
-        TrayState::Recording => fill_circle(&mut px, size, 248, 68, 68),
+        TrayState::Recording => {
+            fill_circle(&mut px, size, 248, 68, 68);
+            draw_x(&mut px, size);
+        }
         TrayState::Transcribing => fill_circle(&mut px, size, 251, 191, 36),
     }
 
@@ -80,6 +83,40 @@ fn fill_circle(px: &mut [u8], size: u32, r: u8, g: u8, b: u8) {
             if dist < radius + 1.0 {
                 let a = ((radius + 1.0 - dist).clamp(0.0, 1.0) * 255.0) as u8;
                 set(px, size, x, y, r, g, b, a);
+            }
+        }
+    }
+}
+
+// ── White X glyph (drawn over an existing filled circle) ──────────────────────
+
+fn draw_x(px: &mut [u8], size: u32) {
+    let cx = size as f32 / 2.0;
+    let arm    = 10.0f32; // Euclidean half-arm length in pixels
+    let half_w =  2.0f32; // line half-width in pixels
+    let s = std::f32::consts::SQRT_2;
+
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 + 0.5 - cx;
+            let dy = y as f32 + 0.5 - cx;
+
+            // Decompose into the two diagonal axes.
+            // a = perpendicular distance to arm1 = along-axis distance for arm2, and vice-versa.
+            let a = (dy - dx).abs() / s; // perp to arm1 / along arm2
+            let b = (dx + dy).abs() / s; // along arm1 / perp to arm2
+
+            let on_arm1 = a < half_w && b <= arm;
+            let on_arm2 = b < half_w && a <= arm;
+
+            if on_arm1 || on_arm2 {
+                let i = ((y * size + x) * 4) as usize;
+                // Only paint inside the circle (where the background alpha is set).
+                if px[i + 3] > 128 {
+                    px[i]     = 255;
+                    px[i + 1] = 255;
+                    px[i + 2] = 255;
+                }
             }
         }
     }

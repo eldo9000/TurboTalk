@@ -1,7 +1,15 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-05-03
-**Current state:** Blocks 3, 4, and 5 of BETA-AUDIT-ROADMAP.md complete. Block 5 added Developer ID signing/notarization config, hardened-runtime entitlements, version-bump script, SHA-256 checksums, RELEASING.md, and an installed-artifact smoke section. Pending: actual signed/notarized release build (user task — requires Apple Developer credentials).
+**Last updated:** 2026-05-04
+**Current state:** v0.8 macOS beta package proof is now understood. The
+ad-hoc signed DMG exists at `dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg`
+with a passing `.sha256`. Packaged diagnostics confirmed mic input works and
+the bundled sidecar resolves from `/Applications/Turbo Talk.app/Contents/MacOS/whisper-cli`.
+The packaged hotkey works after manually removing/re-adding the installed app
+in System Settings → Privacy & Security → Accessibility. Temporary beta
+diagnostic scaffolding has been removed from the production UI and command
+surface; the core diagnostics command remains dev-only in Settings. Apple
+Developer signing/notarization remains intentionally skipped for v0.8.
 
 ## Where We Are
 
@@ -17,9 +25,9 @@ Commits this session:
 
 ## Active Focus
 
-Beta readiness. Work through `BETA-AUDIT-ROADMAP.md` one block at a time,
-starting with Block 1 (platform compatibility audit) unless beta scope is
-explicitly narrowed to macOS-only.
+Mac beta readiness. The audit concluded true Windows/Linux beta is deferred;
+current beta scope is macOS arm64 unless/until non-mac hotkey/paste and
+Whisper sidecars land.
 
 Open carry-overs are TASK-18's still-deferred warm Whisper backend (gated
 on whisper-rs-sys cmake fix or a maintained whisper-server crate; option 3
@@ -30,6 +38,24 @@ lifecycle wrapper landed in TASK-20).
 None.
 
 ## Next action
+
+Beta audit repo work is done. Remaining v0.8 release note:
+- Document/communicate first-run install caveat: if the packaged hotkey is
+  dead, remove/re-add `/Applications/Turbo Talk.app` under Accessibility,
+  enable it, then quit/reopen.
+- Developer ID signing/notarization is deferred until credentials are available.
+
+Cleanup update 2026-05-04:
+- Removed temporary troubleshooting hooks: debug log command/writer, manual
+  record commands, production-visible hold-to-record fallback controls, and
+  expanded mic/accessibility probe fields from copied diagnostics.
+- Kept production fixes discovered during packaging: macOS microphone
+  `Info.plist`, packaged sidecar lookup for `Contents/MacOS/whisper-cli`, and
+  user-facing Accessibility failure messaging.
+- Proof after cleanup: `cargo test --manifest-path src-tauri/Cargo.toml
+  export_bindings`, `npm run build`, full `cargo test --manifest-path
+  src-tauri/Cargo.toml`, `npm run package`, and `shasum -a 256 -c
+  TurboTalk-0.8.0-macos-arm64.dmg.sha256` all pass.
 
 Block 1 of `BETA-AUDIT-ROADMAP.md` dispatched 2026-05-03 as a 3-task arc:
 - TASK-1 (`2cee14f`) — `PLATFORM-AUDIT.md` written: cargo check classification
@@ -49,12 +75,12 @@ Block 2 dispatched 2026-05-03 as a 3-task arc, all landed:
 - TASK-3 (`26c900a`) — README "Release matrix" section: supported
   platforms, install steps, permissions, local data paths, known limits.
 
-Pending human verification:
-- Hold push-to-talk on macOS, dictate one phrase, confirm paste works
-  (interactive proof for Block 1 cfg-split refactors).
-- Run `npm run package` once and confirm
-  `dist-artifacts/TurboTalk-0.0.1-macos-arm64.dmg` is produced (Block 2
-  proof gate).
+Human verification update:
+- Dictation/paste proof is confirmed by user for the v0.8 beta candidate.
+- Packaged app microphone proof is currently not confirmed: user reports the
+  volume bar does not register input in the built macOS app.
+- `npm run package` reached `.app` + DMG creation; artifact rename needed the
+  repo-level `target/release/bundle/dmg` path.
 
 Block 3 dispatched 2026-05-03 as a 4-task arc, all landed:
 - TASK-1 (`9a61f81`) — `diagnostics.rs` + `run_diagnostics` Tauri command; 7-field health check.
