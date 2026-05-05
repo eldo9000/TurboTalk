@@ -26,10 +26,15 @@ switch (process.platform) {
     ];
     break;
   case 'win32':
-    // Windows: whisper.cpp built statically per TASK-27 ships a single .exe.
-    // If a future TASK-27 variant ships DLLs alongside the exe, add them here.
+    // Windows: upstream whisper-bin-x64 ships a shared build. Companion DLLs
+    // sit alongside the .exe and are bundled via tauri.conf.json
+    // bundle.windows.resources. Run `npm run fetch-sidecars` to populate.
     required = [
       'src-tauri/binaries/whisper-cli-x86_64-pc-windows-msvc.exe',
+      'src-tauri/binaries/whisper.dll',
+      'src-tauri/binaries/ggml.dll',
+      'src-tauri/binaries/ggml-base.dll',
+      'src-tauri/binaries/ggml-cpu.dll',
     ];
     break;
   case 'linux':
@@ -54,14 +59,14 @@ for (const rel of required) {
   } catch {
     console.error(`[preflight] missing required bundle asset: ${rel}`);
     console.error(`[preflight]   expected at: ${abs}`);
-    console.error('[preflight]   run TASK-27 (whisper.cpp sidecar build) on this host to produce it');
+    console.error('[preflight]   run `npm run fetch-sidecars` on this host to populate it');
     missingCount += 1;
     continue;
   }
   if (!st.isFile() || st.size === 0) {
     console.error(`[preflight] required bundle asset is empty or not a file: ${rel}`);
     console.error(`[preflight]   path: ${abs}`);
-    console.error('[preflight]   run TASK-27 (whisper.cpp sidecar build) on this host to refresh it');
+    console.error('[preflight]   re-run `npm run fetch-sidecars` to refresh it');
     missingCount += 1;
   }
 }

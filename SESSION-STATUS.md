@@ -1,15 +1,29 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-05-05
-**Current state:** Overlay peek-through regression investigated; frontend fix applied.
-The dim-on-hover path was still wired. Two fragilities were addressed in
-`src/Overlay.svelte`: hover hit-testing now uses physical cursor coordinates,
-and peek-through no longer relies on wrapper opacity alone. Peek now directly
-reduces the pill background alpha + backdrop blur, which should survive WebKit
-compositing changes after the progress bar removal. Proof so far: `npm run
-build`, `npm run typecheck`, and `git diff --check` pass. Local app launch was
-attempted, but CGEventTap failed because this dev binary is not trusted for
-Accessibility, so manual hotkey proof is still needed.
+**Current state:** TASK-27 (Whisper sidecar bundling) landed for Windows.
+`scripts/fetch-sidecars.mjs` downloads upstream whisper.cpp v1.8.4
+`whisper-bin-x64.zip` (sha256 verified), extracts the 5 runtime files into
+`src-tauri/binaries/`, and renames `whisper-cli.exe` to the Tauri target-triple
+convention. `src-tauri/tauri.windows.conf.json` declares the four runtime DLLs
+as `bundle.resources` so the NSIS installer ships them alongside the .exe.
+`scripts/preflight.mjs` win32 list now requires those five files. The CI
+release workflow swapped its from-source cmake step for `npm run fetch-sidecars`,
+saving a multi-minute CI cmake build per push. macOS happy path preserved:
+`npm run package` reproduced `dist-artifacts/TurboTalk-0.8.1-macos-arm64.dmg`
+with no regression. The `.gitignore` excludes the fetched Windows files so
+they only exist on a Windows host post-fetch.
+
+Win sidecar fetch path was smoke-tested end-to-end on the macOS host by
+forcing the win32 target: download → sha256 verify → unzip → 5 files copied
+with correct sizes. The actual `tauri build` on a Windows runner is still
+unproven and is the next CI verification gate.
+
+Previous state: Overlay peek-through fix verified by user in an Accessibility-
+trusted build. Holding Right Alt opens the recording pill; cursor hover dims it
+via direct background alpha + backdrop blur reduction without stealing focus.
+Frontend fix in `src/Overlay.svelte` (commit `fa9d02e`) is now confirmed end-to-
+end.
 
 Previous state: Win/Linux beta sprint partial loop landed (TASK-24, 28, 30, 31).
 Codebase is now structurally cross-platform-aware: target-triple sidecar lookup,
@@ -56,11 +70,17 @@ None.
 
 ## Next action
 
-Run the manual overlay proof in an Accessibility-trusted build: hold Right Alt
-to record, move the cursor over the recording pill, and verify the pill dims
-without stealing focus.
+Push a tag (or workflow_dispatch) against `.github/workflows/release.yml` to
+prove the Windows CI build path: `npm run fetch-sidecars` runs, preflight
+finds all five Windows assets, `tauri build` produces an NSIS `.exe`. That's
+the verification gate TASK-27 is missing today (script smoke-tested locally
+on macOS, but the actual Windows `tauri build` is unproven).
 
-Beta audit repo work is done. Remaining v0.8 release note:
+After that, the next M4 leverage points:
+- TASK-25 / TASK-26 — real Windows hotkey + paste impls (today: stubs).
+- Codesigning + notarization (gated on Apple Developer credentials).
+
+Remaining v0.8 release note:
 - Document/communicate first-run install caveat: if the packaged hotkey is
   dead, remove/re-add `/Applications/Turbo Talk.app` under Accessibility,
   enable it, then quit/reopen.

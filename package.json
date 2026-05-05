@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "preflight": "node scripts/preflight.mjs",
+    "fetch-sidecars": "node scripts/fetch-sidecars.mjs",
     "package": "npm run preflight && tauri build && node scripts/rename-artifact.mjs",
     "bump-version": "node scripts/bump-version.mjs",
     "typecheck": "tsc --noEmit"

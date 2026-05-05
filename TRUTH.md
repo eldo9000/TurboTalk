@@ -55,6 +55,7 @@ Proof: `[audio] wrote 42240 samples` (1.76s voice), transcript landed in Notes.a
 - Zoom controls: 9 levels 100–180%, ⌘+/⌘-/⌘0, persistent in localStorage
 - Models tab: active model selector, installed model list with add/remove, HuggingFace catalog with download links
 - Recording overlay: always-on-top transparent window, 7-bar waveform animation, never steals focus
+- Overlay peek-through: cursor hover over recording pill dims background alpha + backdrop blur (confirmed 2026-05-04)
 
 ## What is hardcoded / not yet configurable
 
@@ -63,9 +64,23 @@ Proof: `[audio] wrote 42240 samples` (1.76s voice), transcript landed in Notes.a
 
 ## What is explicitly not working
 
-- Windows/Linux Whisper sidecars are not bundled yet
-- Developer ID codesigning / notarization is intentionally deferred for v0.8
-- Cross-platform paste (Windows / Linux)
+- Windows hotkey + paste — stubs only (`Err("unsupported platform")`); TASK-25/26.
+- Linux Whisper sidecar — upstream ships no Linux binary; Linux excluded from release matrix.
+- Developer ID codesigning / notarization is intentionally deferred for v0.8.
+
+## Sidecar bundling — confirmed 2026-05-05
+
+- macOS arm64: `whisper-cli` + 3 dylibs committed under `src-tauri/binaries/`.
+  Tauri auto-copies them into `Contents/Resources/` (`@executable_path/../Resources`
+  rpath resolves at runtime). Verified via `otool -L`.
+- Windows x64: `npm run fetch-sidecars` downloads upstream
+  `whisper-bin-x64.zip` (whisper.cpp v1.8.4, sha256-pinned) and extracts
+  `whisper-cli.exe` + 4 DLLs into `src-tauri/binaries/`. DLLs declared in
+  `src-tauri/tauri.windows.conf.json` `bundle.resources`. End-to-end fetch
+  smoke-tested on macOS host by forcing win32 target. Actual Windows
+  `tauri build` not yet exercised — pending CI run.
+- Linux: not bundled. Excluded from release matrix until rdev hotkey + paste
+  validated on real X11 hardware.
 
 ## Key technical decisions
 

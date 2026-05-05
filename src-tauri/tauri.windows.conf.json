@@ -1,0 +1,10 @@
+{
+  "bundle": {
+    "resources": [
+      "binaries/whisper.dll",
+      "binaries/ggml.dll",
+      "binaries/ggml-base.dll",
+      "binaries/ggml-cpu.dll"
+    ]
+  }
+}
