@@ -748,17 +748,19 @@ Reply with only the single word, lowercase, no punctuation.
             </button>
           {/each}
         </div>
-        <div class="shrink-0 flex items-center justify-center gap-2 px-3 py-2">
-          <button
-            onclick={() => recording ? commands.stopRecording() : commands.startRecording()}
-            class="flex items-center gap-1.5 text-[11px] font-medium px-3 py-1 rounded border transition-colors
-                   {recording
-                     ? 'text-red-400 border-red-400/50 hover:border-red-400'
-                     : 'text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]'}"
-          >
-            <span class="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0"></span>
-            {recording ? 'Stop' : 'Record'}
-          </button>
+      {/if}
+      <div class="shrink-0 flex items-center justify-center gap-2 px-3 py-2">
+        <button
+          onclick={() => recording ? commands.stopRecording() : commands.startRecording()}
+          class="flex items-center gap-1.5 text-[11px] font-medium px-3 py-1 rounded border transition-colors
+                 {recording
+                   ? 'text-red-400 border-red-400/50 hover:border-red-400'
+                   : 'text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]'}"
+        >
+          <span class="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0"></span>
+          {recording ? 'Stop' : 'Record'}
+        </button>
+        {#if history.length > 0}
           <button
             onclick={clearHistory}
             class="flex items-center gap-1.5 text-[11px] font-medium px-3 py-1 rounded border transition-colors
@@ -769,8 +771,8 @@ Reply with only the single word, lowercase, no punctuation.
             </svg>
             Clear all
           </button>
-        </div>
-      {/if}
+        {/if}
+      </div>
     </div>
   {/if}
 
