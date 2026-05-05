@@ -1,7 +1,9 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-05-05
-**Current state:** Guided Ollama setup sprint complete (TASK-32–35). `ollama.rs` adds `ping_ollama`, `check_ollama_model`, `open_url`, `pull_ollama_model` backend commands; Modes Advanced panel has live Ollama detection + model-pull UI with progress bar; chaperone-fallback ui-error toast fires (rate-limited 60s) when Ollama is unreachable during dictation.
+**Current state:** Audio-latency sprint complete (TASK-36–38). `audio.rs` keeps the cpal stream warm between recordings with a 45 s idle-close watchdog (TASK-36, commit `c0e9e15`); a 300 ms pre-roll ring buffer prepends pre-press audio so leading words aren't clipped (TASK-37, commit `6f8cccd`); `settings.rs` caches the parsed config in a process-wide RwLock so PTT-down skips the per-press file read (TASK-38, commit `41aa859`). PTT-down should now capture within ~10 ms instead of 50–500 ms. Manual on-device verification by user is the remaining proof.
+
+Previous state: Guided Ollama setup sprint complete (TASK-32–35). `ollama.rs` adds `ping_ollama`, `check_ollama_model`, `open_url`, `pull_ollama_model` backend commands; Modes Advanced panel has live Ollama detection + model-pull UI with progress bar; chaperone-fallback ui-error toast fires (rate-limited 60s) when Ollama is unreachable during dictation.
 
 Previous state: TASK-27 (Whisper sidecar bundling) landed for Windows.
 `scripts/fetch-sidecars.mjs` downloads upstream whisper.cpp v1.8.4
