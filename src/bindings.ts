@@ -34,6 +34,8 @@ export const commands = {
 	 *  builder so it appears in `bindings.ts` (TASK-23).
 	 */
 	cancelRecording: () => typedError<null, string>(__TAURI_INVOKE("cancel_recording")),
+	startRecording: () => __TAURI_INVOKE<void>("start_recording"),
+	stopRecording: () => __TAURI_INVOKE<void>("stop_recording"),
 	/**
 	 *  Open the TurboTalk data folder (`~/.config/librewin/turbotalk/`) in Finder.
 	 *  macOS only — uses the system `open` command.

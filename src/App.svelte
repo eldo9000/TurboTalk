@@ -659,7 +659,7 @@ Reply with only the single word, lowercase, no punctuation.
   {/if}
 
   <!-- Titlebar -->
-  <div data-tauri-drag-region class="relative h-10 shrink-0 flex items-end select-none border-b border-[var(--border,#2a2a2a)]">
+  <div data-tauri-drag-region class="relative h-10 shrink-0 flex items-end select-none">
 
     <!-- Traffic-light spacer (left) -->
     <div class="w-[76px] shrink-0 h-full" data-tauri-drag-region></div>
@@ -734,7 +734,7 @@ Reply with only the single word, lowercase, no punctuation.
               onclick={() => copyHistoryItem(item)}
               title="Click to copy"
               class="w-full text-left text-[13px] leading-relaxed px-2 py-2 rounded transition-colors
-                     cursor-pointer select-text border-b border-[var(--border)] last:border-0
+                     cursor-pointer select-text
                      hover:bg-[var(--surface-raised)]
                      {copiedTs === item.ts ? 'text-[var(--accent)]' : 'text-[var(--text-primary)]'}"
             >
@@ -748,11 +748,27 @@ Reply with only the single word, lowercase, no punctuation.
             </button>
           {/each}
         </div>
-        <div class="shrink-0 flex justify-center px-3 py-2 border-t border-[var(--border)]">
+        <div class="shrink-0 flex items-center justify-center gap-2 px-3 py-2">
+          <button
+            onclick={() => recording ? commands.stopRecording() : commands.startRecording()}
+            class="flex items-center gap-1.5 text-[11px] font-medium px-3 py-1 rounded border transition-colors
+                   {recording
+                     ? 'text-red-400 border-red-400/50 hover:border-red-400'
+                     : 'text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]'}"
+          >
+            <span class="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0"></span>
+            {recording ? 'Stop' : 'Record'}
+          </button>
           <button
             onclick={clearHistory}
-            class="text-[11px] font-medium text-[var(--text-muted)] hover:text-red-400 transition-colors"
-          >Clear all</button>
+            class="flex items-center gap-1.5 text-[11px] font-medium px-3 py-1 rounded border transition-colors
+                   text-[var(--text-muted)] border-[var(--border)] hover:text-red-400 hover:border-red-400/50"
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+            </svg>
+            Clear all
+          </button>
         </div>
       {/if}
     </div>
@@ -765,7 +781,7 @@ Reply with only the single word, lowercase, no punctuation.
     {@const isSelected   = isInstalled && cfgModel === installedPath}
     {@const isDownloading = m.name in downloadProgress}
     {@const pct          = downloadProgress[m.name] ?? 0}
-    <div class="group flex items-center gap-2 py-1.5 border-b border-[var(--border,#2a2a2a)] last:border-0">
+    <div class="group flex items-center gap-2 py-1.5">
       <div class="flex-1 min-w-0">
         <span class="text-xs font-mono text-[var(--text-primary)]">{m.name}</span>
         <span class="text-[10px] text-[var(--text-tertiary,#666)] ml-1.5">{m.size}</span>
@@ -823,7 +839,7 @@ Reply with only the single word, lowercase, no punctuation.
     <div class="flex-1 min-h-0 overflow-y-auto text-[12px]">
 
       <!-- Recommended -->
-      <div class="border-b border-[var(--border)] px-4 py-3">
+      <div class="px-4 py-3">
         <div
           class="group rounded-xl p-3.5 border-2 transition-colors
                  {rmIsSelected
@@ -885,7 +901,7 @@ Reply with only the single word, lowercase, no punctuation.
       </div>
 
       <!-- Available models -->
-      <div class="border-b border-[var(--border)] px-4 py-3 space-y-0.5">
+      <div class="px-4 py-3 space-y-0.5">
         <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)] mb-2">Available</p>
         {#each MODEL_CATALOG as m}
           {@render modelRow(m)}
@@ -941,11 +957,11 @@ Reply with only the single word, lowercase, no punctuation.
     <div class="flex-1 min-h-0 flex text-[12px] {isAdv ? '' : 'flex-col overflow-y-auto'}">
 
       <!-- Left column: always visible -->
-      <div class="flex flex-col {isAdv ? 'overflow-y-auto shrink-0 border-r border-[var(--border)]' : ''}"
+      <div class="flex flex-col {isAdv ? 'overflow-y-auto shrink-0' : ''}"
            style="{isAdv ? `width:${WINDOW_W}px` : ''}">
 
         <!-- Post-processing -->
-        <div class="border-b border-[var(--border)] px-4 py-3 space-y-3">
+        <div class="px-4 py-3 space-y-3">
           <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Post-processing</p>
           <div class="flex">
             {#each [['off','Off'],['regex','Simple'],['chaperone','Advanced']] as [val, label]}
@@ -1107,7 +1123,7 @@ Reply with only the single word, lowercase, no punctuation.
     <div class="flex-1 min-h-0 overflow-y-auto text-[12px]">
 
       <!-- Input -->
-      <div class="border-b border-[var(--border)] px-4 py-3 space-y-3">
+      <div class="px-4 py-3 space-y-3">
 
         <!-- Hotkey: side tabs + key dropdown on same row -->
         <div class="space-y-1">
@@ -1266,7 +1282,7 @@ Reply with only the single word, lowercase, no punctuation.
       </div>
 
       {#if import.meta.env.DEV}
-        <div class="px-4 py-3 space-y-2 border-t border-red-500/20 mt-auto">
+        <div class="px-4 py-3 space-y-2 mt-auto">
           <p class="text-[10px] font-semibold uppercase tracking-widest text-red-400/70">Dev</p>
           <div class="flex items-center gap-2">
             <button
@@ -1318,7 +1334,7 @@ Reply with only the single word, lowercase, no punctuation.
         aria-modal="true"
         tabindex="-1"
       >
-        <div class="flex flex-col items-center gap-0.5 pb-3 border-b border-[var(--border)]">
+        <div class="flex flex-col items-center gap-0.5 pb-3">
           <span class="text-[18px] font-semibold tracking-tight text-[var(--text-primary)]">Turbo Talk</span>
           <span class="text-[10px] text-[var(--text-muted)] tabular-nums">v0.8.0</span>
           <p class="text-[var(--text-secondary)] text-[11px] leading-snug mt-1.5 text-center">
@@ -1337,7 +1353,7 @@ Reply with only the single word, lowercase, no punctuation.
 
   <!-- Bottom bar — zoom left, about right -->
   <div class="shrink-0 h-7 flex items-center justify-between px-2
-              border-t border-[var(--border,#2a2a2a)] select-none">
+              select-none">
     <div class="flex items-center gap-1">
       <button
         onclick={zoomOut}

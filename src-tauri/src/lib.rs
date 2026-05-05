@@ -382,6 +382,26 @@ fn cancel_recording(
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+fn start_recording(
+    recorder_state: tauri::State<'_, RecorderState>,
+    tray_icon_state: tauri::State<'_, TrayIconState>,
+    app: tauri::AppHandle,
+) {
+    hotkey::trigger_start(recorder_state.inner(), tray_icon_state.inner(), &app);
+}
+
+#[tauri::command]
+#[specta::specta]
+fn stop_recording(
+    recorder_state: tauri::State<'_, RecorderState>,
+    tray_icon_state: tauri::State<'_, TrayIconState>,
+    app: tauri::AppHandle,
+) {
+    hotkey::trigger_stop(recorder_state.inner(), tray_icon_state.inner(), &app);
+}
+
 use parking_lot::RwLock;
 use std::sync::Arc;
 
@@ -433,6 +453,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         save_history,
         copy_history_item,
         cancel_recording,
+        start_recording,
+        stop_recording,
         open_data_folder,
         diagnostics::run_diagnostics,
         permissions::check_readiness,
@@ -487,6 +509,8 @@ pub fn run() {
             save_history,
             copy_history_item,
             cancel_recording,
+            start_recording,
+            stop_recording,
             open_data_folder,
             diagnostics::run_diagnostics,
             permissions::check_readiness,
