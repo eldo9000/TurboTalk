@@ -11,57 +11,54 @@ Voice dictation for getting work done.
 
 ---
 
-## Why this exists
+## Overview
 
-Every other dictation tool is built around a feature list. You get a dropdown of 40 models, a settings panel with 12 tabs, and a history buried three clicks deep. They optimized for "supported" instead of "usable."
+Push-to-talk voice dictation. Hold a hotkey, speak, release — your transcript pastes into whatever app has focus. Transcription runs locally via Whisper. Optional cleanup pass runs through a local Ollama model.
 
-### History you can reach in one click
+### History
 
-Your last 50 dictations are on the History tab. Click any entry to copy it. That's it. No hunting through a separate panel, no "paste from history" menu buried in a toolbar. The thing you said five minutes ago is one click away.
+The last 50 dictations live on the History tab. Click an entry to copy it. Retention is configurable (`restart`, `1d`, `5d`, `10d`, `30d`); the cap of 50 entries applies regardless.
 
-### A UI you can actually read
+### UI zoom
 
-Zoom from 100% to 200% in 25% steps with `Cmd+=` and `Cmd+−` (Ctrl on Win/Linux). Resets to 100% with `Cmd+0` / `Ctrl+0`. Zoom level persists. If you're dictating from across the room or you just want bigger text, you get bigger text — without touching a settings page.
+`Cmd+=` / `Cmd+−` (Ctrl on Win/Linux) zoom the UI in 25% steps from 100% to 200%. `Cmd+0` / `Ctrl+0` resets. The level persists across launches.
 
-### Three models, one obvious choice
+### Models
 
-Most apps ship a wall of models and leave you to figure out which one to use. TurboTalk ships three:
+Three Whisper models ship from the Models tab:
 
-| Model | Size | When to use |
+| Model | Size | Notes |
 |---|---|---|
-| **large-v3-turbo** *(recommended)* | 1.6 GB | Daily use. Fast, accurate, multilingual. This is the one. |
-| large-v3-turbo-q5_0 | 574 MB | Constrained disk space. Some accuracy tradeoff. |
-| large-v3 | 3.1 GB | Maximum accuracy. Noticeably slower. |
+| **large-v3-turbo** *(recommended)* | 1.6 GB | Default. Fast, accurate, multilingual. Suitable for most daily use. |
+| large-v3-turbo-q5_0 | 574 MB | Quantized. Smaller footprint, slight accuracy tradeoff. |
+| large-v3 | 3.1 GB | Highest accuracy, slower. |
 
-The recommended model works for 95% of people — tested across office work (emails, docs, meeting notes), coding (variable names, comments, commit messages), and creative work (drafts, brainstorming, longform). Unless you're doing something specialized, you don't need anything else. It's labeled clearly. Install it and move on.
+If you already have a Whisper `.bin` you prefer, paste its path in Settings — it'll be used as-is.
 
-If you already have a Whisper `.bin` file you trust, paste the path. It works.
+### Trigger key & window behavior
 
-### Stays out of your way
+- **Trigger key** is configurable as press-and-hold or toggle. On macOS: left or right Option, Control, Command, Shift, or any numpad key. On Windows/Linux: Alt, Ctrl, Shift, Win/Super, or numpad keys.
+- **State indicator** in the titlebar and tray reflects Recording / Transcribing.
+- **Closing the window hides to tray.** The hotkey stays live. Quit from the tray menu to fully exit.
+- **Error toasts** include specifics (e.g. recording duration, which permission is missing) and deep-link to the relevant system settings pane where applicable.
 
-- **Fully customizable trigger key.** Press-and-hold or toggle. On macOS: left or right Option, Control, Command, or Shift, or any numpad key. On Windows/Linux: equivalent modifiers (Alt, Ctrl, Shift, Win/Super) and numpad keys.
-- **Status indicator in the titlebar/tray** while recording and transcribing. You always know the state.
-- **Close hides to tray.** The app doesn't quit when you close the window — it's still listening for your hotkey. Quit from the tray when you actually mean it.
-- **Error toasts are specific and clickable.** "Recording too short" tells you the duration. A missing-permission toast deep-links you straight to the right system settings pane — no hunting.
+### Cleanup modes
 
-### Cleans up your speech (optionally)
+Three options for how the transcript is post-processed before paste:
 
-Raw Whisper output is good. It can be better. Three levels:
-
-- **Off** — paste exactly what Whisper heard.
-- **Simple** — capitalize the first letter, strip filler words and Whisper artifacts. No network, no model, instant.
-- **Advanced** — route through a local Ollama model that understands whether you're dictating prose, code, or a shell command, and formats accordingly. Bring your own vocabulary and prompt.
+- **Off** — paste Whisper's raw output.
+- **Simple** — capitalize the first letter, strip filler words and Whisper artifacts. Local-only, no model.
+- **Advanced** — route through a local Ollama model that classifies the context (prose / code / shell) and formats accordingly. Vocabulary and classifier prompt are user-editable.
 
 ---
 
-## For Engineers
+## Implementation notes
 
-A simple app is not an excuse for sloppy work. The parts that don't show up in a feature list but represent most of the real effort:
-
-- **Tight code, real security review.** Every IPC boundary, file read, shell-out, and untrusted-input path has been audited for the obvious bug classes. No opaque cloud SDKs in the dependency graph. Local-only by design — no cloud calls, no telemetry, no analytics — and that's enforced at the architecture level, not buried in a privacy policy.
-- **Built to not freeze under fire.** Dictation is rapid-fire — you'll mash the hotkey before the last paste finishes, switch focus mid-recording, walk away with AirPods still on. Every one of those paths has an explicit handler that recovers cleanly. You'll see a banner; you won't see a hang. The recorder is a single-job state machine, so a phantom second recording can't race the first one's paste.
-- **One deliberate audio chain.** Whatever mic you record from, every recording hits the same fixed pipeline before Whisper sees it: downmix → resample to 16 kHz → voice-activity trim → loudness normalize → clean WAV. Same shape in, same accuracy out. Each stage is timed per dictation, so optimization runs on measured numbers, not vibes.
-- **Power users aren't an afterthought.** Advanced mode routes your transcript through a local Ollama model with your own vocabulary list, your own classifier prompt, and per-context formatting (prose vs. code vs. shell command). Off and Simple modes are there if you don't need it — the headroom is there if you do.
+- **Local-only.** No cloud calls, no telemetry, no analytics. Enforced at the architecture level — there are no remote SDKs in the dependency graph.
+- **Security review.** IPC boundaries, file reads, shell invocations, and untrusted-input paths have been audited for the standard bug classes.
+- **Recorder is a single-job state machine.** Rapid hotkey presses, focus changes mid-recording, and audio-device disconnects each have an explicit handler. Failures surface as a banner rather than a hang; a second recording can't race the first one's paste.
+- **Fixed audio pipeline.** Every recording hits the same chain before Whisper: downmix → resample to 16 kHz → voice-activity trim → loudness normalize → WAV. Each stage is timed per dictation.
+- **Advanced cleanup is user-configurable.** Vocabulary list, classifier prompt, and per-context formatting (prose / code / shell) are all editable. Off and Simple modes are available if Ollama isn't installed.
 
 ---
 
