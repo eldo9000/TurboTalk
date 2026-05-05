@@ -198,7 +198,7 @@ const OLLAMA_TIMEOUT: Duration = Duration::from_secs(2);
 /// Reject any URL that does not point at a loopback address. This is an
 /// allowlist, not a denylist: only `localhost`, `127.0.0.1`, and `::1` are
 /// permitted hosts.
-fn validate_ollama_url(raw: &str) -> anyhow::Result<url::Url> {
+pub(crate) fn validate_ollama_url(raw: &str) -> anyhow::Result<url::Url> {
     let parsed = url::Url::parse(raw.trim())
         .map_err(|e| anyhow::anyhow!("invalid Ollama URL {raw:?}: {e}"))?;
 
