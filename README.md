@@ -50,7 +50,7 @@ Raw Whisper output is good. It can be better. Three levels:
 
 - **Off** — paste exactly what Whisper heard.
 - **Simple** — capitalize the first letter, strip filler words and Whisper artifacts. No network, no model, instant.
-- **Chaperone** — route through a local Ollama model that understands whether you're dictating prose, code, or a shell command, and formats accordingly. Bring your own vocabulary and prompt.
+- **Advanced** — route through a local Ollama model that understands whether you're dictating prose, code, or a shell command, and formats accordingly. Bring your own vocabulary and prompt.
 
 ---
 
@@ -61,7 +61,7 @@ A simple app is not an excuse for sloppy work. The parts that don't show up in a
 - **Tight code, real security review.** Every IPC boundary, file read, shell-out, and untrusted-input path has been audited for the obvious bug classes. No opaque cloud SDKs in the dependency graph. Local-only by design — no cloud calls, no telemetry, no analytics — and that's enforced at the architecture level, not buried in a privacy policy.
 - **Built to not freeze under fire.** Dictation is rapid-fire — you'll mash the hotkey before the last paste finishes, switch focus mid-recording, walk away with AirPods still on. Every one of those paths has an explicit handler that recovers cleanly. You'll see a banner; you won't see a hang. The recorder is a single-job state machine, so a phantom second recording can't race the first one's paste.
 - **One deliberate audio chain.** Whatever mic you record from, every recording hits the same fixed pipeline before Whisper sees it: downmix → resample to 16 kHz → voice-activity trim → loudness normalize → clean WAV. Same shape in, same accuracy out. Each stage is timed per dictation, so optimization runs on measured numbers, not vibes.
-- **Power users aren't an afterthought.** Chaperone mode routes your transcript through a local Ollama model with your own vocabulary list, your own classifier prompt, and per-context formatting (prose vs. code vs. shell command). Off and Simple modes are there if you don't need it — the headroom is there if you do.
+- **Power users aren't an afterthought.** Advanced mode routes your transcript through a local Ollama model with your own vocabulary list, your own classifier prompt, and per-context formatting (prose vs. code vs. shell command). Off and Simple modes are there if you don't need it — the headroom is there if you do.
 
 ---
 
@@ -143,7 +143,7 @@ No other macOS system permissions are requested. There is no Automation prompt p
 - **Linux:** X11 only — **Wayland is not supported.** AppImage requires FUSE (`libfuse2` on Debian/Ubuntu). Tray-icon support depends on your desktop's AppIndicator support (GNOME may need an extension).
 - **All platforms:** No auto-updater. Re-download to update.
 - History is saved to disk by default, retained for 10 days. Configurable in Settings — choose `restart` (clear on launch), `1d`, `5d`, `10d`, or `30d`. Capped at 50 entries either way.
-- The Chaperone cleanup mode requires a local Ollama install. If you don't run Ollama, leave cleanup on `Off` or `Simple`.
+- The Advanced cleanup mode requires a local Ollama install. If you don't run Ollama, leave cleanup on `Off` or `Simple`.
 
 ### Feedback
 
