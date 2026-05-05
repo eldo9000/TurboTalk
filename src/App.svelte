@@ -6,6 +6,32 @@
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { open as openFilePicker } from '@tauri-apps/plugin-dialog';
   import { initTheme } from '@libre/ui/src/theme.js';
+  import SegmentedControl from '@libre/ui/src/components/SegmentedControl.svelte';
+  import SectionLabel from '@libre/ui/src/components/SectionLabel.svelte';
+  import Select from '@libre/ui/src/components/Select.svelte';
+  import Checkbox from '@libre/ui/src/components/Checkbox.svelte';
+
+  const HOTKEY_KEY_ITEMS = [
+    { value: 'option',          label: 'Option ⌥' },
+    { value: 'control',         label: 'Control ⌃' },
+    { value: 'command',         label: 'Command ⌘' },
+    { value: 'shift',           label: 'Shift ⇧' },
+    { category: 'Numpad' },
+    { value: 'numpad_enter',    label: 'Num Enter' },
+    { value: 'numpad_0',        label: 'Num 0' },
+    { value: 'numpad_decimal',  label: 'Num .' },
+    { value: 'numpad_add',      label: 'Num +' },
+    { value: 'numpad_subtract', label: 'Num −' },
+    { value: 'numpad_multiply', label: 'Num *' },
+  ];
+
+  const HISTORY_AUTO_DELETE_ITEMS = [
+    { value: 'restart', label: 'On app restart' },
+    { value: '1d',      label: 'After 1 day'    },
+    { value: '5d',      label: 'After 5 days'   },
+    { value: '10d',     label: 'After 10 days'  },
+    { value: '30d',     label: 'After 30 days'  },
+  ];
   // Typed Rust↔TS contract — see TASK-8. `commands.*` are wrappers around
   // `invoke()` whose argument and return shapes are derived from the Rust
   // structs in `src-tauri/src/settings.rs`. Adding/removing/renaming a field
@@ -616,7 +642,7 @@ Reply with only the single word, lowercase, no punctuation.
   });
 </script>
 
-<div bind:this={outerEl} class="flex flex-col bg-[var(--surface)] {settingsH > 0 || activeTab === 'history' ? 'h-full overflow-hidden' : ''}"
+<div bind:this={outerEl} class="flex flex-col bg-[var(--surface-raised)] {settingsH > 0 || activeTab === 'history' ? 'h-full overflow-hidden' : ''}"
 >
 
   <!-- ui-error toast stack — fixed top-center. Permission-related kinds
@@ -659,7 +685,7 @@ Reply with only the single word, lowercase, no punctuation.
   {/if}
 
   <!-- Titlebar -->
-  <div data-tauri-drag-region class="relative h-10 shrink-0 flex items-end select-none">
+  <div data-tauri-drag-region class="relative h-10 shrink-0 flex items-end select-none bg-[color-mix(in_srgb,#000_18%,var(--surface-raised))]">
 
     <!-- Traffic-light spacer (left) -->
     <div class="w-[76px] shrink-0 h-full" data-tauri-drag-region></div>
@@ -735,7 +761,7 @@ Reply with only the single word, lowercase, no punctuation.
               title="Click to copy"
               class="w-full text-left text-[13px] leading-relaxed px-2 py-2 rounded transition-colors
                      cursor-pointer select-text
-                     hover:bg-[var(--surface-raised)]
+                     hover:bg-[color-mix(in_srgb,#fff_6%,var(--surface-raised))]
                      {copiedTs === item.ts ? 'text-[var(--accent)]' : 'text-[var(--text-primary)]'}"
             >
               {#if copiedTs === item.ts}
@@ -964,22 +990,17 @@ Reply with only the single word, lowercase, no punctuation.
 
         <!-- Post-processing -->
         <div class="px-4 py-3 space-y-3">
-          <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Post-processing</p>
-          <div class="flex">
-            {#each [['off','Off'],['regex','Simple'],['chaperone','Advanced']] as [val, label]}
-              <button
-                onclick={() => { cfgCleanupMode = val; saveModes(); }}
-                class="relative px-3 py-1.5 text-[12px] font-medium transition-colors
-                       {cfgCleanupMode === val
-                         ? 'text-[var(--text-primary)]'
-                         : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}">
-                {label}
-                {#if cfgCleanupMode === val}
-                  <span class="absolute bottom-0 left-0.5 right-0.5 h-[2px] rounded-t bg-[var(--accent)]"></span>
-                {/if}
-              </button>
-            {/each}
-          </div>
+          <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-secondary)]">Post-processing</p>
+          <SegmentedControl
+            variant="filled"
+            options={[
+              { value: 'off',       label: 'Off'      },
+              { value: 'regex',     label: 'Simple'   },
+              { value: 'chaperone', label: 'Advanced' },
+            ]}
+            value={cfgCleanupMode}
+            onchange={(v) => { cfgCleanupMode = v; saveModes(); }}
+          />
           <p class="text-[var(--text-muted)] text-[11px] leading-relaxed">
             {#if cfgCleanupMode === 'off'}
               Paste raw Whisper output — no formatting, no changes.
@@ -1005,10 +1026,10 @@ Reply with only the single word, lowercase, no punctuation.
                     type="checkbox"
                     checked={val}
                     onchange={() => setter(!val)}
-                    class="accent-[var(--accent)] w-3 h-3 shrink-0 mt-[3px]"
+                    class="fade-check mt-[3px]"
                   />
                   <div>
-                    <span class="text-[var(--text-secondary)]">{label}</span>
+                    <span class="text-[var(--text-primary)]">{label}</span>
                     <p class="text-[var(--text-muted)] text-[11px] mt-0.5">{desc}</p>
                   </div>
                 </label>
@@ -1017,51 +1038,11 @@ Reply with only the single word, lowercase, no punctuation.
           {/if}
         </div>
 
-        {#if isAdv}
-          <!-- Chaperone: connection fields stay in left column -->
-          <div class="px-4 py-3 space-y-3">
-            <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Chaperone</p>
-
-            <div class="space-y-1">
-              <label for="ollama-url" class="text-[var(--text-muted)]">Ollama URL</label>
-              <input
-                id="ollama-url"
-                bind:value={cfgOllamaUrl}
-                onchange={() => saveModes()}
-                class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
-                       text-[13px] text-[var(--text-primary)] outline-none
-                       hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
-                spellcheck="false"
-              />
-            </div>
-
-            <div class="space-y-1">
-              <label for="classifier-model" class="text-[var(--text-muted)]">Classifier model</label>
-              <input
-                id="classifier-model"
-                bind:value={cfgLlmModel}
-                onchange={() => saveModes()}
-                placeholder="llama3.2:3b"
-                class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
-                       text-[13px] text-[var(--text-primary)] placeholder:text-[var(--text-muted)]
-                       outline-none hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
-                spellcheck="false"
-              />
-              <p class="text-[var(--text-muted)] text-[11px]">
-                Run <code class="font-mono">ollama pull llama3.2:3b</code> to fetch.
-              </p>
-            </div>
-          </div>
-        {/if}
-
-      </div>
-
-      <!-- Right column: vocabulary + prompt, slides in when Advanced -->
-      {#if isAdv}
-        <div class="flex-1 overflow-y-auto px-4 py-3 space-y-3 adv-panel-in">
-
+        <!-- Whisper bias prompt (always available, independent of cleanup mode) -->
+        <div class="px-4 py-3 space-y-3">
+          <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-secondary)]">Whisper</p>
           <div class="space-y-1">
-            <label for="custom-vocabulary" class="text-[var(--text-muted)]">Custom vocabulary</label>
+            <label for="custom-vocabulary" class="text-[var(--text-secondary)]">Custom vocabulary</label>
             <textarea
               id="custom-vocabulary"
               bind:value={cfgVocabulary}
@@ -1073,11 +1054,48 @@ Reply with only the single word, lowercase, no punctuation.
                      outline-none resize-none hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
               spellcheck="false"
             ></textarea>
-            <p class="text-[var(--text-muted)] text-[11px]">Domain terms Whisper tends to mishear.</p>
+            <p class="text-[var(--text-muted)] text-[11px]">Domain terms Whisper tends to mishear. Applied as <code class="font-mono">--prompt</code> bias every transcription.</p>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Right column: Chaperone connection + classifier prompt, slides in when Advanced -->
+      {#if isAdv}
+        <div class="flex-1 overflow-y-auto px-4 py-3 space-y-3 adv-panel-in">
+
+          <div class="space-y-1">
+            <label for="ollama-url" class="text-[var(--text-secondary)]">Ollama URL</label>
+            <input
+              id="ollama-url"
+              bind:value={cfgOllamaUrl}
+              onchange={() => saveModes()}
+              class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
+                     text-[13px] text-[var(--text-primary)] outline-none
+                     hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
+              spellcheck="false"
+            />
           </div>
 
           <div class="space-y-1">
-            <label for="classifier-prompt" class="text-[var(--text-muted)]">Classifier prompt</label>
+            <label for="classifier-model" class="text-[var(--text-secondary)]">Classifier model</label>
+            <input
+              id="classifier-model"
+              bind:value={cfgLlmModel}
+              onchange={() => saveModes()}
+              placeholder="llama3.2:3b"
+              class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
+                     text-[13px] text-[var(--text-primary)] placeholder:text-[var(--text-muted)]
+                     outline-none hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
+              spellcheck="false"
+            />
+            <p class="text-[var(--text-muted)] text-[11px]">
+              Run <code class="font-mono">ollama pull llama3.2:3b</code> to fetch.
+            </p>
+          </div>
+
+          <div class="space-y-1">
+            <label for="classifier-prompt" class="text-[var(--text-secondary)]">Classifier prompt</label>
 
             <!-- Preset chips. Active when the textarea content equals the
                  preset prompt verbatim; any edit drops back to "none active". -->
@@ -1087,7 +1105,7 @@ Reply with only the single word, lowercase, no punctuation.
                   onclick={() => applyPreset(p)}
                   class="text-[11px] px-2 py-0.5 rounded border transition-colors
                     {activePresetId === p.id
-                      ? 'bg-[var(--accent)]/15 border-[var(--accent)]/50 text-white'
+                      ? 'bg-[var(--accent)]/15 border-[var(--accent)]/50 text-[var(--text-primary)]'
                       : 'bg-transparent border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--accent)]/40 hover:text-[var(--text-primary)]'}"
                 >{p.label}</button>
               {/each}
@@ -1129,80 +1147,47 @@ Reply with only the single word, lowercase, no punctuation.
 
         <!-- Hotkey: side tabs + key dropdown on same row -->
         <div class="space-y-1">
-          <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Hotkey</p>
+          <SectionLabel>Hotkey</SectionLabel>
           <div class="flex items-center gap-2">
-            <div class="inline-flex rounded border border-[var(--border)]"
-                 style="background:var(--surface-deep); height:22px;">
-              {#each [['left','Left'],['right','Right']] as [side, sideLabel]}
-                <button
-                  onclick={() => { hotkeySide = side; applyHotkeyKey(); }}
-                  class="relative px-3 flex items-center text-[11px] font-medium transition-colors duration-100
-                         {hotkeySide === side && !hotkeyKeyPart.startsWith('numpad_')
-                           ? 'text-[var(--text-primary)]'
-                           : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}">
-                  {sideLabel}
-                  {#if hotkeySide === side && !hotkeyKeyPart.startsWith('numpad_')}
-                    <span class="absolute bottom-0 left-1 right-1 h-[2px] rounded-t bg-[var(--accent)]"></span>
-                  {/if}
-                </button>
-              {/each}
+            <div class:opacity-40={hotkeyKeyPart.startsWith('numpad_')}>
+              <SegmentedControl
+                variant="filled"
+                options={[{ value: 'left', label: 'Left' }, { value: 'right', label: 'Right' }]}
+                value={hotkeySide}
+                onchange={(v) => { hotkeySide = v; applyHotkeyKey(); }}
+              />
             </div>
-            <select
-              bind:value={hotkeyKeyPart}
-              onchange={applyHotkeyKey}
-              class="flex-1 bg-[var(--surface)] border border-[var(--border)] rounded px-2
-                     text-[11px] text-[var(--text-primary)] outline-none
-                     hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
-              style="height:22px;"
-            >
-              <option value="option">Option ⌥</option>
-              <option value="control">Control ⌃</option>
-              <option value="command">Command ⌘</option>
-              <option value="shift">Shift ⇧</option>
-              <option disabled value="">──────</option>
-              <option value="numpad_enter">Num Enter</option>
-              <option value="numpad_0">Num 0</option>
-              <option value="numpad_decimal">Num .</option>
-              <option value="numpad_add">Num +</option>
-              <option value="numpad_subtract">Num −</option>
-              <option value="numpad_multiply">Num *</option>
-            </select>
+            <div class="flex-1 min-w-0">
+              <Select
+                items={HOTKEY_KEY_ITEMS}
+                bind:value={hotkeyKeyPart}
+                onchange={applyHotkeyKey}
+              />
+            </div>
           </div>
         </div>
 
         <!-- Recording mode + microphone on same row -->
         <div class="space-y-1">
-          <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Recording</p>
+          <SectionLabel>Recording</SectionLabel>
           <div class="flex items-center gap-2">
-            <div class="inline-flex rounded border border-[var(--border)] shrink-0"
-                 style="background:var(--surface-deep); height:22px;">
-              {#each [['hold','Hold'],['toggle','Toggle']] as [val, label]}
-                <button
-                  onclick={() => { cfgHotkeyMode = val; saveSettings(); }}
-                  class="relative px-3 flex items-center text-[11px] font-medium transition-colors duration-100
-                         {cfgHotkeyMode === val
-                           ? 'text-[var(--text-primary)]'
-                           : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}">
-                  {label}
-                  {#if cfgHotkeyMode === val}
-                    <span class="absolute bottom-0 left-1 right-1 h-[2px] rounded-t bg-[var(--accent)]"></span>
-                  {/if}
-                </button>
-              {/each}
+            <SegmentedControl
+              variant="filled"
+              class="shrink-0"
+              options={[{ value: 'hold', label: 'Hold' }, { value: 'toggle', label: 'Toggle' }]}
+              value={cfgHotkeyMode}
+              onchange={(v) => { cfgHotkeyMode = v; saveSettings(); }}
+            />
+            <div class="flex-1 min-w-0">
+              <Select
+                items={[
+                  { value: 'default', label: 'System default' },
+                  ...audioDevices.map(d => ({ value: d, label: d })),
+                ]}
+                bind:value={cfgDevice}
+                onchange={() => saveSettings()}
+              />
             </div>
-            <select
-              bind:value={cfgDevice}
-              onchange={() => saveSettings()}
-              class="flex-1 bg-[var(--surface)] border border-[var(--border)] rounded px-2
-                     text-[11px] text-[var(--text-primary)] outline-none
-                     hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
-              style="height:22px;"
-            >
-              <option value="default">System default</option>
-              {#each audioDevices as d}
-                <option value={d}>{d}</option>
-              {/each}
-            </select>
           </div>
         </div>
 
@@ -1211,76 +1196,44 @@ Reply with only the single word, lowercase, no punctuation.
       <!-- Display -->
       <div class="px-4 py-3 space-y-2.5">
         <div class="space-y-1">
-          <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Theme</p>
-          <div class="inline-flex rounded border border-[var(--border)]"
-               style="background:var(--surface-deep); height:22px;">
-            {#each [['auto','Auto'],['light','Light'],['dark','Dark']] as [val, label]}
-              <button
-                onclick={() => { cfgTheme = val; saveSettings(); }}
-                class="relative px-3 flex items-center text-[11px] font-medium transition-colors duration-100
-                       {cfgTheme === val
-                         ? 'text-[var(--text-primary)]'
-                         : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}">
-                {label}
-                {#if cfgTheme === val}
-                  <span class="absolute bottom-0 left-1 right-1 h-[2px] rounded-t bg-[var(--accent)]"></span>
-                {/if}
-              </button>
-            {/each}
-          </div>
+          <SectionLabel>Theme</SectionLabel>
+          <SegmentedControl
+            variant="filled"
+            options={[
+              { value: 'auto',  label: 'Auto'  },
+              { value: 'light', label: 'Light' },
+              { value: 'dark',  label: 'Dark'  },
+            ]}
+            value={cfgTheme}
+            onchange={(v) => { cfgTheme = v; saveSettings(); }}
+          />
         </div>
         <div class="space-y-1">
-          <label for="history-auto-delete" class="block text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Auto-delete history</label>
-          <select
-            id="history-auto-delete"
+          <SectionLabel for="history-auto-delete">Auto-delete history</SectionLabel>
+          <Select
+            items={HISTORY_AUTO_DELETE_ITEMS}
             bind:value={cfgHistoryAutoDelete}
             onchange={() => saveSettings()}
             disabled={!cfgSaveHistory}
-            class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2
-                   text-[11px] text-[var(--text-primary)] outline-none
-                   hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors
-                   disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
-            style="height:22px;"
-          >
-            <option value="restart">On app restart</option>
-            <option value="1d">After 1 day</option>
-            <option value="5d">After 5 days</option>
-            <option value="10d">After 10 days</option>
-            <option value="30d">After 30 days</option>
-          </select>
-        </div>
-        <label class="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={cfgSaveHistory}
-            onchange={() => { cfgSaveHistory = !cfgSaveHistory; saveSettings(); }}
-            class="accent-[var(--accent)] w-3 h-3 shrink-0"
           />
-          <span class="text-[var(--text-secondary)]">Save history</span>
-        </label>
+        </div>
+        <Checkbox
+          bind:checked={cfgSaveHistory}
+          onchange={() => saveSettings()}
+        >Save history</Checkbox>
       </div>
 
       <!-- System -->
       <div class="px-4 py-3 space-y-2">
-        <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">System</p>
-        <label class="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={cfgLaunchLogin}
-            onchange={() => { cfgLaunchLogin = !cfgLaunchLogin; saveSettings(); }}
-            class="accent-[var(--accent)] w-3 h-3 shrink-0"
-          />
-          <span class="text-[var(--text-secondary)]">Launch at login</span>
-        </label>
-        <label class="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={cfgShowOverlay}
-            onchange={() => { cfgShowOverlay = !cfgShowOverlay; saveSettings(); }}
-            class="accent-[var(--accent)] w-3 h-3 shrink-0"
-          />
-          <span class="text-[var(--text-secondary)]">Show recording overlay</span>
-        </label>
+        <SectionLabel>System</SectionLabel>
+        <Checkbox
+          bind:checked={cfgLaunchLogin}
+          onchange={() => saveSettings()}
+        >Launch at login</Checkbox>
+        <Checkbox
+          bind:checked={cfgShowOverlay}
+          onchange={() => saveSettings()}
+        >Show recording overlay</Checkbox>
       </div>
 
       {#if import.meta.env.DEV}
@@ -1340,7 +1293,7 @@ Reply with only the single word, lowercase, no punctuation.
           <span class="text-[18px] font-semibold tracking-tight text-[var(--text-primary)]">Turbo Talk</span>
           <span class="text-[10px] text-[var(--text-muted)] tabular-nums">v0.8.0</span>
           <p class="text-[var(--text-secondary)] text-[11px] leading-snug mt-1.5 text-center">
-            Personal voice dictation for macOS.<br>Speak anywhere, paste everywhere.
+            Lightweight voice dictation<br>for getting work done.
           </p>
         </div>
         <div class="flex flex-col gap-0 pt-2.5">
