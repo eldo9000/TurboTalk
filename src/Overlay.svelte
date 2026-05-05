@@ -28,6 +28,7 @@
 
   let levels = Array(HISTORY).fill(0);
   let cursorInZone = $state(false);
+  let isPeeking = $derived(mode === 'recording' && cursorInZone);
 
   function draw() {
     if (!canvasEl) return;
@@ -69,7 +70,7 @@
     // Position math is done in logical units relative to the chosen
     // monitor's origin so the overlay lands on the correct screen on
     // multi-display setups.
-    let outerX = 0, outerY = 0;
+    let hoverZone = { x: 0, y: 0, w: OUTER_W, h: OUTER_H };
 
     async function positionOverlay() {
       let mon = null;
@@ -86,8 +87,14 @@
       const oy = mon.position.y / sf;
       const px = Math.round(ox + (mw - WIN_W) / 2);
       const py = Math.round(oy + mh - WIN_H - BOTTOM_GAP);
-      outerX = px - GUTTER;
-      outerY = py - GUTTER;
+      const outerX = px - GUTTER;
+      const outerY = py - GUTTER;
+      hoverZone = {
+        x: Math.round(outerX * sf),
+        y: Math.round(outerY * sf),
+        w: Math.round(OUTER_W * sf),
+        h: Math.round(OUTER_H * sf),
+      };
       await win.setPosition(new LogicalPosition(outerX, outerY));
     }
     await positionOverlay();
@@ -95,13 +102,8 @@
     const cursorTimer = setInterval(async () => {
       try {
         const cur = await cursorPosition();
-        const mon = await monitorFromPoint(cur.x, cur.y);
-        if (!mon) return;
-        const sf = mon.scaleFactor;
-        const cx = cur.x / sf;
-        const cy = cur.y / sf;
-        cursorInZone = cx >= outerX && cx <= outerX + OUTER_W
-                    && cy >= outerY && cy <= outerY + OUTER_H;
+        cursorInZone = cur.x >= hoverZone.x && cur.x <= hoverZone.x + hoverZone.w
+                    && cur.y >= hoverZone.y && cur.y <= hoverZone.y + hoverZone.h;
       } catch (_) {}
     }, 100);
 
@@ -180,7 +182,10 @@
       draw();
     }).then(u => uns.push(u));
 
-    return () => uns.forEach(u => u());
+    return () => {
+      clearInterval(cursorTimer);
+      uns.forEach(u => u());
+    };
   });
 </script>
 
@@ -206,7 +211,13 @@
   .pill {
     opacity: 0;
     transform: scale(0.88) translateY(6px);
-    transition: opacity 180ms ease-out, transform 180ms ease-out;
+    transition:
+      opacity 180ms ease-out,
+      transform 180ms ease-out,
+      background-color 180ms ease-out,
+      backdrop-filter 180ms ease-out,
+      -webkit-backdrop-filter 180ms ease-out;
+    will-change: opacity, transform, background-color, backdrop-filter;
     pointer-events: none;
     border: 1px solid transparent;
     position: relative;
@@ -215,9 +226,6 @@
   .pill.show {
     opacity: 1;
     transform: scale(1) translateY(0);
-  }
-  .pill.show.peek {
-    opacity: 0.2;
   }
   .pill.recording {
     animation: pulse-red 10s ease-in-out infinite;
@@ -236,8 +244,11 @@
     class:show={mode !== 'idle'}
     class:recording={mode === 'recording'}
     class:transcribing={mode === 'transcribing'}
-    class:peek={cursorInZone}
-    style="background: rgba(16,16,16,0.87); backdrop-filter: blur(18px) saturate(160%);"
+    class:peek={isPeeking}
+    style:background={isPeeking ? 'rgba(16,16,16,0.12)' : 'rgba(16,16,16,0.87)'}
+    style:backdrop-filter={isPeeking ? 'blur(1px) saturate(100%)' : 'blur(18px) saturate(160%)'}
+    style:-webkit-backdrop-filter={isPeeking ? 'blur(1px) saturate(100%)' : 'blur(18px) saturate(160%)'}
+    style:opacity={mode === 'idle' ? 0 : isPeeking ? 0.24 : 1}
   >
     <canvas
       bind:this={canvasEl}

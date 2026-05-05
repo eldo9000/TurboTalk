@@ -1,7 +1,17 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-05-04
-**Current state:** Win/Linux beta sprint partial loop landed (TASK-24, 28, 30, 31).
+**Last updated:** 2026-05-05
+**Current state:** Overlay peek-through regression investigated; frontend fix applied.
+The dim-on-hover path was still wired. Two fragilities were addressed in
+`src/Overlay.svelte`: hover hit-testing now uses physical cursor coordinates,
+and peek-through no longer relies on wrapper opacity alone. Peek now directly
+reduces the pill background alpha + backdrop blur, which should survive WebKit
+compositing changes after the progress bar removal. Proof so far: `npm run
+build`, `npm run typecheck`, and `git diff --check` pass. Local app launch was
+attempted, but CGEventTap failed because this dev binary is not trusted for
+Accessibility, so manual hotkey proof is still needed.
+
+Previous state: Win/Linux beta sprint partial loop landed (TASK-24, 28, 30, 31).
 Codebase is now structurally cross-platform-aware: target-triple sidecar lookup,
 per-platform bundle resources, host-aware preflight + artifact-rename scripts,
 unsigned-beta docs, and a 3-OS GH Actions release workflow. Mac happy path
@@ -45,6 +55,10 @@ lifecycle wrapper landed in TASK-20).
 None.
 
 ## Next action
+
+Run the manual overlay proof in an Accessibility-trusted build: hold Right Alt
+to record, move the cursor over the recording pill, and verify the pill dims
+without stealing focus.
 
 Beta audit repo work is done. Remaining v0.8 release note:
 - Document/communicate first-run install caveat: if the packaged hotkey is
