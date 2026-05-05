@@ -32,7 +32,25 @@
 //! themselves are deterministic and have no shell/network/file access.
 
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+use tauri::Emitter;
+
+static UI_ERROR_COOLDOWN: OnceLock<Mutex<HashMap<&'static str, Instant>>> = OnceLock::new();
+
+fn should_emit_ui_error(kind: &'static str) -> bool {
+    let map = UI_ERROR_COOLDOWN.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap();
+    let now = Instant::now();
+    if let Some(last) = guard.get(kind) {
+        if now.duration_since(*last) < Duration::from_secs(60) {
+            return false;
+        }
+    }
+    guard.insert(kind, now);
+    true
+}
 
 /// Voice command actions detected before classification.
 #[derive(Debug, PartialEq)]
@@ -53,7 +71,7 @@ enum Mode {
 
 /// Entry point called from transcribe.rs after whisper produces raw text.
 /// Returns the final string to paste (or an empty string for "scratch that").
-pub fn process(raw: &str) -> String {
+pub fn process(raw: &str, app: &tauri::AppHandle) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return String::new();
@@ -74,6 +92,13 @@ pub fn process(raw: &str) -> String {
             Ok(mode) => route(trimmed, mode, &cfg.cleanup),
             Err(e) => {
                 tracing::warn!("[chaperone] classify failed, falling back to raw transcript: {e}");
+                if should_emit_ui_error("chaperone-fallback") {
+                    let _ = app.emit("ui-error", serde_json::json!({
+                        "kind": "chaperone-fallback",
+                        "message": "Chaperone unreachable \u{2014} used raw output. Set up Ollama in Modes \u{2192} Advanced.",
+                        "recoverable": true
+                    }));
+                }
                 handle_raw(trimmed)
             }
         },
