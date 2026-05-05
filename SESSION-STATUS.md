@@ -14,10 +14,11 @@ saving a multi-minute CI cmake build per push. macOS happy path preserved:
 with no regression. The `.gitignore` excludes the fetched Windows files so
 they only exist on a Windows host post-fetch.
 
-Win sidecar fetch path was smoke-tested end-to-end on the macOS host by
-forcing the win32 target: download → sha256 verify → unzip → 5 files copied
-with correct sizes. The actual `tauri build` on a Windows runner is still
-unproven and is the next CI verification gate.
+Win sidecar fetch path verified by CI run 25378189425 (workflow_dispatch on
+`0e9ad71`): both matrix legs (macos-arm64, windows-x64) green. The Windows
+runner ran `npm run fetch-sidecars` → preflight → `tauri build` and uploaded
+the artifact. Runtime proof on a real Windows box still pending — hotkey +
+paste are still `Err("unsupported platform")` stubs (TASK-25 / TASK-26).
 
 Previous state: Overlay peek-through fix verified by user in an Accessibility-
 trusted build. Holding Right Alt opens the recording pill; cursor hover dims it
@@ -70,14 +71,12 @@ None.
 
 ## Next action
 
-Push a tag (or workflow_dispatch) against `.github/workflows/release.yml` to
-prove the Windows CI build path: `npm run fetch-sidecars` runs, preflight
-finds all five Windows assets, `tauri build` produces an NSIS `.exe`. That's
-the verification gate TASK-27 is missing today (script smoke-tested locally
-on macOS, but the actual Windows `tauri build` is unproven).
-
-After that, the next M4 leverage points:
+Win CI build proven green. Next M4 leverage points:
 - TASK-25 / TASK-26 — real Windows hotkey + paste impls (today: stubs).
+  Without these, the Windows `.exe` artifact installs but cannot dictate.
+- Optional: download the `windows-x64` artifact from CI run 25378189425 and
+  smoke-test the installer on a real Windows box to confirm the shipped
+  whisper-cli.exe + DLLs load and respond to `--help`.
 - Codesigning + notarization (gated on Apple Developer credentials).
 
 Remaining v0.8 release note:

@@ -54,7 +54,7 @@ Proved 2026-05-01. Chaperone routes transcripts through local LLM; falls back to
 - [ ] Codesigning + notarization (use Libre signing infra)
 - [ ] Cross-platform paste (Windows + Linux)
 - [ ] Streaming transcription (optional — big lift)
-- [ ] Custom vocabulary / hotwords
+- [x] Custom vocabulary / hotwords (`cleanup.vocabulary` → whisper `--prompt`; surfaced in Modes tab regardless of cleanup mode)
 
 ## Open Questions
 
