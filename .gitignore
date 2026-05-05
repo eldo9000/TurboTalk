@@ -40,3 +40,11 @@ models/
 *.app
 *.pkg
 dist-artifacts/
+
+# Fetched Windows sidecars (run `npm run fetch-sidecars` on a Windows host
+# to repopulate). The macOS arm64 binary + dylibs stay committed.
+src-tauri/binaries/whisper-cli-x86_64-pc-windows-msvc.exe
+src-tauri/binaries/whisper.dll
+src-tauri/binaries/ggml.dll
+src-tauri/binaries/ggml-base.dll
+src-tauri/binaries/ggml-cpu.dll

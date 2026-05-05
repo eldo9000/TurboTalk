@@ -87,34 +87,52 @@ done this, the build is not proven.
 If any step fails, the build is not beta-ready — file the failure in
 `SESSION-STATUS.md` before retrying.
 
-## Cross-platform packaging — deferred
+## Build a Windows x64 beta on a Windows host
 
-Windows and Linux beta artifacts are blocked. Before adding npm scripts
-or build commands for those platforms, the following must land:
+Prerequisites:
 
-- **Whisper sidecars** with target-triple suffixes in `src-tauri/binaries/`:
-  `whisper-cli-x86_64-pc-windows-msvc.exe` (and DLLs) and
-  `whisper-cli-x86_64-unknown-linux-gnu` (and `.so` deps or a static
-  build). Today only the `aarch64-apple-darwin` sidecar is bundled.
-- **Real `hotkey` and `paste` implementations** for each platform. The
-  current `src-tauri/src/hotkey.rs` and `src-tauri/src/paste.rs` are
-  macOS-only; non-mac targets must either ship a real implementation or
-  surface a clear "unsupported platform" error rather than silently
-  pretending to work.
-- **Platform-specific build prerequisites**: WebView2 runtime + MSVC
-  toolchain on Windows; WebKitGTK + libsoup + appindicator dev packages
-  on Linux (varies by distro). Tauri's prerequisite docs cover the full
-  list per OS.
-- **Preflight script extension**: `scripts/preflight.mjs` is currently
-  macOS-only. It needs per-platform required-asset lists before
-  `npm run package` is meaningful elsewhere.
+- Windows 10/11 x64 with WebView2 runtime present.
+- Rust toolchain via `rustup` (stable, host triple
+  `x86_64-pc-windows-msvc`).
+- Visual Studio Build Tools 2022 with the "Desktop development with C++"
+  workload (MSVC linker + Windows SDK).
+- Node.js 22+ and npm.
+
+From a clean checkout in PowerShell:
+
+```powershell
+npm install
+npm run fetch-sidecars
+npm run package
+```
+
+`npm run fetch-sidecars` downloads the pinned upstream whisper.cpp
+release zip (version + sha256 are baked into
+`scripts/fetch-sidecars.mjs`), verifies the hash, and extracts
+`whisper-cli.exe` plus the runtime DLLs into `src-tauri/binaries/`.
+Companion DLLs are bundled into the installer via
+`src-tauri/tauri.windows.conf.json` (`bundle.resources`).
+
+The fetch step is a no-op on non-Windows hosts.
+
+Linux beta artifacts are still blocked — Linux is excluded from
+`.github/workflows/release.yml` until the rdev hotkey + paste paths are
+validated on real X11 hardware.
+
+## Cross-platform — what's still missing
+
+- **Real `hotkey` and `paste` implementations** for non-mac platforms.
+  Today `src-tauri/src/hotkey.rs` and `src-tauri/src/paste.rs` ship
+  `Err("unsupported platform")` stubs off-mac. Win/Linux impls are
+  TASK-25 / TASK-26.
+- **Linux Whisper sidecar**: upstream whisper.cpp does not publish a
+  pre-built Linux binary. Either build from source in CI or ship a
+  static binary in a separate prebuilds repo before re-enabling Linux
+  in the release matrix.
 - **Rename helper extension**: `scripts/rename-artifact.mjs` only emits
-  `macos-arm64.dmg` today. Adding Windows (`.exe`) and Linux
-  (`.AppImage`) outputs is straightforward once the source paths
-  produced by `tauri build` on those targets are known.
-
-Until all of the above are in place, `npm run package` is a macOS-only
-command and any cross-platform claim in the README would be dishonest.
+  `macos-arm64.dmg` today. Adding Windows (`-windows-x64-setup.exe`) and
+  Linux (`-linux-x64.AppImage`) outputs is straightforward once the
+  source paths produced by `tauri build` on those targets are known.
 
 ## Release build (signed + notarized)
 

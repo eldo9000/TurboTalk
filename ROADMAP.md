@@ -50,7 +50,7 @@ Proved 2026-05-01. Chaperone routes transcripts through local LLM; falls back to
 - [x] Three-tab UI — History / Models / Settings with auto-fit window sizing
 - [x] Recording overlay — always-on-top transparent WhisperFlow-style waveform
 - [x] Models tab — active model selector, installed list, HuggingFace download catalog
-- [ ] Whisper bundled as Tauri sidecar (remove Homebrew dependency)
+- [x] Whisper bundled as Tauri sidecar (mac arm64 committed; Win x64 fetched via `npm run fetch-sidecars`, pinned to whisper.cpp v1.8.4)
 - [ ] Codesigning + notarization (use Libre signing infra)
 - [ ] Cross-platform paste (Windows + Linux)
 - [ ] Streaming transcription (optional — big lift)
