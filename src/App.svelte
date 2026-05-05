@@ -789,6 +789,8 @@ Reply with only the single word, lowercase, no punctuation.
               await commands.openSystemSettings('accessibility');
             } else if (err.kind === 'mic-permission') {
               await commands.openSystemSettings('microphone');
+            } else if (err.kind === 'chaperone-fallback') {
+              switchTab('modes');
             }
             uiErrors = uiErrors.filter(x => x.id !== err.id);
           }}
