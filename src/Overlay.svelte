@@ -3,6 +3,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow, primaryMonitor, monitorFromPoint, cursorPosition } from '@tauri-apps/api/window';
   import { LogicalPosition } from '@tauri-apps/api/dpi';
+  import { commands } from './bindings.ts';
 
   let mode      = $state('idle'); // 'idle' | 'recording' | 'transcribing'
   let canvasEl  = $state(null);
@@ -15,6 +16,27 @@
   // At 140 WPM: words ≈ speech_seconds * 140 / 60
   const SPEECH_THRESHOLD = 0.008;
   let speechFrames = 0;
+
+  // Transcript size indicator: lorem-ipsum-shaped pills that accumulate above
+  // the main pill while recording, giving a visual estimate of how much has
+  // been said. Driven by VAD-derived wordCount increments — no real
+  // transcription. Pills lay out inline (wrap to new rows) so the result reads
+  // as a paragraph rather than a stack of full-width bars.
+  let indicatorEnabled = $state(true);
+  let wordPills = $state([]); // [{id, w}] where w is pixel width
+  let nextPillId = 0;
+
+  // Empirical English-word length distribution, mapped to pixel widths.
+  // ~30% short (1–3 letters), ~45% medium (4–6), ~20% long (7–10), ~5% very
+  // long (11+). Width = letters × ~4 px, with mild jitter so identical-length
+  // shapes don't visually repeat.
+  function makePillWidth() {
+    const r = Math.random();
+    if (r < 0.30) return 8  + Math.random() * 7;   //  8–15 px (short)
+    if (r < 0.75) return 16 + Math.random() * 14;  // 16–30 px (medium)
+    if (r < 0.95) return 31 + Math.random() * 14;  // 31–45 px (long)
+    return 46 + Math.random() * 12;                // 46–58 px (very long)
+  }
 
   const CANVAS_W   = 140; // CSS pixels
   const CANVAS_H   = 28;
@@ -63,6 +85,13 @@
     canvasEl.width  = CANVAS_W * dpr;
     canvasEl.height = CANVAS_H * dpr;
     draw();
+
+    // Initial config read for the transcript-size indicator. Failure here is
+    // non-fatal — indicator stays hidden until a config-update event arrives.
+    try {
+      const cfg = await commands.loadConfig();
+      indicatorEnabled = cfg.transcript_size_indicator ?? true;
+    } catch (_) { /* keep indicator off */ }
 
     // Pick the monitor where the user's cursor lives — that's the screen
     // the focused app is most likely on. Falls back to the primary monitor
@@ -113,6 +142,7 @@
       levels = Array(HISTORY).fill(0);
       speechFrames = 0;
       wordCount = 0;
+      wordPills = [];
       mode = 'recording';
       draw();
       // Move to the monitor the user is currently on — they may have
@@ -152,6 +182,12 @@
       draw();
     }).then(u => uns.push(u));
 
+    listen('recording-cancelled-tap', () => {
+      clearInterval(transcribeTimer);
+      mode = 'idle';
+      draw();
+    }).then(u => uns.push(u));
+
     listen('recording-too-short', () => {
       clearInterval(transcribeTimer);
       mode = 'idle';
@@ -177,9 +213,29 @@
       levels = [...levels.slice(1), v];
       if (v > SPEECH_THRESHOLD) {
         speechFrames++;
-        wordCount = Math.round(speechFrames * 0.05 * 140 / 60);
+        const newCount = Math.round(speechFrames * 0.05 * 140 / 60);
+        if (newCount > wordCount) {
+          if (indicatorEnabled) {
+            // One pill per estimated word increment. Width drawn from an
+            // English-word-length distribution so rows wrap as paragraph-like
+            // text rather than identical full-width bars.
+            const delta = newCount - wordCount;
+            const newPills = [];
+            for (let i = 0; i < delta; i++) {
+              newPills.push({ id: nextPillId++, w: makePillWidth() });
+            }
+            wordPills = [...wordPills, ...newPills];
+          }
+          wordCount = newCount;
+        }
       }
       draw();
+    }).then(u => uns.push(u));
+
+    listen('config-update', (e) => {
+      const next = e.payload?.transcript_size_indicator ?? true;
+      indicatorEnabled = next;
+      if (!next) wordPills = [];
     }).then(u => uns.push(u));
 
     return () => {
@@ -236,9 +292,63 @@
 
   canvas { display: block; }
 
+  /* Transcript size indicator: lorem-ipsum-style word shapes laid out inline,
+     wrapping to new rows. Absolutely positioned so growth is upward without
+     shifting the main pill. align-content: flex-end keeps the newest row
+     pinned to the bottom; older rows clip out the top via overflow hidden. */
+  .indicator-pillbox {
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-bottom: 8px;
+    width: 240px;
+    max-height: 90px;
+    overflow: hidden;
+    background: rgba(16, 16, 16, 0.78);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 12px;
+    padding: 5px 10px;
+    min-height: 14px;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-content: flex-end;
+    justify-content: flex-start;
+    column-gap: 3px;
+    row-gap: 4px;
+    opacity: 0;
+    transition: opacity 180ms ease-out;
+    pointer-events: none;
+    backdrop-filter: blur(12px) saturate(140%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+    /* Soft fade at the top so clipped rows don't hard-cut. */
+    -webkit-mask-image: linear-gradient(to top, black 75%, transparent 100%);
+    mask-image: linear-gradient(to top, black 75%, transparent 100%);
+  }
+  .indicator-pillbox.show { opacity: 1; }
+  .word-line {
+    height: 5px;
+    background: rgba(255, 255, 255, 0.5);
+    border-radius: 2.5px;
+    flex-shrink: 0;
+  }
+
 </style>
 
 <div class="w-full h-full flex items-center justify-center">
+  <div class="relative">
+  {#if indicatorEnabled}
+    <div
+      class="indicator-pillbox"
+      class:show={mode === 'recording'}
+      style:opacity={mode === 'recording' ? (isPeeking ? 0.24 : 1) : 0}
+    >
+      {#each wordPills as p (p.id)}
+        <div class="word-line" style="width: {p.w}px;"></div>
+      {/each}
+    </div>
+  {/if}
   <div
     class="pill flex items-center gap-3.5 px-5 py-3.5 rounded-2xl"
     class:show={mode !== 'idle'}
@@ -270,5 +380,6 @@
       {/if}
     </div>
 
+  </div>
   </div>
 </div>
