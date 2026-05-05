@@ -41,6 +41,30 @@ export const commands = {
 	 *  macOS only — uses the system `open` command.
 	 */
 	openDataFolder: () => typedError<null, string>(__TAURI_INVOKE("open_data_folder")),
+	/**
+	 *  Check whether `model_name` is present in the configured Ollama instance's
+	 *  pulled-model list. Returns `Ok(false)` for all network / URL failures.
+	 *  Only returns `Err` for panics or framework-level issues.
+	 */
+	checkOllamaModel: (modelName: string) => typedError<boolean, string>(__TAURI_INVOKE("check_ollama_model", { modelName })),
+	/**
+	 *  Open a validated `https://*.ollama.com` URL in the user's default browser.
+	 * 
+	 *  Validation:
+	 *    - Must parse as a valid URL.
+	 *    - Must use `https`.
+	 *    - Host must be `ollama.com` or a subdomain (`*.ollama.com`).
+	 * 
+	 *  The allowlist is intentionally narrow — the only call site this task enables
+	 *  is the "Install Ollama" button. Any other URL fails loudly.
+	 */
+	openUrl: (url: string) => typedError<null, string>(__TAURI_INVOKE("open_url", { url })),
+	/**
+	 *  Ping the configured Ollama instance by hitting GET {ollama_url}/api/version.
+	 *  Returns `Ok(Reachable { reachable: false, version: None })` for all expected
+	 *  failure modes — only panics or Tauri framework issues produce `Err`.
+	 */
+	pingOllama: () => typedError<Reachable, string>(__TAURI_INVOKE("ping_ollama")),
 	runDiagnostics: () => __TAURI_INVOKE<DiagnosticsResult>("run_diagnostics"),
 	checkReadiness: () => __TAURI_INVOKE<Readiness>("check_readiness"),
 	/**
@@ -130,6 +154,25 @@ export type Config = {
 	 *  When false, the overlay window is hidden — the tray icon still reflects state.
 	 */
 	show_overlay?: boolean,
+	/**
+	 *  Whether the recording overlay shows a transcript-size indicator (a visual
+	 *  estimate of how long and how much talking the user has been doing — driven
+	 *  by VAD voiced-frame counts, not real transcription).
+	 */
+	transcript_size_indicator?: boolean,
+	// Play a sound cue when recording starts.
+	sound_on_start?: boolean,
+	// Play a sound cue when transcription begins.
+	sound_on_transcribe?: boolean,
+	// Play a sound cue when transcription finishes and text is pasted.
+	sound_on_finish?: boolean,
+	/**
+	 *  Play a soft chime when a recording is cancelled (Escape, tap-mash, or
+	 *  tray click). Defaults off to match the rest of the audio cues.
+	 */
+	sound_on_cancel?: boolean,
+	// Volume for sound cues, 0.0–1.0.
+	sound_volume?: number,
 };
 
 /**
@@ -182,9 +225,26 @@ export type HistoryEntry = {
 export type HotkeyConfig = {
 	key: string,
 	mode: string,
+	/**
+	 *  Cancel an in-flight recording when the user presses Escape. Read on
+	 *  every keystroke from the global hotkey listener — only acts while the
+	 *  recorder is busy, so Escape passes through to the focused app
+	 *  otherwise.
+	 */
+	cancel_on_esc?: boolean,
 };
 
 export type PermissionStatus = "granted" | "denied" | "not_determined" | "unsupported";
+
+/**
+ *  Returned by `ping_ollama`. `reachable: false` covers all expected failure
+ *  modes (URL invalid, connection refused, timeout, non-2xx) so the frontend
+ *  can render a "not detected" state without bouncing through typedError.
+ */
+export type Reachable = {
+	reachable: boolean,
+	version: string | null,
+};
 
 export type Readiness = {
 	accessibility: PermissionStatus,

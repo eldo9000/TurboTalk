@@ -15,6 +15,7 @@ pub mod audio_finalizer;
 pub mod cleanup;
 pub mod diagnostics;
 pub mod hotkey;
+pub mod ollama;
 pub mod paste;
 pub mod permissions;
 pub mod recorder;
@@ -62,6 +63,7 @@ fn save_config(
     cfg: settings::Config,
     hotkey_state: tauri::State<'_, HotkeyState>,
 ) -> Result<(), String> {
+    use tauri::Emitter;
     settings::save(&cfg).map_err(|e| e.to_string())?;
     *hotkey_state.write() = cfg.hotkey.clone();
     apply_overlay_visibility(&app, cfg.show_overlay);
@@ -70,6 +72,10 @@ fn save_config(
     // rebuild is cheap (path validation only — no model load) so we do not
     // try to detect "did anything actually change".
     transcribe::invalidate_worker();
+    // Notify other windows (overlay) of UI-relevant config changes. The
+    // overlay reads transcript_size_indicator and show_overlay on mount and
+    // refreshes when this fires.
+    let _ = app.emit("config-update", &cfg);
     Ok(())
 }
 
@@ -364,9 +370,9 @@ fn list_audio_devices() -> Vec<String> {
 fn cancel_recording(
     recorder_state: tauri::State<'_, RecorderState>,
     tray_icon_state: tauri::State<'_, TrayIconState>,
+    hotkey_state: tauri::State<'_, HotkeyState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    use tauri::Emitter;
     let rec = recorder_state.inner();
     let tray = tray_icon_state.inner();
     let state = rec.state();
@@ -376,9 +382,14 @@ fn cancel_recording(
     ) {
         return Err(format!("nothing to cancel (recorder is {})", state));
     }
-    rec.cancel();
-    let _ = tray.set_icon(Some(tray::make_icon(tray::TrayState::Idle)));
-    let _ = app.emit("recording-cancelled", ());
+    // Hold mode + Recording: a matching key-release will dispatch ptt_up.
+    // Arm one suppression slot so it no-ops instead of cascading into
+    // CANCEL_PENDING. Toggle mode releases are already no-ops, so skip.
+    let hold_mode = hotkey_state.read().mode == "hold";
+    if hold_mode && matches!(state, recorder::State::Recording) {
+        hotkey::arm_ptt_up_suppression();
+    }
+    hotkey::trigger_cancel(rec, tray, &app);
     Ok(())
 }
 
@@ -456,6 +467,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         start_recording,
         stop_recording,
         open_data_folder,
+        ollama::check_ollama_model,
+        ollama::open_url,
+        ollama::ping_ollama,
         diagnostics::run_diagnostics,
         permissions::check_readiness,
         permissions::request_microphone_permission,
@@ -512,6 +526,9 @@ pub fn run() {
             start_recording,
             stop_recording,
             open_data_folder,
+            ollama::check_ollama_model,
+            ollama::open_url,
+            ollama::ping_ollama,
             diagnostics::run_diagnostics,
             permissions::check_readiness,
             permissions::request_microphone_permission,
@@ -565,18 +582,18 @@ pub fn run() {
                     {
                         let app = tray.app_handle();
                         // If recording is active, cancel it instead of opening the window.
-                        // cancel() joins the feeder thread — must run off the main thread
-                        // or the app freezes. Same pattern as ptt_down / ptt_up.
+                        // trigger_cancel joins the feeder thread off the main thread
+                        // internally. Arm ptt_up suppression first when the user might
+                        // still be holding the record key (hold mode), so the eventual
+                        // key release no-ops instead of poisoning CANCEL_PENDING.
                         let rec = app.state::<RecorderState>();
                         if matches!(rec.inner().state(), recorder::State::Recording) {
-                            let rec2  = Arc::clone(rec.inner());
-                            let tray2 = tray.clone();
-                            let app2  = app.clone();
-                            std::thread::spawn(move || {
-                                rec2.cancel();
-                                let _ = tray2.set_icon(Some(tray::make_icon(tray::TrayState::Idle)));
-                                let _ = app2.emit("recording-cancelled", ());
-                            });
+                            let hk = app.state::<HotkeyState>();
+                            let hold_mode = hk.read().mode == "hold";
+                            if hold_mode {
+                                hotkey::arm_ptt_up_suppression();
+                            }
+                            hotkey::trigger_cancel(rec.inner(), tray, app);
                             return;
                         }
                         if let Some(win) = app.get_webview_window("main") {
