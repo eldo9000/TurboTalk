@@ -1,7 +1,17 @@
-// Keep the CoreAudio stream open only while recording.
-// On start(): query the current device from config, open a fresh stream.
-// On stop(): stop recording, drain the buffer, write WAV, drop the stream.
-// This lets the device change (built-in ↔ AirPods) without restarting the app.
+// Lazy pre-warm (TASK-36):
+//   AudioCapture keeps the cpal stream open between recordings, with the
+//   `is_recording` flag inside the cpal callback gating whether captured
+//   samples are retained. After `stop()` / `cancel()`, the stream stays
+//   warm for `IDLE_TIMEOUT`; a watchdog thread closes it once the idle
+//   deadline elapses so the macOS mic indicator clears when the user is
+//   not actively dictating. Back-to-back recordings within the idle
+//   window skip CoreAudio init entirely.
+//
+//   Device change handling: each `start()` re-reads the configured device
+//   from settings; if it differs from the warm stream's device the warm
+//   stream is dropped and a new one is opened. Built-in ↔ AirPods still
+//   works at the cost of a single cold-start latency on the first press
+//   after the swap.
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
@@ -39,6 +49,22 @@ const TARGET_BITS_PER_SAMPLE: u16 = 16;
 /// accidental key-taps. 100 ms ≈ 1600 samples at 16 kHz.
 const MIN_RECORDING_MS: u32 = 100;
 
+/// How long a warm cpal stream stays open after a recording ends before
+/// the watchdog closes it. Long enough to absorb back-to-back dictation
+/// (think: two-sentence corrections), short enough that the macOS mic
+/// indicator clears when the user steps away.
+///
+/// Hardcoded for now — there is no user-facing setting. If feedback
+/// shows the value is wrong for real workflows, expose it via
+/// `settings.audio.idle_timeout_secs`.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// How often the idle watchdog wakes up to check whether the warm stream
+/// should be closed. 1 s is plenty — IDLE_TIMEOUT is in tens of seconds
+/// and the watchdog only does an `Instant` compare and an atomic load
+/// when nothing is due.
+const WATCHDOG_TICK: Duration = Duration::from_secs(1);
+
 struct ActiveStream {
     _stream: cpal::Stream,
     sample_rate: u32,
@@ -54,7 +80,28 @@ pub struct AudioCapture {
     /// `device_lost()` — swap-to-false on read so a single device-loss event
     /// surfaces exactly once.
     device_lost: Arc<AtomicBool>,
-    active: Mutex<Option<ActiveStream>>,
+    /// TASK-36: holds the warm cpal stream between recordings. Replaces
+    /// the per-press `active` field that this struct used to carry. The
+    /// stream is opened once per device, gated by the `is_recording`
+    /// flag inside the cpal callback, and torn down by the idle
+    /// watchdog or by a device-change check at the next `start()`.
+    /// Stored behind `Arc` so the watchdog thread can hold its own
+    /// handle without borrowing `&self`.
+    warm_stream: Arc<Mutex<Option<ActiveStream>>>,
+    /// Name of the device the `warm_stream` was opened against. Used at
+    /// the next `start()` to decide whether the warm stream still
+    /// matches the configured device. Same `Arc<Mutex>` pattern as
+    /// `warm_stream` for the same reason.
+    warm_device_name: Arc<Mutex<Option<String>>>,
+    /// `Some(deadline)` after `stop()` / `cancel()` returns; the
+    /// watchdog reads this and closes the warm stream once
+    /// `Instant::now() >= deadline`. `None` means "do not close" —
+    /// either we're recording right now, or there's no warm stream.
+    idle_close_at: Arc<Mutex<Option<Instant>>>,
+    /// Idle-watchdog thread handle. Joined on `Drop`.
+    watchdog_handle: Mutex<Option<JoinHandle<()>>>,
+    /// Set on `Drop` to tell the watchdog to exit.
+    shutdown_watchdog: Arc<AtomicBool>,
     /// TASK-22: streaming finalizer worker (resample + VAD off the
     /// post-release critical path). Spawned in `start()`, shut down in
     /// `stop()` / `cancel()`. The capture-feeder thread (`feeder`) ships
@@ -117,26 +164,33 @@ pub enum StopOutcome {
 //
 // Concrete access pattern in this codebase, threading the needle:
 //   - Hotkey thread (the CGEventTap callback in hotkey.rs runs on a single
-//     dedicated OS thread that owns the CFRunLoop): the *only* thread that
-//     ever touches `self.active`. It calls `start()` (creating the Stream)
-//     and `stop()` (dropping the Stream) — both on the same thread. The
-//     `active: Mutex<Option<ActiveStream>>` is taken as the only path to
+//     dedicated OS thread that owns the CFRunLoop): the primary thread
+//     that touches `self.warm_stream`. It calls `start()` (creating or
+//     reusing the Stream) and `stop()` (leaving the Stream warm). The
+//     `warm_stream: Mutex<Option<ActiveStream>>` is the only path to
 //     read or replace the stream; it serializes against any pathological
 //     re-entry.
+//   - Idle-watchdog thread (spawned in `AudioCapture::new`): also touches
+//     `self.warm_stream`, but only to drop a stale warm stream after
+//     `IDLE_TIMEOUT` has elapsed. The mutex serializes with the hotkey
+//     thread; the `is_recording` flag check inside the watchdog covers
+//     the race where the hotkey thread flips back to recording between
+//     the watchdog reading `idle_close_at` and acquiring the mutex.
 //   - Level-broadcast thread (spawned in lib.rs): calls `level()` which
 //     reads the `level: Arc<AtomicU32>` only, and `recorder.is_recording()`
-//     which reads Recorder's own `Mutex<State>` — never touches `active`
-//     and therefore never touches the cpal::Stream.
+//     which reads Recorder's own `Mutex<State>` — never touches
+//     `warm_stream` and therefore never touches the cpal::Stream.
 //   - CoreAudio callback thread (cpal-managed): the callback closure
 //     captures clones of `is_recording` (AtomicBool), `samples` (Arc<Mutex>)
-//     and `level` (AtomicU32) — never the `active` field, never the Stream
-//     itself, never `&self`.
+//     and `level` (AtomicU32) — never the `warm_stream` field, never the
+//     Stream itself, never `&self`.
 //
-// So `active` is single-threaded in practice, and every other field is
-// already-Send-and-Sync (atomics + `Arc<Mutex<Vec<f32>>>`). No data race
-// on the Stream is reachable. The unsafe impls patch over a missing Send
-// bound on a `Box<dyn FnMut()>` deep inside cpal; they do not paper over
-// any real concurrent access.
+// So `warm_stream` is touched from at most two threads (hotkey + watchdog)
+// always behind a parking_lot Mutex, and every other field is already-
+// Send-and-Sync (atomics + `Arc<Mutex<Vec<f32>>>`). No data race on the
+// Stream is reachable. The unsafe impls patch over a missing Send bound
+// on a `Box<dyn FnMut()>` deep inside cpal; they do not paper over any
+// real concurrent access.
 unsafe impl Send for AudioCapture {}
 unsafe impl Sync for AudioCapture {}
 unsafe impl Send for ActiveStream {}
@@ -265,17 +319,75 @@ fn peak_normalize(samples: &mut [f32], target: f32) {
 
 impl AudioCapture {
     pub fn new() -> anyhow::Result<Self> {
-        Ok(Self {
+        let capture = Self {
             samples: Arc::new(Mutex::new(Vec::new())),
             level: Arc::new(AtomicU32::new(0)),
             is_recording: Arc::new(AtomicBool::new(false)),
             device_lost: Arc::new(AtomicBool::new(false)),
-            active: Mutex::new(None),
+            warm_stream: Arc::new(Mutex::new(None)),
+            warm_device_name: Arc::new(Mutex::new(None)),
+            idle_close_at: Arc::new(Mutex::new(None)),
+            watchdog_handle: Mutex::new(None),
+            shutdown_watchdog: Arc::new(AtomicBool::new(false)),
             streaming: Mutex::new(None),
             feeder: Mutex::new(None),
             feeder_stop: Arc::new(AtomicBool::new(false)),
             feeder_cursor: Arc::new(AtomicUsize::new(0)),
-        })
+        };
+        capture.spawn_watchdog();
+        Ok(capture)
+    }
+
+    /// Spawn the idle watchdog. Loops until `shutdown_watchdog` is set;
+    /// every `WATCHDOG_TICK` it checks whether the warm stream is past
+    /// its idle deadline and, if so, closes it. The `is_recording`
+    /// check inside guards against a race where `start()` flipped the
+    /// flag between the watchdog reading `idle_close_at` and acquiring
+    /// the `warm_stream` mutex — see the SAFETY block above for the
+    /// thread-access pattern.
+    fn spawn_watchdog(&self) {
+        let shutdown = self.shutdown_watchdog.clone();
+        let idle_close_at = self.idle_close_at.clone();
+        let is_recording = self.is_recording.clone();
+        let warm_stream = self.warm_stream.clone();
+        let warm_device_name = self.warm_device_name.clone();
+
+        let handle = std::thread::Builder::new()
+            .name("turbotalk-audio-watchdog".into())
+            .spawn(move || loop {
+                std::thread::sleep(WATCHDOG_TICK);
+                if shutdown.load(Ordering::SeqCst) {
+                    return;
+                }
+                let due = {
+                    let guard = idle_close_at.lock();
+                    match *guard {
+                        Some(deadline) => Instant::now() >= deadline,
+                        None => false,
+                    }
+                };
+                if !due {
+                    continue;
+                }
+                // Race-safe close: re-check is_recording under the
+                // warm_stream lock. If start() flipped the flag while
+                // we were waking up, leave the warm stream alone.
+                let mut stream_guard = warm_stream.lock();
+                if is_recording.load(Ordering::SeqCst) {
+                    // Recording resumed; clear the deadline and keep
+                    // the warm stream open.
+                    *idle_close_at.lock() = None;
+                    continue;
+                }
+                if stream_guard.is_some() {
+                    *stream_guard = None;
+                    *warm_device_name.lock() = None;
+                    tracing::info!("[audio] stream closed (idle timeout)");
+                }
+                *idle_close_at.lock() = None;
+            })
+            .expect("spawn audio watchdog thread");
+        *self.watchdog_handle.lock() = Some(handle);
     }
 
     fn open_stream(&self, want: &str) -> anyhow::Result<ActiveStream> {
@@ -426,18 +538,57 @@ impl AudioCapture {
     pub fn start(&self) -> anyhow::Result<()> {
         self.samples.lock().clear();
         self.level.store(0_f32.to_bits(), Ordering::Relaxed);
-        // Clear any stale device-lost flag from a previous session so a fresh
-        // recording doesn't immediately trigger the loss path.
-        self.device_lost.store(false, Ordering::SeqCst);
+        // If the previous session ended with device-lost, the warm
+        // stream is broken — drop it so we re-open below.
+        let device_was_lost = self.device_lost.swap(false, Ordering::SeqCst);
+        if device_was_lost {
+            *self.warm_stream.lock() = None;
+            *self.warm_device_name.lock() = None;
+        }
         self.feeder_stop.store(false, Ordering::SeqCst);
         self.feeder_cursor.store(0, Ordering::SeqCst);
 
         // Always read device from config so changes take effect without restart.
         let want = crate::settings::load().audio.device;
-        let stream = self.open_stream(&want)?;
-        let src_rate = stream.sample_rate;
-        let src_channels = stream.channels;
-        *self.active.lock() = Some(stream);
+
+        // Decide whether to reuse the warm stream or open a fresh one.
+        // Holding `warm_stream` across `open_stream` is fine — the only
+        // other thread that touches it (the watchdog) just spins on the
+        // mutex for at most a few ms.
+        let (src_rate, src_channels) = {
+            let mut warm = self.warm_stream.lock();
+            let mut warm_name = self.warm_device_name.lock();
+            let reuse = match (warm.as_ref(), warm_name.as_ref()) {
+                (Some(_), Some(name)) => name.as_str() == want.as_str(),
+                _ => false,
+            };
+            if reuse {
+                let active = warm.as_ref().expect("reuse implies Some");
+                tracing::info!(
+                    "[audio] stream reused (warm) — device=\"{}\" {} Hz {} ch",
+                    want,
+                    active.sample_rate,
+                    active.channels
+                );
+                (active.sample_rate, active.channels)
+            } else {
+                if warm.is_some() {
+                    *warm = None;
+                    *warm_name = None;
+                    tracing::info!("[audio] stream closed (device change)");
+                }
+                let stream = self.open_stream(&want)?;
+                let rate = stream.sample_rate;
+                let channels = stream.channels;
+                *warm = Some(stream);
+                *warm_name = Some(want.clone());
+                tracing::info!("[audio] stream pre-warmed");
+                (rate, channels)
+            }
+        };
+
+        // Cancel any pending idle close — we're about to record.
+        *self.idle_close_at.lock() = None;
 
         // TASK-22: spawn the streaming finalizer worker and the
         // capture-feeder thread. The worker owns the resampler + VAD
@@ -562,8 +713,12 @@ impl AudioCapture {
             .expect("spawn capture-feeder thread")
     }
 
-    /// Drop the active stream and clear the sample buffer without producing a
-    /// WAV. Called by the level-broadcast thread when device loss is detected.
+    /// Cancel the in-flight recording. Tears down the per-recording
+    /// streaming worker + feeder and clears the sample buffer, but
+    /// leaves the cpal stream warm for the next press — unless the
+    /// cancellation is itself the response to a device-lost event, in
+    /// which case the stream is broken and we drop it. The idle
+    /// watchdog will close the warm stream after `IDLE_TIMEOUT`.
     pub fn cancel(&self) {
         self.is_recording.store(false, Ordering::SeqCst);
 
@@ -579,9 +734,27 @@ impl AudioCapture {
         let streaming = self.streaming.lock().take();
         drop(streaming);
 
-        *self.active.lock() = None;
+        // Device-lost: the underlying cpal stream is broken — drop it
+        // immediately so the next start() opens a fresh stream against
+        // whatever device is now configured. We read `device_lost`
+        // directly (without the swap-on-read accessor): the level
+        // thread already swapped the flag when it observed the loss
+        // and called cancel(). At this point start() will see
+        // `device_lost=false` again, but the broken stream is already
+        // gone here.
+        if self.device_lost.load(Ordering::SeqCst) {
+            *self.warm_stream.lock() = None;
+            *self.warm_device_name.lock() = None;
+            tracing::info!("[audio] stream closed (device lost)");
+        }
+
         self.samples.lock().clear();
         self.level.store(0_f32.to_bits(), Ordering::Relaxed);
+
+        // Arm the idle watchdog so the warm stream (if any) closes
+        // after IDLE_TIMEOUT.
+        *self.idle_close_at.lock() = Some(Instant::now() + IDLE_TIMEOUT);
+
         tracing::info!("[audio] recording cancelled");
     }
 
@@ -600,14 +773,21 @@ impl AudioCapture {
         std::thread::sleep(Duration::from_millis(25));
 
         let t_capture_clone_start = Instant::now();
+        // Read sample-rate / channels from the warm stream — but DO NOT
+        // drop it. Leaving it warm is the entire point of TASK-36; the
+        // idle watchdog is responsible for closing it after
+        // IDLE_TIMEOUT.
         let (src_sample_rate, src_channels) = {
-            let active = self.active.lock();
-            match active.as_ref() {
+            let warm = self.warm_stream.lock();
+            match warm.as_ref() {
                 Some(a) => (a.sample_rate, a.channels),
                 None => return Ok(StopOutcome::Discard(DiscardReason::NoStream)),
             }
         };
-        *self.active.lock() = None; // drop stream
+
+        // Arm the idle watchdog so the warm stream closes after
+        // IDLE_TIMEOUT regardless of which return path we take below.
+        *self.idle_close_at.lock() = Some(Instant::now() + IDLE_TIMEOUT);
 
         // Signal the capture-feeder to drain remaining samples and
         // exit, then join it. After this the streaming worker has
@@ -816,6 +996,18 @@ impl AudioCapture {
         }
         writer.finalize()?;
         Ok(temp_path)
+    }
+}
+
+impl Drop for AudioCapture {
+    fn drop(&mut self) {
+        // Tell the watchdog to exit on its next tick, then join it so
+        // it can't outlive the Arcs it holds.
+        self.shutdown_watchdog.store(true, Ordering::SeqCst);
+        if let Some(h) = self.watchdog_handle.lock().take() {
+            let _ = h.join();
+        }
+        // The warm stream is dropped implicitly with the field.
     }
 }
 
