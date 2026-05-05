@@ -76,9 +76,11 @@ Proof: `[audio] wrote 42240 samples` (1.76s voice), transcript landed in Notes.a
 - Windows x64: `npm run fetch-sidecars` downloads upstream
   `whisper-bin-x64.zip` (whisper.cpp v1.8.4, sha256-pinned) and extracts
   `whisper-cli.exe` + 4 DLLs into `src-tauri/binaries/`. DLLs declared in
-  `src-tauri/tauri.windows.conf.json` `bundle.resources`. End-to-end fetch
-  smoke-tested on macOS host by forcing win32 target. Actual Windows
-  `tauri build` not yet exercised — pending CI run.
+  `src-tauri/tauri.windows.conf.json` `bundle.resources`. CI release
+  workflow ran green on commit `0e9ad71`
+  (https://github.com/eldo9000/TurboTalk-App/actions/runs/25378189425) —
+  preflight passes, `tauri build` produces an NSIS installer. Runtime
+  proof on a real Windows box still pending (hotkey + paste are stubs).
 - Linux: not bundled. Excluded from release matrix until rdev hotkey + paste
   validated on real X11 hardware.
 
