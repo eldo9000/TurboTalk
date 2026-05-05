@@ -14,6 +14,7 @@
 //   after the swap.
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -64,6 +65,19 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(45);
 /// and the watchdog only does an `Instant` compare and an atomic load
 /// when nothing is due.
 const WATCHDOG_TICK: Duration = Duration::from_secs(1);
+
+/// TASK-37: pre-roll ring buffer length, in milliseconds. While the cpal
+/// stream is warm but the user hasn't pressed PTT yet, incoming samples
+/// are written into a fixed-size ring buffer. On PTT-down, the ring is
+/// drained into the per-recording `samples` buffer so the first ~300 ms
+/// of audio (including the leading phoneme of a word the user started
+/// before the key registered) is captured.
+///
+/// 300 ms is a deliberate compromise: long enough to catch most leading-
+/// word clip-offs (typical word length 150–400 ms), short enough that we
+/// don't accidentally include a prior cough or click. Hardcoded; no
+/// user-facing setting.
+const PREROLL_MS: u32 = 300;
 
 struct ActiveStream {
     _stream: cpal::Stream,
@@ -123,6 +137,20 @@ pub struct AudioCapture {
     /// the feeder has exited so it knows whether all captured audio
     /// reached the worker.
     feeder_cursor: Arc<AtomicUsize>,
+    /// TASK-37: pre-roll ring buffer. Filled by the cpal callback every
+    /// tick (regardless of `is_recording`); drained by `start()` on
+    /// PTT-down and prepended to `samples`. Holds raw native-rate,
+    /// native-channel samples — same format as `samples` mid-recording,
+    /// so no per-callback DSP is added. Bounded to `preroll_capacity`
+    /// samples (~300 ms at native rate × channels), so memory cost is
+    /// fixed and small (~115 KB at 48 kHz stereo f32).
+    preroll: Arc<Mutex<VecDeque<f32>>>,
+    /// Capacity in samples for the pre-roll ring. Set when the stream is
+    /// opened so the cpal callback can read it without taking the
+    /// `preroll` lock to size-check. Cleared (set to 0) when the warm
+    /// stream is closed so a stale capacity from the previous device's
+    /// rate/channels can never affect the next stream's ring.
+    preroll_capacity: Arc<AtomicUsize>,
 }
 
 /// Why a recording was thrown away instead of returning a WAV path.
@@ -333,6 +361,8 @@ impl AudioCapture {
             feeder: Mutex::new(None),
             feeder_stop: Arc::new(AtomicBool::new(false)),
             feeder_cursor: Arc::new(AtomicUsize::new(0)),
+            preroll: Arc::new(Mutex::new(VecDeque::new())),
+            preroll_capacity: Arc::new(AtomicUsize::new(0)),
         };
         capture.spawn_watchdog();
         Ok(capture)
@@ -351,6 +381,8 @@ impl AudioCapture {
         let is_recording = self.is_recording.clone();
         let warm_stream = self.warm_stream.clone();
         let warm_device_name = self.warm_device_name.clone();
+        let preroll = self.preroll.clone();
+        let preroll_capacity = self.preroll_capacity.clone();
 
         let handle = std::thread::Builder::new()
             .name("turbotalk-audio-watchdog".into())
@@ -382,6 +414,11 @@ impl AudioCapture {
                 if stream_guard.is_some() {
                     *stream_guard = None;
                     *warm_device_name.lock() = None;
+                    // TASK-37: clear stale pre-roll so the next stream
+                    // (potentially at a different rate / channels)
+                    // starts with an empty ring.
+                    preroll.lock().clear();
+                    preroll_capacity.store(0, Ordering::SeqCst);
                     tracing::info!("[audio] stream closed (idle timeout)");
                 }
                 *idle_close_at.lock() = None;
@@ -424,6 +461,22 @@ impl AudioCapture {
         let smp = self.samples.clone();
         let lvl = self.level.clone();
 
+        // TASK-37: size and prepare the pre-roll ring for this stream's
+        // native rate / channels. Cleared (not just resized) because a
+        // device change between presses must not leak old-device samples
+        // into the new ring.
+        let preroll_cap =
+            (PREROLL_MS as usize * sample_rate as usize * channels as usize) / 1000;
+        self.preroll_capacity
+            .store(preroll_cap, Ordering::SeqCst);
+        {
+            let mut ring = self.preroll.lock();
+            ring.clear();
+            ring.reserve(preroll_cap);
+        }
+        let pre = self.preroll.clone();
+        let pre_cap = self.preroll_capacity.clone();
+
         // Error callback runs on cpal's audio thread. We *cannot* safely call
         // into Tauri (no AppHandle here) — so we set an atomic flag and let
         // the level-broadcast thread (which already polls every 50 ms and has
@@ -465,12 +518,31 @@ impl AudioCapture {
         // TASK-22 constraint. Verified by code inspection: the only
         // operations below `extend_from_slice` and `level.store`. If
         // you add work here, it MUST be moved to the feeder or worker.
+        // TASK-37: feed the pre-roll ring on every callback regardless
+        // of `is_recording`. Operations: lock → extend → trim front if
+        // over capacity → unlock. One short critical section, called
+        // per CoreAudio buffer (~10 ms). If profiling shows contention,
+        // swap for an SPSC ring (e.g. `rtrb`) — don't pre-optimize.
+        fn push_preroll(ring: &Mutex<VecDeque<f32>>, capacity: usize, data: &[f32]) {
+            if capacity == 0 {
+                return;
+            }
+            let mut g = ring.lock();
+            g.extend(data.iter().copied());
+            if g.len() > capacity {
+                let drop = g.len() - capacity;
+                g.drain(0..drop);
+            }
+        }
+
         let stream = match sample_format {
             cpal::SampleFormat::F32 => {
                 device.build_input_stream(
                     &config.into(),
                     move |data: &[f32], _: &_| {
-                        // CALLBACK-ALLOWED-OPS: append + level only.
+                        // CALLBACK-ALLOWED-OPS: pre-roll push, append, level.
+                        let cap = pre_cap.load(Ordering::Relaxed);
+                        push_preroll(&pre, cap, data);
                         if rec.load(Ordering::Relaxed) {
                             smp.lock().extend_from_slice(data);
                             lvl.store(rms(data).to_bits(), Ordering::Relaxed);
@@ -487,6 +559,8 @@ impl AudioCapture {
                 move |data: &[i16], _: &_| {
                     let floats: Vec<f32> =
                         data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
+                    let cap = pre_cap.load(Ordering::Relaxed);
+                    push_preroll(&pre, cap, &floats);
                     if rec.load(Ordering::Relaxed) {
                         smp.lock().extend_from_slice(&floats);
                         lvl.store(rms(&floats).to_bits(), Ordering::Relaxed);
@@ -504,6 +578,8 @@ impl AudioCapture {
                         .iter()
                         .map(|&s| (s as f32 - 32768.0) / 32768.0)
                         .collect();
+                    let cap = pre_cap.load(Ordering::Relaxed);
+                    push_preroll(&pre, cap, &floats);
                     if rec.load(Ordering::Relaxed) {
                         smp.lock().extend_from_slice(&floats);
                         lvl.store(rms(&floats).to_bits(), Ordering::Relaxed);
@@ -544,6 +620,10 @@ impl AudioCapture {
         if device_was_lost {
             *self.warm_stream.lock() = None;
             *self.warm_device_name.lock() = None;
+            // TASK-37: ring is sized for the (now-broken) old stream.
+            // Clear it; open_stream() will re-size on the next call.
+            self.preroll.lock().clear();
+            self.preroll_capacity.store(0, Ordering::SeqCst);
         }
         self.feeder_stop.store(false, Ordering::SeqCst);
         self.feeder_cursor.store(0, Ordering::SeqCst);
@@ -575,6 +655,12 @@ impl AudioCapture {
                 if warm.is_some() {
                     *warm = None;
                     *warm_name = None;
+                    // TASK-37: drop ring contents from the old device —
+                    // they may be at a different rate / channel layout
+                    // than the new stream. open_stream() below resizes
+                    // the ring for the new device.
+                    self.preroll.lock().clear();
+                    self.preroll_capacity.store(0, Ordering::SeqCst);
                     tracing::info!("[audio] stream closed (device change)");
                 }
                 let stream = self.open_stream(&want)?;
@@ -602,6 +688,34 @@ impl AudioCapture {
         *self.feeder.lock() = Some(feeder_handle);
 
         self.is_recording.store(true, Ordering::SeqCst);
+
+        // TASK-37: drain the pre-roll ring into `samples` so the first
+        // ~PREROLL_MS of audio (captured while the stream was warm but
+        // is_recording=false) is prepended to the recording. Time
+        // ordering is preserved: oldest ring sample first.
+        //
+        // `samples` was just cleared at the top of start(); splicing at
+        // 0..0 is effectively `extend`, no shift cost. We move the ring
+        // out via `Vec::from_iter(drain)` so the lock is released
+        // before `samples` is touched.
+        let preroll: Vec<f32> = {
+            let mut ring = self.preroll.lock();
+            ring.drain(..).collect()
+        };
+        if !preroll.is_empty() {
+            let preroll_ms =
+                (preroll.len() as u64 * 1000 / (src_rate as u64 * src_channels as u64)) as u32;
+            let n = preroll.len();
+            self.samples.lock().splice(0..0, preroll);
+            tracing::info!(
+                "[audio] start: prepended {} samples of pre-roll ({} ms)",
+                n,
+                preroll_ms
+            );
+        } else {
+            tracing::info!("[audio] start: pre-roll ring empty (cold start)");
+        }
+
         tracing::info!("[audio] recording started");
         Ok(())
     }
@@ -1104,6 +1218,64 @@ mod tests {
     fn min_recording_ms_in_samples_at_target_rate() {
         let min_samples = (TARGET_SAMPLE_RATE as u64 * MIN_RECORDING_MS as u64 / 1000) as usize;
         assert_eq!(min_samples, 1600);
+    }
+
+    /// TASK-37: pushing more samples than capacity into the pre-roll ring
+    /// must keep length pinned at capacity and retain the *latest* values.
+    /// This mirrors the cpal callback's per-tick behavior: extend, then
+    /// drain the front if over capacity.
+    #[test]
+    fn preroll_ring_truncates_to_capacity() {
+        const CAP: usize = 300;
+        let ring: Mutex<VecDeque<f32>> = Mutex::new(VecDeque::with_capacity(CAP));
+
+        // Simulate 10 cpal callbacks of 100 samples each → 1000 total.
+        // Each sample's value encodes its global index so we can verify
+        // the kept window is the *latest* 300.
+        for chunk in 0..10 {
+            let data: Vec<f32> = (0..100)
+                .map(|i| (chunk * 100 + i) as f32)
+                .collect();
+            let mut g = ring.lock();
+            g.extend(data.iter().copied());
+            if g.len() > CAP {
+                let drop = g.len() - CAP;
+                g.drain(0..drop);
+            }
+        }
+
+        let g = ring.lock();
+        assert_eq!(g.len(), CAP, "ring length must be pinned at capacity");
+        // Latest 300 samples have indices 700..1000.
+        assert_eq!(g.front().copied(), Some(700.0));
+        assert_eq!(g.back().copied(), Some(999.0));
+        for (i, &v) in g.iter().enumerate() {
+            assert_eq!(v, (700 + i) as f32, "expected latest-window contents");
+        }
+    }
+
+    /// TASK-37: a partially-filled ring (under capacity) must be returned
+    /// in full on drain — represents the cold-start case where the user
+    /// presses PTT before the warm stream has run for PREROLL_MS.
+    #[test]
+    fn preroll_ring_underfilled_drains_all() {
+        const CAP: usize = 300;
+        let ring: Mutex<VecDeque<f32>> = Mutex::new(VecDeque::with_capacity(CAP));
+
+        // 50 samples total — well under capacity.
+        let data: Vec<f32> = (0..50).map(|i| i as f32).collect();
+        {
+            let mut g = ring.lock();
+            g.extend(data.iter().copied());
+            if g.len() > CAP {
+                let drop = g.len() - CAP;
+                g.drain(0..drop);
+            }
+        }
+
+        let drained: Vec<f32> = ring.lock().drain(..).collect();
+        assert_eq!(drained, data);
+        assert!(ring.lock().is_empty(), "ring must be empty after drain");
     }
 
     /// Buffer already louder than target (peak 0.95) must pass through unchanged.
