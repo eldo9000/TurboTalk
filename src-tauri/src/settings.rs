@@ -1,6 +1,17 @@
 // Config persistence — ~/.config/librewin/turbotalk/config.toml
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::OnceLock;
+
+/// Process-wide cache for the parsed `Config`. Populated lazily on first
+/// `load()` and on every `save_config` IPC call. Cache misses fall through to
+/// disk so the cache is strictly an optimization — never a hard dependency.
+static CACHE: OnceLock<RwLock<Option<Config>>> = OnceLock::new();
+
+fn cache() -> &'static RwLock<Option<Config>> {
+    CACHE.get_or_init(|| RwLock::new(None))
+}
 
 /// Maximum number of history entries persisted to disk. Enforced inside
 /// `save_history` so the frontend can't accidentally grow the file unboundedly.
@@ -30,6 +41,31 @@ pub struct Config {
     /// When false, the overlay window is hidden — the tray icon still reflects state.
     #[serde(default = "default_true")]
     pub show_overlay: bool,
+    /// Whether the recording overlay shows a transcript-size indicator (a visual
+    /// estimate of how long and how much talking the user has been doing — driven
+    /// by VAD voiced-frame counts, not real transcription).
+    #[serde(default = "default_true")]
+    pub transcript_size_indicator: bool,
+    /// Play a sound cue when recording starts.
+    #[serde(default)]
+    pub sound_on_start: bool,
+    /// Play a sound cue when transcription begins.
+    #[serde(default)]
+    pub sound_on_transcribe: bool,
+    /// Play a sound cue when transcription finishes and text is pasted.
+    #[serde(default)]
+    pub sound_on_finish: bool,
+    /// Play a soft chime when a recording is cancelled (Escape, tap-mash, or
+    /// tray click). Defaults off to match the rest of the audio cues.
+    #[serde(default)]
+    pub sound_on_cancel: bool,
+    /// Volume for sound cues, 0.0–1.0.
+    #[serde(default = "default_sound_volume")]
+    pub sound_volume: f32,
+}
+
+fn default_sound_volume() -> f32 {
+    0.7
 }
 
 fn default_theme() -> String {
@@ -145,6 +181,12 @@ impl Default for AudioConfig {
 pub struct HotkeyConfig {
     pub key: String, // "right_option" | "right_control" | "right_command" | "right_shift"
     pub mode: String, // "hold" | "toggle"
+    /// Cancel an in-flight recording when the user presses Escape. Read on
+    /// every keystroke from the global hotkey listener — only acts while the
+    /// recorder is busy, so Escape passes through to the focused app
+    /// otherwise.
+    #[serde(default = "default_true")]
+    pub cancel_on_esc: bool,
 }
 
 impl Default for HotkeyConfig {
@@ -152,6 +194,7 @@ impl Default for HotkeyConfig {
         Self {
             key: "right_option".into(),
             mode: "hold".into(),
+            cancel_on_esc: true,
         }
     }
 }
@@ -167,6 +210,12 @@ impl Default for Config {
             history_auto_delete: default_history_auto_delete(),
             save_history: true,
             show_overlay: true,
+            transcript_size_indicator: true,
+            sound_on_start: false,
+            sound_on_transcribe: false,
+            sound_on_finish: false,
+            sound_on_cancel: false,
+            sound_volume: 0.7,
         }
     }
 }
@@ -310,7 +359,34 @@ fn default_model_path() -> PathBuf {
 }
 
 pub fn load() -> Config {
-    load_detailed().config
+    // Fast path: return a clone of the cached config if it's been populated.
+    if let Some(cfg) = cache().read().as_ref() {
+        return cfg.clone();
+    }
+    // Slow path: read from disk, then populate the cache.
+    let cfg = load_detailed().config;
+    *cache().write() = Some(cfg.clone());
+    cfg
+}
+
+/// Eagerly populate the cache from disk. Idempotent — subsequent calls are
+/// cheap RAM reads. Call once during app setup so the first PTT-down doesn't
+/// pay the disk read.
+pub fn prime_cache() {
+    let _ = load();
+}
+
+/// Replace the cached config with `cfg`. Call after `save(&cfg)` succeeds so
+/// subsequent readers see the new values without going to disk.
+pub fn update_cache(cfg: &Config) {
+    *cache().write() = Some(cfg.clone());
+}
+
+/// Drop the cached config so the next `load()` re-reads from disk. Useful for
+/// tests and for any future code path that knows the on-disk file changed
+/// behind our back.
+pub fn invalidate_cache() {
+    *cache().write() = None;
 }
 
 /// Result of loading config. `parse_error` is `Some(message)` if the on-disk
@@ -703,6 +779,61 @@ mod tests {
         let result = load_history_detailed_at(&path);
         assert!(result.entries.is_empty(), "empty text must be filtered");
         assert_eq!(result.dropped, 1);
+    }
+
+    // ----------------------------------------------------------------------
+    // TASK-38: process-wide settings cache.
+    //
+    // The cache is a static `OnceLock<RwLock<Option<Config>>>`, so any test
+    // that mutates it must run serially with the others — `serial_test` does
+    // that without us having to stand up a separate harness.
+
+    #[test]
+    #[serial_test::serial]
+    fn prime_cache_then_load_returns_same_struct() {
+        invalidate_cache();
+        prime_cache();
+        let a = load();
+        let b = load();
+        // Same theme + audio device is a fine equality proxy — the on-disk
+        // file (or default) drives both reads, so consecutive calls must
+        // agree field-for-field.
+        assert_eq!(a.theme, b.theme);
+        assert_eq!(a.audio.device, b.audio.device);
+        assert_eq!(a.hotkey.key, b.hotkey.key);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn update_cache_takes_effect_on_next_load() {
+        invalidate_cache();
+        let mut modified = Config::default();
+        modified.audio.device = "TASK-38-test-device".into();
+        modified.theme = "task-38-test-theme".into();
+        update_cache(&modified);
+
+        let got = load();
+        assert_eq!(got.audio.device, "TASK-38-test-device");
+        assert_eq!(got.theme, "task-38-test-theme");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn invalidate_cache_forces_reread() {
+        // Plant a sentinel value via the cache, then invalidate. The next
+        // load() must NOT return the sentinel — it has to fall through to
+        // disk (or defaults if the disk file is absent).
+        let mut sentinel = Config::default();
+        sentinel.audio.device = "TASK-38-sentinel-should-be-cleared".into();
+        update_cache(&sentinel);
+        assert_eq!(load().audio.device, "TASK-38-sentinel-should-be-cleared");
+
+        invalidate_cache();
+        let after = load();
+        assert_ne!(
+            after.audio.device, "TASK-38-sentinel-should-be-cleared",
+            "invalidate_cache must drop the sentinel; next load should re-read"
+        );
     }
 
     /// `ts == 0` is treated as a sentinel "no timestamp" and filtered.
