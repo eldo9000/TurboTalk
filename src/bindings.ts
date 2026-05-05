@@ -123,6 +123,11 @@ export type Config = {
 	 *  When false, no new history entries are written — existing history on disk is untouched.
 	 */
 	save_history?: boolean,
+	/**
+	 *  Whether to show the floating recording overlay pill during recording.
+	 *  When false, the overlay window is hidden — the tray icon still reflects state.
+	 */
+	show_overlay?: boolean,
 };
 
 /**

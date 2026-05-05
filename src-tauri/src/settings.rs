@@ -26,6 +26,10 @@ pub struct Config {
     /// When false, no new history entries are written — existing history on disk is untouched.
     #[serde(default = "default_true")]
     pub save_history: bool,
+    /// Whether to show the floating recording overlay pill during recording.
+    /// When false, the overlay window is hidden — the tray icon still reflects state.
+    #[serde(default = "default_true")]
+    pub show_overlay: bool,
 }
 
 fn default_theme() -> String {
@@ -162,6 +166,7 @@ impl Default for Config {
             theme: default_theme(),
             history_auto_delete: default_history_auto_delete(),
             save_history: true,
+            show_overlay: true,
         }
     }
 }

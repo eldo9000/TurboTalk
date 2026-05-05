@@ -184,6 +184,7 @@ Reply with only the single word, lowercase, no punctuation.
 
   let cfgHistoryAutoDelete = $state('10d');
   let cfgSaveHistory       = $state(true);
+  let cfgShowOverlay       = $state(true);
   let showAdvanced         = $state(false);
   // Captured once from the Modes tab; all non-history tabs lock to this height.
   let settingsH            = $state(0);
@@ -407,6 +408,7 @@ Reply with only the single word, lowercase, no punctuation.
     hotkeyKeyPart        = parsed.keyPart;
     cfgHistoryAutoDelete = cfg.history_auto_delete             ?? '10d';
     cfgSaveHistory       = cfg.save_history                    ?? true;
+    cfgShowOverlay       = cfg.show_overlay                    ?? true;
     cfgLaunchLogin       = launch;
     audioDevices         = devs;
     settingsSaveMsg      = '';
@@ -424,6 +426,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfg.hotkey.mode                   = cfgHotkeyMode;
     cfg.history_auto_delete           = cfgHistoryAutoDelete;
     cfg.save_history                  = cfgSaveHistory;
+    cfg.show_overlay                  = cfgShowOverlay;
     const saveRes = await commands.saveConfig(cfg);
     if (saveRes.status === 'error') {
       settingsSaveMsg = 'Error: ' + saveRes.error;
@@ -1250,6 +1253,15 @@ Reply with only the single word, lowercase, no punctuation.
             class="accent-[var(--accent)] w-3 h-3 shrink-0"
           />
           <span class="text-[var(--text-secondary)]">Launch at login</span>
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={cfgShowOverlay}
+            onchange={() => { cfgShowOverlay = !cfgShowOverlay; saveSettings(); }}
+            class="accent-[var(--accent)] w-3 h-3 shrink-0"
+          />
+          <span class="text-[var(--text-secondary)]">Show recording overlay</span>
         </label>
       </div>
 

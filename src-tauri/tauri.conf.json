@@ -26,8 +26,8 @@
       {
         "label": "overlay",
         "title": "",
-        "width": 260,
-        "height": 80,
+        "width": 460,
+        "height": 280,
         "decorations": false,
         "transparent": true,
         "shadow": false,
