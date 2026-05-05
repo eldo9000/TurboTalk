@@ -303,7 +303,7 @@
     transform: translateX(-50%);
     margin-bottom: 8px;
     width: 240px;
-    max-height: 90px;
+    max-height: 180px;
     overflow: hidden;
     background: rgba(16, 16, 16, 0.78);
     border: 1px solid rgba(255, 255, 255, 0.07);
