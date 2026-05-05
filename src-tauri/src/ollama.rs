@@ -1,15 +1,19 @@
 // Ollama helper commands — backend plumbing for the guided Ollama setup flow.
 //
-// Three commands:
+// Four commands:
 //   ping_ollama        — GET /api/version, returns { reachable, version }
 //   check_ollama_model — GET /api/tags, returns bool (model present?)
 //   open_url           — open a validated https://*.ollama.com URL in the browser
+//   pull_ollama_model  — POST /api/pull, streams NDJSON progress, emits
+//                        `ollama-pull-progress` events to the frontend
 //
 // Timeout pattern mirrors cleanup.rs::classify_blocking: 2-second connect +
 // read cap via reqwest::blocking::Client. open_url does not time out — it just
-// spawns the OS browser opener and returns.
+// spawns the OS browser opener and returns. pull_ollama_model uses a connect
+// timeout but NO read timeout — pulls are multi-GB and take several minutes.
 
 use serde::{Deserialize, Serialize};
+use std::io::BufRead;
 
 // ── Response structs ──────────────────────────────────────────────────────────
 
@@ -40,9 +44,32 @@ struct OllamaModel {
     name: String,
 }
 
+/// Progress payload emitted on the `ollama-pull-progress` event during a model
+/// pull. `pct` is monotonically non-decreasing (never resets to 0 on
+/// transitional status lines). `status` mirrors the Ollama API status string.
+#[derive(Debug, Clone, Serialize, specta::Type)]
+pub struct OllamaPullProgress {
+    pub model: String,
+    pub pct: u8,
+    pub status: String,
+}
+
+/// Partial deserialize of a single NDJSON line from `POST /api/pull`.
+/// Fields are optional — not all lines carry all fields.
+#[derive(Deserialize)]
+struct PullLine {
+    status: Option<String>,
+    total: Option<u64>,
+    completed: Option<u64>,
+}
+
 // ── Timeout constant (mirrors cleanup.rs::OLLAMA_TIMEOUT) ─────────────────────
 
 const OLLAMA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+// ── Connect-only timeout used for pull (no read timeout — pulls are multi-GB) ─
+
+const PULL_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 // ── Commands ──────────────────────────────────────────────────────────────────
 
@@ -159,6 +186,126 @@ pub fn check_ollama_model(model_name: String) -> Result<bool, String> {
             Err(format!("failed to parse /api/tags response: {e}"))
         }
     }
+}
+
+/// Download a model into the user's local Ollama instance by streaming
+/// `POST {ollama_url}/api/pull`. Emits incremental `ollama-pull-progress`
+/// events to the frontend as each NDJSON line arrives. Returns `Ok(())` when
+/// Ollama reports `"success"` and `Err(message)` on any unrecoverable failure.
+///
+/// **No read timeout** — model pulls are multi-GB and can take several minutes
+/// on a slow connection. The connect timeout is 5 seconds (loopback should
+/// connect near-instantly). Cancellation is out of scope for this task.
+#[tauri::command]
+#[specta::specta]
+pub fn pull_ollama_model(app: tauri::AppHandle, model_name: String) -> Result<(), String> {
+    use tauri::Emitter;
+
+    let cfg = crate::settings::load();
+    let base = crate::cleanup::validate_ollama_url(&cfg.cleanup.ollama_url)
+        .map_err(|e| format!("invalid Ollama URL: {e}"))?;
+
+    let endpoint = base
+        .join("api/pull")
+        .map_err(|e| format!("could not build pull endpoint: {e}"))?;
+
+    // Connect timeout only — read must be unbounded for multi-GB transfers.
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(PULL_CONNECT_TIMEOUT)
+        // Explicitly no .timeout() — default is no timeout.
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
+
+    let body = serde_json::json!({
+        "model": &model_name,
+        "stream": true,
+    });
+
+    let resp = client
+        .post(endpoint)
+        .json(&body)
+        .send()
+        .map_err(|e| format!("pull request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Ollama returned HTTP {}", resp.status()));
+    }
+
+    // Wrap the response body in a BufReader so we can read line-by-line.
+    let reader = std::io::BufReader::new(resp);
+
+    let mut last_pct: u8 = 0;
+    let mut last_status = String::new();
+    let mut last_emit = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(1))
+        .unwrap_or_else(std::time::Instant::now);
+
+    for line_result in reader.lines() {
+        let line = line_result.map_err(|e| format!("stream read error: {e}"))?;
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let parsed: PullLine = match serde_json::from_str(line) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!("[ollama-pull] failed to parse NDJSON line: {e} — line: {line}");
+                continue;
+            }
+        };
+
+        let status_str = parsed.status.unwrap_or_default();
+
+        // Compute percentage from layer fields when present; keep last-known otherwise.
+        let new_pct = if let (Some(total), Some(completed)) = (parsed.total, parsed.completed) {
+            if total > 0 {
+                ((completed.saturating_mul(100)) / total).min(100) as u8
+            } else {
+                last_pct
+            }
+        } else {
+            last_pct
+        };
+
+        // Clamp to monotonically non-decreasing.
+        let pct = new_pct.max(last_pct);
+
+        // Check if we should emit: always emit on status change, otherwise
+        // throttle to at most 10 Hz (100ms between events).
+        let status_changed = status_str != last_status;
+        let elapsed = last_emit.elapsed();
+        let should_emit = status_changed || elapsed >= std::time::Duration::from_millis(100);
+
+        if should_emit {
+            let payload = OllamaPullProgress {
+                model: model_name.clone(),
+                pct,
+                status: status_str.clone(),
+            };
+            if let Err(e) = app.emit("ollama-pull-progress", &payload) {
+                tracing::warn!("[ollama-pull] failed to emit progress event: {e}");
+            }
+            last_emit = std::time::Instant::now();
+            last_status = status_str.clone();
+        }
+
+        last_pct = pct;
+
+        if status_str == "success" {
+            // Emit a final 100% success event before returning.
+            let payload = OllamaPullProgress {
+                model: model_name.clone(),
+                pct: 100,
+                status: "success".to_string(),
+            };
+            let _ = app.emit("ollama-pull-progress", &payload);
+            return Ok(());
+        }
+    }
+
+    // Stream ended without a "success" line — treat as failure.
+    Err("pull stream ended without a success confirmation".into())
 }
 
 /// Open a validated `https://*.ollama.com` URL in the user's default browser.

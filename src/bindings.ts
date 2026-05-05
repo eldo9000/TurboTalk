@@ -65,6 +65,17 @@ export const commands = {
 	 *  failure modes — only panics or Tauri framework issues produce `Err`.
 	 */
 	pingOllama: () => typedError<Reachable, string>(__TAURI_INVOKE("ping_ollama")),
+	/**
+	 *  Download a model into the user's local Ollama instance by streaming
+	 *  `POST {ollama_url}/api/pull`. Emits incremental `ollama-pull-progress`
+	 *  events to the frontend as each NDJSON line arrives. Returns `Ok(())` when
+	 *  Ollama reports `"success"` and `Err(message)` on any unrecoverable failure.
+	 * 
+	 *  **No read timeout** — model pulls are multi-GB and can take several minutes
+	 *  on a slow connection. The connect timeout is 5 seconds (loopback should
+	 *  connect near-instantly). Cancellation is out of scope for this task.
+	 */
+	pullOllamaModel: (modelName: string) => typedError<null, string>(__TAURI_INVOKE("pull_ollama_model", { modelName })),
 	runDiagnostics: () => __TAURI_INVOKE<DiagnosticsResult>("run_diagnostics"),
 	checkReadiness: () => __TAURI_INVOKE<Readiness>("check_readiness"),
 	/**
