@@ -374,15 +374,16 @@ impl StreamingFinalizer {
 
 impl Drop for StreamingFinalizer {
     fn drop(&mut self) {
-        // Best-effort shutdown if the caller forgot to `finish()`.
-        // Closing the sender by dropping it lets the worker exit cleanly
-        // (its `recv` will return Disconnected).
+        // Best-effort shutdown if the caller forgot to `finish()` (the
+        // cancel path drops the finalizer without consuming it). The
+        // worker is parked on `recv()` and only exits once every Sender
+        // clone is dropped — and `self.sender` outlives this `Drop` body
+        // (struct fields drop after `Drop::drop` returns), so joining
+        // first would deadlock. Replace the sender with a fresh closed
+        // channel to drop the original here, then join.
+        let (dummy_tx, _) = bounded::<WorkerMsg>(1);
+        self.sender = dummy_tx;
         if let Some(h) = self.worker.take() {
-            // The `sender` field is dropped after this `Drop` runs as
-            // part of struct destruction, but to ensure the worker's
-            // `recv` actually returns we force-disconnect by replacing
-            // it with a fresh channel (whose other end we immediately
-            // drop). Simpler: just let the natural drop order handle it.
             let _ = h.join();
         }
     }

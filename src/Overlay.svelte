@@ -22,8 +22,12 @@
   const WIN_W      = 260;
   const WIN_H      = 80;
   const BOTTOM_GAP = 110;
+  const GUTTER     = 100;
+  const OUTER_W    = WIN_W + GUTTER * 2;
+  const OUTER_H    = WIN_H + GUTTER * 2;
 
   let levels = Array(HISTORY).fill(0);
+  let cursorInZone = $state(false);
 
   function draw() {
     if (!canvasEl) return;
@@ -65,6 +69,8 @@
     // Position math is done in logical units relative to the chosen
     // monitor's origin so the overlay lands on the correct screen on
     // multi-display setups.
+    let outerX = 0, outerY = 0;
+
     async function positionOverlay() {
       let mon = null;
       try {
@@ -78,12 +84,26 @@
       const mh = mon.size.height / sf;
       const ox = mon.position.x / sf;
       const oy = mon.position.y / sf;
-      await win.setPosition(new LogicalPosition(
-        Math.round(ox + (mw - WIN_W) / 2),
-        Math.round(oy + mh - WIN_H - BOTTOM_GAP),
-      ));
+      const px = Math.round(ox + (mw - WIN_W) / 2);
+      const py = Math.round(oy + mh - WIN_H - BOTTOM_GAP);
+      outerX = px - GUTTER;
+      outerY = py - GUTTER;
+      await win.setPosition(new LogicalPosition(outerX, outerY));
     }
     await positionOverlay();
+
+    const cursorTimer = setInterval(async () => {
+      try {
+        const cur = await cursorPosition();
+        const mon = await monitorFromPoint(cur.x, cur.y);
+        if (!mon) return;
+        const sf = mon.scaleFactor;
+        const cx = cur.x / sf;
+        const cy = cur.y / sf;
+        cursorInZone = cx >= outerX && cx <= outerX + OUTER_W
+                    && cy >= outerY && cy <= outerY + OUTER_H;
+      } catch (_) {}
+    }, 100);
 
     const uns = [];
 
@@ -204,6 +224,9 @@
     opacity: 1;
     transform: scale(1) translateY(0);
   }
+  .pill.show.peek {
+    opacity: 0.2;
+  }
   .pill.recording {
     animation: pulse-red 10s ease-in-out infinite;
   }
@@ -221,6 +244,7 @@
   }
 
   canvas { display: block; }
+
 </style>
 
 <div class="w-full h-full flex items-center justify-center">
@@ -229,6 +253,7 @@
     class:show={mode !== 'idle'}
     class:recording={mode === 'recording'}
     class:transcribing={mode === 'transcribing'}
+    class:peek={cursorInZone}
     style="background: rgba(16,16,16,0.87); backdrop-filter: blur(18px) saturate(160%);"
   >
     <canvas

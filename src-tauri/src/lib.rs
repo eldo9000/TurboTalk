@@ -58,17 +58,25 @@ fn get_config() -> settings::Config {
 #[tauri::command]
 #[specta::specta]
 fn save_config(
+    app: tauri::AppHandle,
     cfg: settings::Config,
     hotkey_state: tauri::State<'_, HotkeyState>,
 ) -> Result<(), String> {
     settings::save(&cfg).map_err(|e| e.to_string())?;
     *hotkey_state.write() = cfg.hotkey.clone();
+    apply_overlay_visibility(&app, cfg.show_overlay);
     // TASK-20: drop the cached TranscriptionWorker so the next dictation
     // picks up any changes to `whisper.model` or `cleanup.vocabulary`. The
     // rebuild is cheap (path validation only — no model load) so we do not
     // try to detect "did anything actually change".
     transcribe::invalidate_worker();
     Ok(())
+}
+
+fn apply_overlay_visibility(app: &tauri::AppHandle, show: bool) {
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        let _ = if show { overlay.show() } else { overlay.hide() };
+    }
 }
 
 #[tauri::command]
@@ -601,6 +609,9 @@ pub fn run() {
             // ── Overlay — cursor-transparent so clicks always pass through ──
             if let Some(overlay) = app.get_webview_window("overlay") {
                 let _ = overlay.set_ignore_cursor_events(true);
+                if !cfg.show_overlay {
+                    let _ = overlay.hide();
+                }
             }
 
             // ── Hotkey ─────────────────────────────────────────────────────
