@@ -660,3 +660,23 @@ mod imp {
 
 pub use imp::accessibility_trusted;
 pub use imp::spawn;
+
+/// Programmatically start a recording — same path as the physical PTT down stroke.
+/// Safe to call from any thread; spawns its own worker internally.
+pub fn trigger_start(
+    recorder: &std::sync::Arc<crate::recorder::Recorder>,
+    tray_icon: &tauri::tray::TrayIcon,
+    app: &tauri::AppHandle,
+) {
+    common::ptt_down(recorder, tray_icon, app);
+}
+
+/// Programmatically stop a recording and kick off transcription — same path as
+/// the physical PTT up stroke. Safe to call from any thread.
+pub fn trigger_stop(
+    recorder: &std::sync::Arc<crate::recorder::Recorder>,
+    tray_icon: &tauri::tray::TrayIcon,
+    app: &tauri::AppHandle,
+) {
+    common::ptt_up(recorder, tray_icon, app);
+}
