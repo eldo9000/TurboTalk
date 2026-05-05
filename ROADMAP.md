@@ -15,7 +15,7 @@ Personal-use scope. Milestones are checkpoints, not deadlines.
 The bar: press hotkey, speak, release, see text appear in the focused app.
 
 - [x] Global hotkey capture — Right Alt via CGEventTap (rdev dropped: macOS 26 TSM thread crash)
-- [x] Mic stream → WAV buffer — cpal, 24kHz mono F32, hound WAV writer
+- [x] Mic stream → WAV buffer — cpal native-rate F32 capture, FFT-resampled + downmixed to 16kHz mono int16 before WAV write
 - [x] Whisper transcription — whisper-cli (Homebrew), ggml-base.en, ~130ms on M4 via Metal
 - [x] Clipboard paste into active app — arboard + osascript Cmd+V, clipboard restored after
 - [x] Recording overlay — dot: gray (idle) / red pulse (recording) / yellow pulse (transcribing)
@@ -67,12 +67,21 @@ The bar: Chaperone mode is discoverable and self-configuring for a first-time us
 
 Proved 2026-05-05 (build + TS check clean; on-device latency verification by user pending).
 
-## M6 — Ship
+## M6 — Ship (1.0)
 
-- [ ] Codesigning + notarization (use Libre signing infra)
-- [ ] Cross-platform paste — Windows (SendInput) + Linux (xdotool) — TASK-25/26 deferred
-- [ ] Streaming transcription (optional — big lift)
-- [ ] Promote to Libre product trigger: "I use this every day for 2 weeks."
+The bar: TurboTalk installs cleanly on macOS / Windows / Linux without Gatekeeper or SmartScreen warnings, and the dictation loop works end-to-end on each.
+
+- [ ] On-device latency proof — verify v0.8.6 warm-stream + pre-roll fix end-to-end on built-in mic and Bluetooth (AirPods); confirm leading-word capture and ~10ms PTT-to-capture
+- [ ] Cross-platform paste — Windows (`enigo`/SendInput) and Linux (xdotool / wl-clipboard); the rdev hotkey listener is already wired in `src-tauri/src/hotkey.rs` (TASK-25/26 deferred)
+- [ ] Cross-platform diagnostics + onboarding — Win/Linux readiness gates (mic permission, sidecar present, Accessibility/equivalent), per-OS permission flow (TASK-29 deferred)
+- [ ] Linux release pipeline — re-enable Linux in `.github/workflows/release.yml` matrix once the runtime path (rdev under X11/Wayland, AppImage system deps) has been validated on real hardware
+- [ ] Codesigning + notarization — Apple Developer ID for macOS, Authenticode for Windows; use Libre signing infra
+- [ ] Run-on-real-hardware proof — at least one verified install + dictation loop on each platform from a fresh DMG / MSI / AppImage (no dev environment dependencies)
+
+## Out of scope for 1.0
+
+- **Streaming transcription** (partial transcripts while recording) — significant DSP/UX lift and does not change the "press → speak → paste" quality bar. Revisit post-1.0 only if a concrete user need shows up.
+- **Public release / Libre product status** — TurboTalk stays personal-use under GPL-3.0 until the promotion trigger fires.
 
 ## Open Questions
 
