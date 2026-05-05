@@ -13,6 +13,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[dev-dependencies]
+# Serializes tests that mutate the process-wide settings cache (TASK-38).
+serial_test = "3"
+
 [dependencies]
 tauri           = { version = "2", features = ["macos-private-api", "tray-icon"] }
 serde           = { version = "1", features = ["derive"] }

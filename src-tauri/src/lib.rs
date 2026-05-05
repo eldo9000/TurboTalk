@@ -65,6 +65,7 @@ fn save_config(
 ) -> Result<(), String> {
     use tauri::Emitter;
     settings::save(&cfg).map_err(|e| e.to_string())?;
+    settings::update_cache(&cfg);
     *hotkey_state.write() = cfg.hotkey.clone();
     apply_overlay_visibility(&app, cfg.show_overlay);
     // TASK-20: drop the cached TranscriptionWorker so the next dictation
@@ -639,6 +640,10 @@ pub fn run() {
             if let Err(e) = settings::save(&cfg) {
                 tracing::warn!("[settings] could not write config: {:?}", e);
             }
+            // Populate the process-wide settings cache so PTT-down readers
+            // (audio.rs and friends) skip the per-press disk read. Idempotent.
+            settings::update_cache(&cfg);
+            settings::prime_cache();
 
             // ── Shared hotkey state — updated live when settings are saved ──
             let hotkey_state: HotkeyState = Arc::new(RwLock::new(cfg.hotkey.clone()));
