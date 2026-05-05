@@ -173,6 +173,11 @@ Reply with only the single word, lowercase, no punctuation.
   let showPromptEditor        = $state(false);
   let modesSaveMsg            = $state('');
 
+  // Ollama setup state (Advanced panel)
+  let ollamaReachable         = $state(null);  // null = not yet probed
+  let ollamaModelPresent      = $state(null);
+  let ollamaPullState         = $state({ inFlight: false, pct: 0, status: '' });
+
   // Active preset = the one whose prompt exactly equals the textarea's
   // current content. Edits of any kind drop this back to null, which the
   // button row renders as "all grey, none active".
@@ -194,6 +199,7 @@ Reply with only the single word, lowercase, no punctuation.
   let settingsSaveMsg      = $state('');
   let cfgHotkeyKey         = $state('right_option');
   let cfgHotkeyMode        = $state('hold');
+  let cfgCancelOnEsc       = $state(true);
 
   let hotkeySide           = $state('right');  // 'left' | 'right'
   let hotkeyKeyPart        = $state('option'); // key name without side prefix, or full numpad_* value
@@ -211,9 +217,21 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgHistoryAutoDelete = $state('10d');
   let cfgSaveHistory       = $state(true);
   let cfgShowOverlay       = $state(true);
+  let cfgTranscriptIndicator = $state(true);
+  let cfgSoundOnStart      = $state(false);
+  let cfgSoundOnTranscribe = $state(false);
+  let cfgSoundOnFinish     = $state(false);
+  let cfgSoundOnCancel     = $state(false);
+  let cfgSoundVolume       = $state(0.7);
   let showAdvanced         = $state(false);
-  // Captured once from the Modes tab; all non-history tabs lock to this height.
+  // Captured once from the Modes tab in Chaperone mode (two-column tall layout).
+  // Used only for Modes when Chaperone is selected.
   let settingsH            = $state(0);
+  // Captured once each for the other tabs so they auto-fit their natural content.
+  // History reuses modesH so the window stays at one consistent compact size.
+  let modesH               = $state(0);
+  let modelsTabH           = $state(0);
+  let settingsTabH         = $state(0);
 
   // Ref to the outermost div — used to measure total natural content height.
   let outerEl = $state(null);
@@ -231,9 +249,15 @@ Reply with only the single word, lowercase, no punctuation.
     if (settingsH === 0) return;
     const isAdv = activeTab === 'modes' && cfgCleanupMode === 'chaperone';
     const w = isAdv ? WINDOW_W * 2 : WINDOW_W;
+    const h =
+      isAdv ? settingsH :
+      activeTab === 'settings' && settingsTabH > 0 ? settingsTabH :
+      activeTab === 'models'   && modelsTabH   > 0 ? modelsTabH   :
+      modesH > 0 ? modesH :
+      settingsH;
     getCurrentWindow().setSize(new LogicalSize(
       Math.ceil(w * zoom),
-      Math.ceil(settingsH * zoom),
+      Math.ceil(h * zoom),
     ));
   });
 
@@ -418,6 +442,67 @@ Reply with only the single word, lowercase, no punctuation.
     modesSaveMsg = res.status === 'ok' ? 'Saved.' : 'Error: ' + res.error;
   }
 
+  // ── Ollama setup helpers ───────────────────────────────────────────────────
+
+  async function refreshOllamaSetup() {
+    const ping = await commands.pingOllama();
+    if (ping.status === 'error') {
+      ollamaReachable = false;
+      ollamaModelPresent = null;
+      return;
+    }
+    ollamaReachable = ping.data.reachable;
+    if (ping.data.reachable) {
+      const model = cfgLlmModel || 'llama3.2:3b';
+      const res = await commands.checkOllamaModel(model);
+      ollamaModelPresent = res.status === 'ok' ? res.data : false;
+    } else {
+      ollamaModelPresent = null;
+    }
+  }
+
+  async function startOllamaPull() {
+    const model = cfgLlmModel || 'llama3.2:3b';
+    ollamaPullState = { inFlight: true, pct: 0, status: 'starting…' };
+    const res = await commands.pullOllamaModel(model);
+    if (res.status === 'ok') {
+      ollamaPullState = { inFlight: false, pct: 100, status: 'success' };
+      await refreshOllamaSetup();
+    } else {
+      uiErrors = [...uiErrors, { kind: 'ollama-pull-error', message: `Model pull failed: ${res.error}`, recoverable: true }];
+      ollamaPullState = { inFlight: false, pct: 0, status: '' };
+    }
+  }
+
+  async function installOllama() {
+    const res = await commands.openUrl('https://ollama.com/download');
+    if (res.status === 'error') {
+      uiErrors = [...uiErrors, { kind: 'open-url-error', message: `Could not open browser: ${res.error}`, recoverable: false }];
+    }
+  }
+
+  // Polling effect: runs when Advanced panel is visible
+  $effect(() => {
+    const isAdv = activeTab === 'modes' && cfgCleanupMode === 'chaperone';
+    if (!isAdv) return;
+
+    refreshOllamaSetup();
+
+    const interval = setInterval(() => {
+      if (!ollamaPullState.inFlight) {
+        refreshOllamaSetup();
+      }
+    }, 5000);
+
+    const onWindowFocus = () => { refreshOllamaSetup(); };
+    window.addEventListener('focus', onWindowFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', onWindowFocus);
+    };
+  });
+
   // ── Settings ──────────────────────────────────────────────────────────────
 
   async function openSettings() {
@@ -429,12 +514,19 @@ Reply with only the single word, lowercase, no punctuation.
     cfgDevice            = cfg.audio?.device                   ?? 'default';
     cfgHotkeyKey         = cfg.hotkey?.key                     ?? 'right_option';
     cfgHotkeyMode        = cfg.hotkey?.mode                    ?? 'hold';
+    cfgCancelOnEsc       = cfg.hotkey?.cancel_on_esc            ?? true;
     const parsed         = parseHotkeyKey(cfgHotkeyKey);
     hotkeySide           = parsed.side;
     hotkeyKeyPart        = parsed.keyPart;
     cfgHistoryAutoDelete = cfg.history_auto_delete             ?? '10d';
     cfgSaveHistory       = cfg.save_history                    ?? true;
     cfgShowOverlay       = cfg.show_overlay                    ?? true;
+    cfgTranscriptIndicator = cfg.transcript_size_indicator     ?? true;
+    cfgSoundOnStart      = cfg.sound_on_start                  ?? false;
+    cfgSoundOnTranscribe = cfg.sound_on_transcribe              ?? false;
+    cfgSoundOnFinish     = cfg.sound_on_finish                  ?? false;
+    cfgSoundOnCancel     = cfg.sound_on_cancel                  ?? false;
+    cfgSoundVolume       = cfg.sound_volume                     ?? 0.7;
     cfgLaunchLogin       = launch;
     audioDevices         = devs;
     settingsSaveMsg      = '';
@@ -444,15 +536,22 @@ Reply with only the single word, lowercase, no punctuation.
     const cfg = await commands.getConfig();
     if (!cfg.whisper) cfg.whisper = { bin: 'auto', model: '', models: [] };
     if (!cfg.audio)   cfg.audio   = { device: 'default' };
-    if (!cfg.hotkey)  cfg.hotkey  = { key: 'right_option', mode: 'hold' };
+    if (!cfg.hotkey)  cfg.hotkey  = { key: 'right_option', mode: 'hold', cancel_on_esc: true };
     cfg.whisper.bin                   = cfgBin;
     cfg.audio.device                  = cfgDevice;
     cfg.theme                         = cfgTheme;
     cfg.hotkey.key                    = cfgHotkeyKey;
     cfg.hotkey.mode                   = cfgHotkeyMode;
+    cfg.hotkey.cancel_on_esc          = cfgCancelOnEsc;
     cfg.history_auto_delete           = cfgHistoryAutoDelete;
     cfg.save_history                  = cfgSaveHistory;
     cfg.show_overlay                  = cfgShowOverlay;
+    cfg.transcript_size_indicator     = cfgTranscriptIndicator;
+    cfg.sound_on_start                = cfgSoundOnStart;
+    cfg.sound_on_transcribe           = cfgSoundOnTranscribe;
+    cfg.sound_on_finish               = cfgSoundOnFinish;
+    cfg.sound_on_cancel               = cfgSoundOnCancel;
+    cfg.sound_volume                  = cfgSoundVolume;
     const saveRes = await commands.saveConfig(cfg);
     if (saveRes.status === 'error') {
       settingsSaveMsg = 'Error: ' + saveRes.error;
@@ -508,22 +607,51 @@ Reply with only the single word, lowercase, no punctuation.
     cfgHotkeyMode = initialCfg.hotkey?.mode ?? 'hold';
     if (savedHistory.length) history = savedHistory;
 
-    // Measure the Modes tab in Chaperone mode (the tallest layout — Ollama URL
-    // + classifier model + vocabulary + prompt) so the "expanded" window size
-    // always fits the largest content. Halved at runtime for every other view.
+    // Measure natural content heights for tabs that need exact-fit window sizes.
+    // Both measurements must complete before settingsH is committed — once settingsH
+    // is non-zero the outermost div gets h-full overflow-hidden, making scrollHeight
+    // return the window height rather than the natural content height.
     document.documentElement.style.opacity = '0';
     const savedMode = cfgCleanupMode;
+
+    // 1. Modes — non-chaperone (single-column Simple layout, taller of Off/Simple).
+    //    Used for both History and non-chaperone Modes tabs.
     activeTab = 'modes';
     await openModes();
+    cfgCleanupMode = 'regex';
+    await tick();
+    await new Promise(r => requestAnimationFrame(r));
+    const measuredModesH = outerEl ? outerEl.scrollHeight : 0;
+
+    // 2. Modes — Chaperone (two-column wide layout).
     cfgCleanupMode = 'chaperone';
-    // Expand DOM to the two-column width so the right panel (textareas) is
-    // laid out at its actual display width before we capture scrollHeight.
     document.documentElement.style.minWidth = `${WINDOW_W * 2}px`;
     await tick();
     await new Promise(r => requestAnimationFrame(r));
-    if (outerEl) settingsH = outerEl.scrollHeight;
+    const measuredChaperoneH = outerEl ? outerEl.scrollHeight : 0;
     document.documentElement.style.minWidth = '';
     cfgCleanupMode = savedMode;
+
+    // 3. Models tab (single-column, recommended + catalog + custom slot)
+    activeTab = 'models';
+    await openModels();
+    await tick();
+    await new Promise(r => requestAnimationFrame(r));
+    const measuredModelsH = outerEl ? outerEl.scrollHeight : 0;
+
+    // 4. Settings tab (single-column, height depends on how many sections are visible)
+    activeTab = 'settings';
+    await openSettings();
+    await tick();
+    await new Promise(r => requestAnimationFrame(r));
+    const measuredSettingsTabH = outerEl ? outerEl.scrollHeight : 0;
+
+    // Commit all heights — this activates the h-full constraint hereafter.
+    if (measuredChaperoneH)    settingsH    = measuredChaperoneH;
+    if (measuredModesH)        modesH       = measuredModesH;
+    if (measuredModelsH)       modelsTabH   = measuredModelsH;
+    if (measuredSettingsTabH)  settingsTabH = measuredSettingsTabH;
+
     activeTab = 'history';
     await tick();
     document.documentElement.style.opacity = '';
@@ -623,6 +751,10 @@ Reply with only the single word, lowercase, no punctuation.
       setTimeout(() => { transcriptError = ''; }, 5000);
     }).then(u => unlisteners.push(u));
     listen('open-history', () => switchTab('history')).then(u => unlisteners.push(u));
+    listen('ollama-pull-progress', (event) => {
+      const p = event.payload;
+      ollamaPullState = { inFlight: true, pct: p.pct, status: p.status };
+    }).then(u => unlisteners.push(u));
 
     // Re-check readiness on window focus — catches "user revoked permission
     // between sessions" or "model file deleted" without paying for constant
@@ -1064,6 +1196,57 @@ Reply with only the single word, lowercase, no punctuation.
       {#if isAdv}
         <div class="flex-1 overflow-y-auto px-4 py-3 space-y-3 adv-panel-in">
 
+          <!-- Ollama guided setup section -->
+          <div class="space-y-1 mb-3">
+            <div class="flex items-center justify-between">
+              <SectionLabel>Setup</SectionLabel>
+              {#if ollamaReachable && ollamaModelPresent}
+                <span class="text-[10px] uppercase tracking-wider font-semibold text-green-400">Ready</span>
+              {/if}
+            </div>
+            {#if ollamaReachable === false}
+              <div class="flex items-center gap-2 py-1.5">
+                <div class="flex-1 min-w-0">
+                  <span class="text-xs text-[var(--text-primary)]">ollama not detected</span>
+                  <p class="text-[10px] mt-0.5 text-[var(--text-tertiary,#666)]">install ollama to enable advanced cleanup</p>
+                </div>
+                <button
+                  onclick={installOllama}
+                  class="shrink-0 px-3 py-1 rounded text-[11px] font-medium bg-[var(--surface)] border border-[var(--border)]
+                         text-[var(--text-primary)] hover:border-[var(--accent)] transition-colors whitespace-nowrap"
+                >Install Ollama</button>
+              </div>
+            {:else if ollamaReachable === true && !ollamaModelPresent}
+              <div class="flex items-center gap-2 py-1.5">
+                <div class="flex-1 min-w-0">
+                  <span class="text-xs text-[var(--text-primary)]">ollama reachable · classifier model missing</span>
+                  <p class="text-[10px] mt-0.5 text-[var(--text-tertiary,#666)]">{cfgLlmModel || 'llama3.2:3b'} — not yet pulled</p>
+                  {#if ollamaPullState.inFlight}
+                    <div class="mt-1.5 flex items-center gap-2">
+                      <div class="flex-1 h-1 rounded-full bg-[var(--border)] overflow-hidden">
+                        <div
+                          class="h-full rounded-full bg-[var(--accent)] transition-all duration-300"
+                          style="width:{ollamaPullState.pct}%"
+                        ></div>
+                      </div>
+                      <span class="shrink-0 text-[10px] text-[var(--accent)] tabular-nums w-7 text-right">{ollamaPullState.pct}%</span>
+                    </div>
+                    {#if ollamaPullState.status}
+                      <p class="text-[10px] mt-0.5 text-[var(--text-muted)] truncate">{ollamaPullState.status}</p>
+                    {/if}
+                  {/if}
+                </div>
+                <button
+                  onclick={startOllamaPull}
+                  disabled={ollamaPullState.inFlight}
+                  class="shrink-0 px-3 py-1 rounded text-[11px] font-medium bg-[var(--surface)] border border-[var(--border)]
+                         text-[var(--text-primary)] hover:border-[var(--accent)] transition-colors whitespace-nowrap
+                         disabled:opacity-50 disabled:cursor-default"
+                >{ollamaPullState.inFlight ? '↓ …' : 'Download classifier model (~2GB)'}</button>
+              </div>
+            {/if}
+          </div>
+
           <div class="space-y-1">
             <label for="ollama-url" class="text-[var(--text-secondary)]">Ollama URL</label>
             <input
@@ -1191,6 +1374,15 @@ Reply with only the single word, lowercase, no punctuation.
           </div>
         </div>
 
+        <!-- Cancel-recording shortcuts -->
+        <div class="space-y-1">
+          <SectionLabel>Cancel recording</SectionLabel>
+          <Checkbox
+            bind:checked={cfgCancelOnEsc}
+            onchange={() => saveSettings()}
+          >Press Escape</Checkbox>
+        </div>
+
       </div>
 
       <!-- Display -->
@@ -1223,6 +1415,63 @@ Reply with only the single word, lowercase, no punctuation.
         >Save history</Checkbox>
       </div>
 
+      <!-- Audio indicators -->
+      <div class="px-4 py-3 space-y-2.5">
+        <SectionLabel>Audio indicators</SectionLabel>
+        <div class="flex items-center gap-4">
+          <label class="flex items-center gap-1.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={cfgSoundOnStart}
+              onchange={() => { cfgSoundOnStart = !cfgSoundOnStart; saveSettings(); }}
+              class="fade-check"
+            />
+            <span class="text-[var(--text-primary)]">On start</span>
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={cfgSoundOnTranscribe}
+              onchange={() => { cfgSoundOnTranscribe = !cfgSoundOnTranscribe; saveSettings(); }}
+              class="fade-check"
+            />
+            <span class="text-[var(--text-primary)]">On transcribe</span>
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={cfgSoundOnFinish}
+              onchange={() => { cfgSoundOnFinish = !cfgSoundOnFinish; saveSettings(); }}
+              class="fade-check"
+            />
+            <span class="text-[var(--text-primary)]">On finish</span>
+          </label>
+          <label class="flex items-center gap-1.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={cfgSoundOnCancel}
+              onchange={() => { cfgSoundOnCancel = !cfgSoundOnCancel; saveSettings(); }}
+              class="fade-check"
+            />
+            <span class="text-[var(--text-primary)]">On cancel</span>
+          </label>
+        </div>
+        <div class="flex items-center justify-between">
+          <SectionLabel>Volume</SectionLabel>
+          <span class="text-[13px] text-[var(--text-primary)] tabular-nums">{Math.round(cfgSoundVolume * 100)}%</span>
+        </div>
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          bind:value={cfgSoundVolume}
+          oninput={() => saveSettings()}
+          class="fade-range"
+          style="--fade-range-pct:{cfgSoundVolume * 100}%"
+        />
+      </div>
+
       <!-- System -->
       <div class="px-4 py-3 space-y-2">
         <SectionLabel>System</SectionLabel>
@@ -1234,6 +1483,15 @@ Reply with only the single word, lowercase, no punctuation.
           bind:checked={cfgShowOverlay}
           onchange={() => saveSettings()}
         >Show recording overlay</Checkbox>
+        <div>
+          <Checkbox
+            bind:checked={cfgTranscriptIndicator}
+            onchange={() => saveSettings()}
+          >Transcript size indicator</Checkbox>
+          <p class="text-[var(--text-muted)] text-[11px] mt-1 ml-1">
+            A visual estimate of how long and how much talking you've been doing.
+          </p>
+        </div>
       </div>
 
       {#if import.meta.env.DEV}
