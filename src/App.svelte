@@ -1332,7 +1332,7 @@ Reply with only the single word, lowercase, no punctuation.
 
         <!-- Hotkey: side tabs + key dropdown on same row -->
         <div class="space-y-1">
-          <SectionLabel>Hotkey</SectionLabel>
+          <SectionLabel size="xs" class="!opacity-50">Hotkey</SectionLabel>
           <div class="flex items-center gap-2">
             <div class:opacity-40={hotkeyKeyPart.startsWith('numpad_')}>
               <SegmentedControl
@@ -1354,7 +1354,7 @@ Reply with only the single word, lowercase, no punctuation.
 
         <!-- Recording mode + microphone on same row -->
         <div class="space-y-1">
-          <SectionLabel>Recording</SectionLabel>
+          <SectionLabel size="xs" class="!opacity-50">Recording</SectionLabel>
           <div class="flex items-center gap-2">
             <SegmentedControl
               variant="filled"
@@ -1378,7 +1378,7 @@ Reply with only the single word, lowercase, no punctuation.
 
         <!-- Cancel-recording shortcuts -->
         <div class="space-y-1">
-          <SectionLabel>Cancel recording</SectionLabel>
+          <SectionLabel size="xs" class="!opacity-50">Cancel recording</SectionLabel>
           <Checkbox
             bind:checked={cfgCancelOnEsc}
             onchange={() => saveSettings()}
@@ -1390,7 +1390,7 @@ Reply with only the single word, lowercase, no punctuation.
       <!-- Display -->
       <div class="px-4 py-3 space-y-2.5">
         <div class="space-y-1">
-          <SectionLabel>Theme</SectionLabel>
+          <SectionLabel size="xs" class="!opacity-50">Theme</SectionLabel>
           <SegmentedControl
             variant="filled"
             options={[
@@ -1403,7 +1403,7 @@ Reply with only the single word, lowercase, no punctuation.
           />
         </div>
         <div class="space-y-1">
-          <SectionLabel for="history-auto-delete">Auto-delete history</SectionLabel>
+          <SectionLabel for="history-auto-delete" size="xs" class="!opacity-50">Auto-delete history</SectionLabel>
           <Select
             items={HISTORY_AUTO_DELETE_ITEMS}
             bind:value={cfgHistoryAutoDelete}
@@ -1419,47 +1419,15 @@ Reply with only the single word, lowercase, no punctuation.
 
       <!-- Audio indicators -->
       <div class="px-4 py-3 space-y-2.5">
-        <SectionLabel>Audio indicators</SectionLabel>
+        <SectionLabel size="xs" class="!opacity-50">Audio indicators</SectionLabel>
         <div class="flex items-center gap-4">
-          <label class="flex items-center gap-1.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={cfgSoundOnStart}
-              onchange={() => { cfgSoundOnStart = !cfgSoundOnStart; saveSettings(); }}
-              class="fade-check"
-            />
-            <span class="text-[var(--text-primary)]">On start</span>
-          </label>
-          <label class="flex items-center gap-1.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={cfgSoundOnTranscribe}
-              onchange={() => { cfgSoundOnTranscribe = !cfgSoundOnTranscribe; saveSettings(); }}
-              class="fade-check"
-            />
-            <span class="text-[var(--text-primary)]">On transcribe</span>
-          </label>
-          <label class="flex items-center gap-1.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={cfgSoundOnFinish}
-              onchange={() => { cfgSoundOnFinish = !cfgSoundOnFinish; saveSettings(); }}
-              class="fade-check"
-            />
-            <span class="text-[var(--text-primary)]">On finish</span>
-          </label>
-          <label class="flex items-center gap-1.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={cfgSoundOnCancel}
-              onchange={() => { cfgSoundOnCancel = !cfgSoundOnCancel; saveSettings(); }}
-              class="fade-check"
-            />
-            <span class="text-[var(--text-primary)]">On cancel</span>
-          </label>
+          <Checkbox bind:checked={cfgSoundOnStart}      onchange={() => saveSettings()}>Start</Checkbox>
+          <Checkbox bind:checked={cfgSoundOnTranscribe} onchange={() => saveSettings()}>Transcribe</Checkbox>
+          <Checkbox bind:checked={cfgSoundOnFinish}     onchange={() => saveSettings()}>Finish</Checkbox>
+          <Checkbox bind:checked={cfgSoundOnCancel}     onchange={() => saveSettings()}>Cancel</Checkbox>
         </div>
         <div class="flex items-center justify-between">
-          <SectionLabel>Volume</SectionLabel>
+          <SectionLabel size="xs" class="!opacity-50">Volume</SectionLabel>
           <span class="text-[13px] text-[var(--text-primary)] tabular-nums">{Math.round(cfgSoundVolume * 100)}%</span>
         </div>
         <input
@@ -1476,7 +1444,7 @@ Reply with only the single word, lowercase, no punctuation.
 
       <!-- System -->
       <div class="px-4 py-3 space-y-2">
-        <SectionLabel>System</SectionLabel>
+        <SectionLabel size="xs" class="!opacity-50">System</SectionLabel>
         <Checkbox
           bind:checked={cfgLaunchLogin}
           onchange={() => saveSettings()}
