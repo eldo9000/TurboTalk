@@ -8,8 +8,8 @@
   let canvasEl  = $state(null);
   let wordCount = $state(0);
 
-  let transcribeProgress = $state(0); // 0 → 1 as countdown elapses
   let transcribeTimer    = null;
+  let transcribeTick     = $state(0); // incremented by timer to keep Svelte rendering during transcription
 
   // Each audio-level event = 50ms. Frames above threshold = speech time.
   // At 140 WPM: words ≈ speech_seconds * 140 / 60
@@ -121,16 +121,8 @@
 
     listen('ptt-up', () => {
       mode = 'transcribing';
-      transcribeProgress = 0;
-      // Estimate: audio duration ≈ wordCount * 60/140 s; whisper ~0.4× real-time
-      const audioSec = wordCount > 0 ? (wordCount * 60 / 140) : 3;
-      const estMs    = Math.max(2000, audioSec * 480);
-      const start    = Date.now();
       clearInterval(transcribeTimer);
-      transcribeTimer = setInterval(() => {
-        transcribeProgress = Math.min(1, (Date.now() - start) / estMs);
-        if (transcribeProgress >= 1) clearInterval(transcribeTimer);
-      }, 50);
+      transcribeTimer = setInterval(() => { transcribeTick++; }, 50);
       draw();
     }).then(u => uns.push(u));
 
@@ -234,15 +226,6 @@
     animation: pulse-yellow 10s ease-in-out infinite;
   }
 
-  .progress-bar {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    height: 2px;
-    background: rgba(255, 255, 255, 0.9);
-    transition: width 50ms linear;
-  }
-
   canvas { display: block; }
 
 </style>
@@ -276,11 +259,5 @@
       {/if}
     </div>
 
-    {#if mode === 'transcribing'}
-      <div
-        class="progress-bar"
-        style="width: {(1 - transcribeProgress) * 100}%;"
-      ></div>
-    {/if}
   </div>
 </div>
