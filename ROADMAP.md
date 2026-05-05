@@ -41,22 +41,39 @@ Proved 2026-05-01. Config persists across launches. Tray icon hides/shows window
 
 Proved 2026-05-01. Chaperone routes transcripts through local LLM; falls back to prose on error.
 
-## M4 — Polish
+## M4 — Polish ✅
 
 - [x] Launch-on-login (tauri-plugin-autostart, LaunchAgent)
 - [x] Mic selector (list_audio_devices command, settings UI)
 - [x] Dynamic tray icon — TT glyph idle / red dot recording / amber dot transcribing
 - [x] Zoom controls — 9 levels (100–180%), keyboard shortcuts (⌘+/⌘-/⌘0), persistent
-- [x] Three-tab UI — History / Models / Settings with auto-fit window sizing
-- [x] Recording overlay — always-on-top transparent WhisperFlow-style waveform
+- [x] Three-tab UI — History / Models / Modes / Settings with auto-fit window sizing per tab
+- [x] Recording overlay — always-on-top transparent waveform + transcript size indicator (word-pill accumulator)
 - [x] Models tab — active model selector, installed list, HuggingFace download catalog
 - [x] Whisper bundled as Tauri sidecar (mac arm64 committed; Win x64 fetched via `npm run fetch-sidecars`, pinned to whisper.cpp v1.8.4)
+- [x] Custom vocabulary / hotwords (`cleanup.vocabulary` → whisper `--prompt`; surfaced in Modes tab)
+- [x] Audio sound indicators UI — per-event checkboxes (start / transcribe / finish) + volume slider in Settings
+- [x] Cancel on Escape — `cancel_on_esc` config, `recording-cancelled-tap` event, overlay handles gracefully
+
+Proved 2026-05-05.
+
+## M5 — Chaperone Setup + Reliability ✅
+
+The bar: Chaperone mode is discoverable and self-configuring for a first-time user.
+
+- [x] Guided Ollama setup in Modes → Advanced — detects Ollama reachability and model pull status, "Install Ollama" browser-open button, "Download classifier model" streaming pull with progress bar, green "Ready" pill when both gates pass (TASK-32–34, 2026-05-05)
+- [x] Chaperone fallback ui-error toast — when Ollama is unreachable during dictation, fires a rate-limited (60s) recoverable toast "Chaperone unreachable — used raw output. Set up Ollama in Modes → Advanced."; click switches to Modes tab (TASK-35, 2026-05-05)
+- [x] Audio-latency improvements — cpal stream warm-keep with 45s idle-close watchdog, 300ms pre-roll ring buffer so leading words aren't clipped, config RwLock cache so PTT-down skips per-press file I/O; PTT capture now ~10ms vs. prior 50–500ms (TASK-36–38, 2026-05-05)
+
+Proved 2026-05-05 (build + TS check clean; on-device latency verification by user pending).
+
+## M6 — Ship
+
 - [ ] Codesigning + notarization (use Libre signing infra)
-- [ ] Cross-platform paste (Windows + Linux)
+- [ ] Cross-platform paste — Windows (SendInput) + Linux (xdotool) — TASK-25/26 deferred
 - [ ] Streaming transcription (optional — big lift)
-- [x] Custom vocabulary / hotwords (`cleanup.vocabulary` → whisper `--prompt`; surfaced in Modes tab regardless of cleanup mode)
+- [ ] Promote to Libre product trigger: "I use this every day for 2 weeks."
 
 ## Open Questions
 
-- Local LLM for Chaperone — Llama 3.2 3B or smaller? Latency budget ~200ms.
 - Promote to Libre product if/when usable. Trigger: "I use this every day for 2 weeks."
