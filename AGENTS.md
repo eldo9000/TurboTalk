@@ -24,42 +24,31 @@ It consumes the Libre-Apps shared foundation (`librewin-common`, `@libre/ui`) bu
 
 ## Repo State
 
-**Block-out only.** No working build yet. The architecture and module layout are decided; the Tauri scaffolding has not been generated. To start coding:
+**v0.8 beta — working build, macOS arm64.** Full dictation loop proven end-to-end (2026-05-01). Milestones M0–M5 complete. The scaffold, all core modules, and the Chaperone guided-setup flow are all landed. See `TRUTH.md` for what works and `SESSION-STATUS.md` for current focus.
 
-1. Run `npm create tauri-app@latest` in a temp dir to generate `tauri.conf.json`, `build.rs`, `capabilities/`, and the Vite frontend skeleton.
-2. Copy those files into this repo. Reconcile with the existing `Cargo.toml` / `package.json`.
-3. Vendor `~/Downloads/Github/Libre-Apps/common-js/` into `./common-js/` for `@libre/ui`.
-4. `npm install && npm run tauri dev`.
-
-Do not commit a half-broken scaffold. Land it as one clean "scaffold Tauri 2 + Svelte 5" commit.
-
-## Architecture
-
-See `ARCHITECTURE.md` for the module plan. Key modules in `src-tauri/src/`:
-
-- `audio.rs` — mic capture via `cpal`
-- `recorder.rs` — 3-state machine (Ready / Recording / Transcribing)
-- `transcribe.rs` — whisper.cpp sidecar wrapper
-- `paste.rs` — active-app text injection (osascript on macOS)
-- `hotkey.rs` — global push-to-talk via `tauri-apps/global-hotkey`
-- `cleanup.rs` — LLM postprocessor (Chaperone Layer)
-- `settings.rs` — persistence under `~/.config/librewin/turbotalk/`
-
-## Reference Repos (do not fork — read and learn from)
-
-- **Handy** (`cjpais/Handy`) — Rust + Tauri, MIT, 20k★, production. Closest match to what we're building.
-- **typr** (`albertshiney/typr`) — Rust + Tauri, vibe-coded, 8 clean modules, no license. Good module-layout reference.
-- **sagascript** (`Magnus-Gille/sagascript`) — Rust, tiny, idiomatic macOS-glue patterns.
-- **whisper.cpp** (`ggerganov/whisper.cpp`) — STT engine, ship as sidecar.
-
-## Running (when scaffolding is done)
+## Running
 
 ```bash
 npm install
 npm run tauri dev
 ```
 
-Dev port: **1428** (Fade uses 1427, increment per Libre app).
+Dev port: **1428**. For a packaged DMG: `npm run package` (produces `dist-artifacts/TurboTalk-<version>-macos-arm64.dmg`).
+
+## Architecture
+
+See `ARCHITECTURE.md` for the full module plan. Key modules in `src-tauri/src/`:
+
+- `audio.rs` — mic capture via `cpal`; keeps stream warm between recordings (45s idle-close watchdog)
+- `recorder.rs` — 3-state machine (Ready / Recording / Transcribing)
+- `transcribe.rs` — whisper.cpp sidecar wrapper; 300ms pre-roll ring buffer for leading-word preservation
+- `paste.rs` — active-app text injection (arboard + osascript on macOS)
+- `hotkey.rs` — global push-to-talk via CGEventTap (macOS); stub on other platforms
+- `cleanup.rs` — LLM postprocessor (Chaperone Layer); emits `chaperone-fallback` ui-error toast on failure
+- `ollama.rs` — Ollama HTTP helpers: `ping_ollama`, `check_ollama_model`, `open_url`, `pull_ollama_model`
+- `settings.rs` — persistence under `~/.config/librewin/turbotalk/`; process-wide RwLock cache
+- `diagnostics.rs` — health check command (Settings tab, dev-only surface)
+- `whisper_models.rs` — model catalog, download command, progress events
 
 ## Portfolio Status
 
@@ -67,6 +56,6 @@ This repo participates in the Business-OS portfolio status system. Update `SESSI
 
 ## Workflow
 
-- Personal-use tool — no CI gates required initially. Add CI when first usable build lands.
-- Mission: get to "I can dictate this paragraph" as fast as possible. Polish later.
-- The Chaperone Layer (classifier-router LLM) is the differentiator. Reference `Business-OS/memory/project_chaperone_layer.md` for the pattern.
+- macOS personal-use tool. No CI gates for now (add when Windows/Linux stubs are unblocked).
+- The Chaperone Layer (classifier-router LLM via Ollama) is the differentiator. Reference `Business-OS/memory/project_chaperone_layer.md` for the pattern.
+- Promote to Libre product trigger: "I use this every day for 2 weeks."
