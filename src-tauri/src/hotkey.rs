@@ -596,150 +596,213 @@ mod imp {
         hotkey_state: Arc<parking_lot::RwLock<crate::settings::HotkeyConfig>>,
     ) {
         std::thread::spawn(move || {
-            let app_for_callback = app.clone();
-            let app_for_error = app.clone();
-            let tap = match CGEventTap::new(
-                CGEventTapLocation::HID,
-                CGEventTapPlacement::HeadInsertEventTap,
-                CGEventTapOptions::Default,
-                vec![CGEventType::FlagsChanged, CGEventType::KeyDown],
-                move |_proxy, etype, event| {
-                    let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
-                    let flags = event.get_flags();
+            // Permission watchdog loop. CGEventTap::new fails if the process
+            // lacks Accessibility trust at this moment. Pre-fix behaviour was
+            // to give up and require quit+relaunch — terrible first-run UX.
+            // Now: emit the toast once, poll AXIsProcessTrusted() every
+            // 1.5 s, and rebuild the tap as soon as trust flips. The fresh
+            // closure clones happen each iteration because CGEventTap::new
+            // consumes the callback regardless of outcome.
+            let mut surfaced_permission_error = false;
+            // Cap "trusted but tap creation fails" retries so a real OS-level
+            // error (HID disabled, sandbox kill, …) doesn't burn CPU forever.
+            let mut trusted_failure_retries = 0u32;
+            const MAX_TRUSTED_FAILURE_RETRIES: u32 = 6; // ~30 s of 5 s sleeps
 
-                    // Read current config (RwLock read — nanoseconds, uncontended)
-                    let (target_keycode, target_flag, toggle_mode, cancel_on_esc) = {
-                        let hk = hotkey_state.read();
-                        let (kc, f) = key_for_name(&hk.key);
-                        (kc, f, hk.mode == "toggle", hk.cancel_on_esc)
-                    };
+            loop {
+                let recorder_cb = recorder.clone();
+                let tray_cb = tray_icon.clone();
+                let app_cb = app.clone();
+                let hk_cb = hotkey_state.clone();
 
-                    // Escape → cancel any in-flight recording. Read-only on
-                    // events outside Recording/Transcribing so it never
-                    // swallows Escape from the focused app while idle.
-                    if let CGEventType::KeyDown = etype {
-                        if cancel_on_esc && keycode == ESCAPE_KEYCODE {
-                            let s = recorder.state();
-                            if matches!(
-                                s,
-                                crate::recorder::State::Recording
-                                    | crate::recorder::State::Transcribing
-                            ) {
-                                // If the user is still holding the record key
-                                // (hold mode + Recording), the matching key-up
-                                // will fire ptt_up; arm one slot so it no-ops
-                                // instead of cascading into CANCEL_PENDING.
-                                if !toggle_mode
-                                    && matches!(s, crate::recorder::State::Recording)
-                                {
-                                    common::arm_ptt_up_suppression();
+                let tap_result = CGEventTap::new(
+                    CGEventTapLocation::HID,
+                    CGEventTapPlacement::HeadInsertEventTap,
+                    CGEventTapOptions::Default,
+                    vec![CGEventType::FlagsChanged, CGEventType::KeyDown],
+                    move |_proxy, etype, event| {
+                        let keycode =
+                            event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
+                        let flags = event.get_flags();
+
+                        // Read current config (RwLock read — nanoseconds, uncontended)
+                        let (target_keycode, target_flag, toggle_mode, cancel_on_esc) = {
+                            let hk = hk_cb.read();
+                            let (kc, f) = key_for_name(&hk.key);
+                            (kc, f, hk.mode == "toggle", hk.cancel_on_esc)
+                        };
+
+                        // Escape → cancel any in-flight recording. Read-only on
+                        // events outside Recording/Transcribing so it never
+                        // swallows Escape from the focused app while idle.
+                        if let CGEventType::KeyDown = etype {
+                            if cancel_on_esc && keycode == ESCAPE_KEYCODE {
+                                let s = recorder_cb.state();
+                                if matches!(
+                                    s,
+                                    crate::recorder::State::Recording
+                                        | crate::recorder::State::Transcribing
+                                ) {
+                                    // If the user is still holding the record key
+                                    // (hold mode + Recording), the matching key-up
+                                    // will fire ptt_up; arm one slot so it no-ops
+                                    // instead of cascading into CANCEL_PENDING.
+                                    if !toggle_mode
+                                        && matches!(s, crate::recorder::State::Recording)
+                                    {
+                                        common::arm_ptt_up_suppression();
+                                    }
+                                    common::trigger_cancel(&recorder_cb, &tray_cb, &app_cb);
                                 }
-                                common::trigger_cancel(
-                                    &recorder, &tray_icon, &app_for_callback,
-                                );
                             }
                         }
-                    }
 
-                    if let CGEventType::FlagsChanged = etype {
-                        if keycode == target_keycode {
-                            let is_key_down = flags.contains(target_flag);
-                            // Tap-cancel: in toggle mode only, two record-key
-                            // down strokes within `TAP_CANCEL_WINDOW` of each
-                            // other are read as a "mash to cancel" safety
-                            // gesture. Hold mode doesn't need this — release
-                            // already stops the recording cleanly. Always on
-                            // in toggle mode (no opt-out): it's a safety net
-                            // for accidental double-toggles.
-                            if is_key_down && toggle_mode {
-                                let now = std::time::Instant::now();
-                                let mut last = common::LAST_RECORD_KEY_DOWN.lock();
-                                let recent = last
-                                    .map(|t| now.duration_since(t) < common::TAP_CANCEL_WINDOW)
-                                    .unwrap_or(false);
-                                *last = Some(now);
-                                drop(last);
-                                if recent {
-                                    // First "recent" tap during a busy
-                                    // recorder cancels; subsequent taps in
-                                    // the burst extend the cooldown so a
-                                    // 5- or 6-tap anxious mash can't slip
-                                    // past into a fresh recording. Either
-                                    // branch suppresses normal PTT dispatch
-                                    // for this stroke; toggle-mode releases
-                                    // are already no-ops, so no ptt_up
-                                    // suppression is needed.
-                                    let s = recorder.state();
-                                    let do_cancel = matches!(
-                                        s,
-                                        crate::recorder::State::Recording
-                                            | crate::recorder::State::Transcribing
-                                    );
-                                    if do_cancel {
-                                        common::trigger_tap_cancel(
-                                            &recorder, &tray_icon, &app_for_callback,
+                        if let CGEventType::FlagsChanged = etype {
+                            if keycode == target_keycode {
+                                let is_key_down = flags.contains(target_flag);
+                                // Tap-cancel: in toggle mode only, two record-key
+                                // down strokes within `TAP_CANCEL_WINDOW` of each
+                                // other are read as a "mash to cancel" safety
+                                // gesture. Hold mode doesn't need this — release
+                                // already stops the recording cleanly. Always on
+                                // in toggle mode (no opt-out): it's a safety net
+                                // for accidental double-toggles.
+                                if is_key_down && toggle_mode {
+                                    let now = std::time::Instant::now();
+                                    let mut last = common::LAST_RECORD_KEY_DOWN.lock();
+                                    let recent = last
+                                        .map(|t| {
+                                            now.duration_since(t) < common::TAP_CANCEL_WINDOW
+                                        })
+                                        .unwrap_or(false);
+                                    *last = Some(now);
+                                    drop(last);
+                                    if recent {
+                                        // First "recent" tap during a busy
+                                        // recorder cancels; subsequent taps in
+                                        // the burst extend the cooldown so a
+                                        // 5- or 6-tap anxious mash can't slip
+                                        // past into a fresh recording. Either
+                                        // branch suppresses normal PTT dispatch
+                                        // for this stroke; toggle-mode releases
+                                        // are already no-ops, so no ptt_up
+                                        // suppression is needed.
+                                        let s = recorder_cb.state();
+                                        let do_cancel = matches!(
+                                            s,
+                                            crate::recorder::State::Recording
+                                                | crate::recorder::State::Transcribing
                                         );
-                                    } else {
-                                        common::mark_tap_cancel();
-                                    }
-                                    return None;
-                                }
-                            }
-                            if toggle_mode {
-                                if is_key_down {
-                                    if recorder.is_recording() {
-                                        common::ptt_up(&recorder, &tray_icon, &app_for_callback);
-                                    } else {
-                                        common::ptt_down(&recorder, &tray_icon, &app_for_callback);
+                                        if do_cancel {
+                                            common::trigger_tap_cancel(
+                                                &recorder_cb,
+                                                &tray_cb,
+                                                &app_cb,
+                                            );
+                                        } else {
+                                            common::mark_tap_cancel();
+                                        }
+                                        return None;
                                     }
                                 }
-                            } else if is_key_down {
-                                common::ptt_down(&recorder, &tray_icon, &app_for_callback);
-                            } else {
-                                common::ptt_up(&recorder, &tray_icon, &app_for_callback);
+                                if toggle_mode {
+                                    if is_key_down {
+                                        if recorder_cb.is_recording() {
+                                            common::ptt_up(&recorder_cb, &tray_cb, &app_cb);
+                                        } else {
+                                            common::ptt_down(&recorder_cb, &tray_cb, &app_cb);
+                                        }
+                                    }
+                                } else if is_key_down {
+                                    common::ptt_down(&recorder_cb, &tray_cb, &app_cb);
+                                } else {
+                                    common::ptt_up(&recorder_cb, &tray_cb, &app_cb);
+                                }
                             }
                         }
+
+                        None
+                    },
+                );
+
+                match tap_result {
+                    Ok(tap) => {
+                        if surfaced_permission_error {
+                            tracing::info!(
+                                "[hotkey] CGEventTap rebuilt after Accessibility permission grant"
+                            );
+                        }
+                        let source = tap
+                            .mach_port
+                            .create_runloop_source(0)
+                            .expect("[hotkey] create_runloop_source failed");
+                        // SAFETY: kCFRunLoopCommonModes is a static CFStringRef
+                        // constant exported by core-foundation. Reading it requires
+                        // unsafe because the binding is a static extern, but the
+                        // value is immutable and thread-safe to read.
+                        CFRunLoop::get_current()
+                            .add_source(&source, unsafe { kCFRunLoopCommonModes });
+                        tap.enable();
+                        CFRunLoop::run_current();
+                        return;
                     }
-
-                    None
-                },
-            ) {
-                Ok(t) => t,
-                Err(()) => {
-                    let trusted = accessibility_trusted();
-                    let message = if trusted {
-                        "Record trigger failed to start. Restart Turbo Talk and try again."
-                    } else {
-                        "Record trigger needs Accessibility permission. Add Turbo Talk in System Settings -> Privacy & Security -> Accessibility, then quit and reopen the app."
-                    };
-                    tracing::error!("[hotkey] CGEventTap failed (accessibility_trusted={trusted})");
-                    let app_for_emit = app_for_error.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(1200));
-                        common::emit_critical(
-                            &app_for_emit,
-                            "ui-error",
-                            common::UiError {
-                                kind: "hotkey-permission",
-                                message: message.to_string(),
-                                recoverable: true,
-                            },
+                    Err(()) => {
+                        let trusted = accessibility_trusted();
+                        tracing::error!(
+                            "[hotkey] CGEventTap failed (accessibility_trusted={trusted}, retry={trusted_failure_retries})"
                         );
-                    });
-                    return;
+                        if !surfaced_permission_error {
+                            surfaced_permission_error = true;
+                            let message = if trusted {
+                                "Record trigger failed to start. Restart Turbo Talk and try again."
+                            } else {
+                                "Record trigger needs Accessibility permission. Add Turbo Talk in System Settings → Privacy & Security → Accessibility — Turbo Talk will pick it up automatically once granted."
+                            };
+                            let app_for_emit = app.clone();
+                            std::thread::spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_millis(1200));
+                                common::emit_critical(
+                                    &app_for_emit,
+                                    "ui-error",
+                                    common::UiError {
+                                        kind: "hotkey-permission",
+                                        message: message.to_string(),
+                                        recoverable: true,
+                                    },
+                                );
+                            });
+                        }
+                        if !trusted {
+                            // Permission missing. Poll cheaply until it flips.
+                            // AXIsProcessTrusted() is a fast syscall; 1.5 s is a
+                            // human-scale latency for "I just clicked the toggle".
+                            loop {
+                                std::thread::sleep(std::time::Duration::from_millis(1500));
+                                if accessibility_trusted() {
+                                    tracing::info!(
+                                        "[hotkey] Accessibility permission detected — retrying CGEventTap"
+                                    );
+                                    // Reset the trusted-failure budget for the rebuild attempt.
+                                    trusted_failure_retries = 0;
+                                    break;
+                                }
+                            }
+                        } else {
+                            // Trusted but the tap still failed — real OS-level
+                            // problem. Back off and cap retries so we don't spin
+                            // forever on something the user can't fix.
+                            trusted_failure_retries += 1;
+                            if trusted_failure_retries >= MAX_TRUSTED_FAILURE_RETRIES {
+                                tracing::error!(
+                                    "[hotkey] giving up after {trusted_failure_retries} trusted-but-failing retries"
+                                );
+                                return;
+                            }
+                            std::thread::sleep(std::time::Duration::from_secs(5));
+                        }
+                    }
                 }
-            };
-
-            let source = tap
-                .mach_port
-                .create_runloop_source(0)
-                .expect("[hotkey] create_runloop_source failed");
-            // SAFETY: kCFRunLoopCommonModes is a static CFStringRef constant exported by
-            // core-foundation. Reading it requires unsafe because the binding is a static
-            // extern, but the value is immutable and thread-safe to read.
-            CFRunLoop::get_current().add_source(&source, unsafe { kCFRunLoopCommonModes });
-            tap.enable();
-            CFRunLoop::run_current();
+            }
         });
     }
 }
