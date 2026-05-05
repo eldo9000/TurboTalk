@@ -1,7 +1,9 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-05-05
-**Current state:** TASK-27 (Whisper sidecar bundling) landed for Windows.
+**Current state:** Guided Ollama setup sprint complete (TASK-32–35). `ollama.rs` adds `ping_ollama`, `check_ollama_model`, `open_url`, `pull_ollama_model` backend commands; Modes Advanced panel has live Ollama detection + model-pull UI with progress bar; chaperone-fallback ui-error toast fires (rate-limited 60s) when Ollama is unreachable during dictation.
+
+Previous state: TASK-27 (Whisper sidecar bundling) landed for Windows.
 `scripts/fetch-sidecars.mjs` downloads upstream whisper.cpp v1.8.4
 `whisper-bin-x64.zip` (sha256 verified), extracts the 5 runtime files into
 `src-tauri/binaries/`, and renames `whisper-cli.exe` to the Tauri target-triple
