@@ -48,3 +48,4 @@ src-tauri/binaries/whisper.dll
 src-tauri/binaries/ggml.dll
 src-tauri/binaries/ggml-base.dll
 src-tauri/binaries/ggml-cpu.dll
+.claude/
