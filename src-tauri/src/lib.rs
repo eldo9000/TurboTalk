@@ -81,8 +81,18 @@ fn save_config(
 }
 
 fn apply_overlay_visibility(app: &tauri::AppHandle, show: bool) {
+    // Only toggle when the requested state differs from the current state.
+    // Calling `show()` on an already-visible window on macOS reorders it to
+    // the front and steals key status from whichever window the user was
+    // interacting with — every settings change would defocus the main
+    // window mid-click. (TASK-40)
     if let Some(overlay) = app.get_webview_window("overlay") {
-        let _ = if show { overlay.show() } else { overlay.hide() };
+        let visible = overlay.is_visible().unwrap_or(false);
+        if show && !visible {
+            let _ = overlay.show();
+        } else if !show && visible {
+            let _ = overlay.hide();
+        }
     }
 }
 
