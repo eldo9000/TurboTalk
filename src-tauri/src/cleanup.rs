@@ -77,6 +77,14 @@ pub fn process(raw: &str, app: &tauri::AppHandle) -> String {
         return String::new();
     }
 
+    // Strip non-speech annotation tokens Whisper emits for breaths, sighs, etc.
+    // --suppress-nst doesn't reliably catch all of these across whisper.cpp versions.
+    let cleaned = strip_non_speech_annotations(trimmed);
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
     // Voice command detection runs before any cleanup.
     match detect_voice_command(trimmed) {
         VoiceCommand::ScratchThat => return String::new(),
@@ -145,6 +153,48 @@ fn handle_prose(text: &str, cfg: &crate::settings::CleanupConfig) -> String {
         s = append_period(s);
     }
     s
+}
+
+fn strip_non_speech_annotations(text: &str) -> String {
+    // Whisper outputs these annotation tokens for non-speech sounds.
+    // Listed in lowercase; matched case-insensitively against the input.
+    const ANNOTATIONS: &[&str] = &[
+        "(sigh)", "(sighs)", "(sighing)",
+        "(exhale)", "(exhales)", "(exhaling)",
+        "(inhale)", "(inhales)", "(inhaling)",
+        "(breath)", "(breathes)", "(breathing)",
+        "(cough)", "(coughs)", "(coughing)",
+        "(laugh)", "(laughs)", "(laughing)",
+        "(chuckle)", "(chuckles)", "(chuckling)",
+        "[blank_audio]", "[noise]", "[music]", "[applause]", "[laughter]",
+    ];
+
+    let lower = text.to_lowercase();
+    let mut to_remove: Vec<(usize, usize)> = Vec::new();
+
+    for ann in ANNOTATIONS {
+        let mut start = 0;
+        while let Some(pos) = lower[start..].find(ann) {
+            let abs = start + pos;
+            to_remove.push((abs, abs + ann.len()));
+            start = abs + ann.len();
+        }
+    }
+
+    if to_remove.is_empty() {
+        return text.to_string();
+    }
+
+    // Remove in reverse order so earlier indices remain valid.
+    to_remove.sort_by(|a, b| b.0.cmp(&a.0));
+    to_remove.dedup_by(|a, b| a.0 == b.0);
+
+    let mut result = text.to_string();
+    for (start, end) in to_remove {
+        result.replace_range(start..end, "");
+    }
+
+    result.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn strip_whisper_artifacts(text: &str) -> String {
@@ -345,6 +395,21 @@ fn parse_mode_strict(s: &str) -> anyhow::Result<Mode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn non_speech_annotation_stripping() {
+        assert_eq!(strip_non_speech_annotations("(sigh)"), "");
+        assert_eq!(strip_non_speech_annotations("(Sigh)"), "");
+        assert_eq!(strip_non_speech_annotations("(sigh) hello world"), "hello world");
+        assert_eq!(strip_non_speech_annotations("hello (exhales) world"), "hello world");
+        assert_eq!(strip_non_speech_annotations("[BLANK_AUDIO]"), "");
+        assert_eq!(strip_non_speech_annotations("[blank_audio]"), "");
+        assert_eq!(strip_non_speech_annotations("hello world"), "hello world");
+        assert_eq!(
+            strip_non_speech_annotations("(sigh) I was saying (exhales) something"),
+            "I was saying something"
+        );
+    }
 
     #[test]
     fn voice_commands() {
