@@ -4,5 +4,7 @@
 <dict>
   <key>NSMicrophoneUsageDescription</key>
   <string>Turbo Talk uses the microphone only while you hold the push-to-talk hotkey so it can transcribe your speech locally.</string>
+  <key>LSUIElement</key>
+  <true/>
 </dict>
 </plist>

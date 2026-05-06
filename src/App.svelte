@@ -789,6 +789,14 @@ Reply with only the single word, lowercase, no punctuation.
       recording = false;
       transcribing = false;
     }).then(u => unlisteners.push(u));
+    listen('recording-cancelled', () => {
+      // User cancelled mid-recording (Esc, hold-to-cancel, UI cancel, tray
+      // click). The hotkey path swallows the matching ptt_up, so without this
+      // listener the main window's recording/transcribing flags would stay
+      // pinned and the red dot + "Transcribing…" label never clear.
+      recording = false;
+      transcribing = false;
+    }).then(u => unlisteners.push(u));
     listen('recording-too-short', (e) => {
       // More specific subtype of recording-discarded. The overlay is already
       // cleared by the recording-discarded listener; here we surface a
@@ -1537,16 +1545,11 @@ Reply with only the single word, lowercase, no punctuation.
               bind:checked={cfgShowOverlay}
               onchange={() => saveSettings()}
             >Active recording overlay</Checkbox>
-            <div>
-              <Checkbox
-                bind:checked={cfgTranscriptIndicator}
-                onchange={() => saveSettings()}
-                disabled={!cfgShowOverlay}
-              >Recording length overlay</Checkbox>
-              <p class="text-[var(--text-muted)] text-[11px] mt-1 ml-1">
-                A visual estimate of how long and how much talking you've been doing.
-              </p>
-            </div>
+            <Checkbox
+              bind:checked={cfgTranscriptIndicator}
+              onchange={() => saveSettings()}
+              disabled={!cfgShowOverlay}
+            >Recording length overlay</Checkbox>
           </div>
         </div>
 
