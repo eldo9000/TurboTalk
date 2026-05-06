@@ -102,6 +102,7 @@ const OVERLAY_PILL_BOTTOM_OFFSET: f64 = 290.0; // WIN_H 80 + BOTTOM_GAP 110 + GU
 ///     (despite the `PhysicalPosition` type label).
 ///   - `Monitor::size()` reports actual physical pixels, scaled by that
 ///     monitor's own scale factor.
+///
 /// To do a correct point-in-monitor test we have to normalize all three into
 /// the same space. We pick logical NSPoints: divide cursor by primary scale,
 /// take position as-is, divide size by own scale. Tauri's built-in
@@ -910,7 +911,7 @@ pub fn run() {
 
             // ── Main window — position below cursor at launch ─────────────
             if let Some(win) = app.get_webview_window("main") {
-                position_below_cursor(&app.handle(), &win);
+                position_below_cursor(app.handle(), &win);
             }
 
             // ── Overlay — cursor-transparent so clicks always pass through ──
@@ -923,7 +924,7 @@ pub fn run() {
             // Pin the overlay to the cursor's monitor at startup so the very
             // first press doesn't have to fight a stale primary-monitor
             // placement from `center: true` in tauri.conf.json.
-            reposition_overlay_to_cursor_monitor(&app.handle());
+            reposition_overlay_to_cursor_monitor(app.handle());
 
             // ── Hotkey ─────────────────────────────────────────────────────
             // Stream opens on first keypress; always re-queries the config device
