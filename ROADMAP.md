@@ -64,15 +64,19 @@ The bar: Chaperone mode is discoverable and self-configuring for a first-time us
 - [x] Guided Ollama setup in Modes → Advanced — detects Ollama reachability and model pull status, "Install Ollama" browser-open button, "Download classifier model" streaming pull with progress bar, green "Ready" pill when both gates pass (TASK-32–34, 2026-05-05)
 - [x] Chaperone fallback ui-error toast — when Ollama is unreachable during dictation, fires a rate-limited (60s) recoverable toast "Chaperone unreachable — used raw output. Set up Ollama in Modes → Advanced."; click switches to Modes tab (TASK-35, 2026-05-05)
 - [x] Audio-latency improvements — cpal stream warm-keep with 45s idle-close watchdog, 300ms pre-roll ring buffer so leading words aren't clipped, config RwLock cache so PTT-down skips per-press file I/O; PTT capture now ~10ms vs. prior 50–500ms (TASK-36–38, 2026-05-05)
+- [x] Next-beta hardening — scratch-that discards instead of pasting, cancel can abort an in-flight Whisper child, paste failure restores clipboard, device loss drops the warm stream, diagnostics only probes loopback Ollama URLs, onboarding/settings handle unsupported platforms honestly, and Settings window sizing/hotkey labels received final UI polish (v0.8.6 tag, 2026-05-06)
 
-Proved 2026-05-05 (build + TS check clean; on-device latency verification by user pending).
+Proved 2026-05-06 at code/build level: `cargo test --manifest-path src-tauri/Cargo.toml` passed (80 passed, 1 ignored real-audio VAD test), `npm run typecheck` passed, `npm run build` passed with known Svelte/shared warnings, and local `TurboTalk-0.8.6-macos-arm64.dmg.sha256` verified. Installed-artifact smoke test from the GitHub release build remains the final beta-publication gate.
 
 ## M6 — Ship (1.0)
 
 The bar: TurboTalk installs cleanly on macOS / Windows / Linux without Gatekeeper or SmartScreen warnings, and the dictation loop works end-to-end on each.
 
+- [x] Publish v0.8.6 beta prerelease — tag `v0.8.6` points at `352a251`; release workflow run 25414134047 is green and the prerelease is live
+- [ ] Run installed-artifact smoke against the published v0.8.6 macOS artifact on a clean macOS account
+- [ ] Developer ID notarized macOS beta — downloaded GitHub DMGs are quarantined by macOS and blocked unless the user right-clicks Open/Open Anyway or clears quarantine; real fix is Developer ID signing + notarization
 - [ ] On-device latency proof — verify v0.8.6 warm-stream + pre-roll fix end-to-end on built-in mic and Bluetooth (AirPods); confirm leading-word capture and ~10ms PTT-to-capture
-- [ ] Cross-platform paste — Windows (`enigo`/SendInput) and Linux (xdotool / wl-clipboard); the rdev hotkey listener is already wired in `src-tauri/src/hotkey.rs` (TASK-25/26 deferred)
+- [ ] Cross-platform hotkey + paste — Windows (`enigo`/SendInput) and Linux (xdotool / wl-clipboard); off-mac runtime still returns unsupported for the real dictation loop (TASK-25/26 deferred)
 - [ ] Cross-platform diagnostics + onboarding — Win/Linux readiness gates (mic permission, sidecar present, Accessibility/equivalent), per-OS permission flow (TASK-29 deferred)
 - [ ] Linux release pipeline — re-enable Linux in `.github/workflows/release.yml` matrix once the runtime path (rdev under X11/Wayland, AppImage system deps) has been validated on real hardware
 - [ ] Codesigning + notarization — Apple Developer ID for macOS, Authenticode for Windows; use Libre signing infra

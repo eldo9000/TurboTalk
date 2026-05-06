@@ -5,7 +5,7 @@
 This document has three labeled sections — one per supported platform:
 
 - [macOS beta smoke test](#macos-beta-smoke-test) — the published path
-- [Windows beta smoke test](#windows-beta-smoke-test) — in development, runnable once Win sidecar binary lands
+- [Windows beta smoke test](#windows-beta-smoke-test) — in development; packaging exists, but runtime is blocked by hotkey/paste stubs
 - [Linux beta smoke test (X11)](#linux-beta-smoke-test-x11) — in development, runnable once Linux sidecar binary lands
 
 Each section has the same 7-step shape (clean launch → mic permission → push-to-talk → missing model → chaperone fallback → app switch → quit/relaunch). The macOS section additionally has the 11-step **Installed-artifact smoke test** that gates publishing a release.
@@ -242,13 +242,13 @@ When you hit a step that does not match the Expected behavior:
 
 ### Installed-artifact smoke test (macOS)
 
-Run this section after every release build (ad-hoc signed DMG for this beta) and **before publishing** the release. The 7 dev-build tests above catch code regressions; this section catches packaging-layer regressions that only appear once the app is installed from a real DMG. It covers the macOS permission prompt flow when launched from `/Applications`, one end-to-end dictation, and the documented uninstall + data cleanup path. Skipping this section is how broken DMGs reach users.
+Run this section after every release build (unsigned/ad-hoc DMG for this beta) and **before publishing** the release. The 7 dev-build tests above catch code regressions; this section catches packaging-layer regressions that only appear once the app is installed from a real DMG. It covers the macOS permission prompt flow when launched from `/Applications`, one end-to-end dictation, and the documented uninstall + data cleanup path. Skipping this section is how broken DMGs reach users.
 
-> **Note for this beta:** the DMG is **ad-hoc signed only** (`signingIdentity: "-"`). It is not Apple-notarized. First launch on a fresh user account requires the right-click → **Open** trick. Steps 2 and 4 below are written for the unsigned/ad-hoc case. Developer ID + notarization is wired up in `tauri.conf.json` for a future release but is intentionally not used here — see `RELEASING.md` → "Future signed releases (deferred)".
+> **Note for this beta:** the DMG/app is **unsigned/ad-hoc only** (`signingIdentity: "-"`). It is not Apple-notarized. GitHub-downloaded artifacts also carry macOS's quarantine flag, so first launch on a fresh user account requires the right-click → **Open** trick or System Settings → Privacy & Security → **Open Anyway**. Steps 2 and 4 below are written for the unsigned/ad-hoc case. Developer ID + notarization is wired up in `tauri.conf.json` for a future release but is intentionally not used here — see `RELEASING.md` → "Future signed releases (deferred)".
 
 #### Prerequisites
 
-- An ad-hoc signed DMG sitting in `dist-artifacts/` (per `BUILD.md` and `RELEASING.md`), along with its matching `.sha256` file. The DMG must be the actual artifact you intend to publish — not an unsigned local-dev build.
+- An unsigned/ad-hoc DMG sitting in `dist-artifacts/` or downloaded from the GitHub release workflow, along with its matching `.sha256` file. The DMG must be the actual artifact you intend to publish, not a stale local build.
 - **A clean macOS user account with no prior TurboTalk install.** Either:
   - (a) A fresh macOS VM, or
   - (b) A new local user account on the maintainer's Mac (System Settings → Users & Groups → Add Account), then log into that account before starting.
@@ -275,7 +275,7 @@ Run this section after every release build (ad-hoc signed DMG for this beta) and
    spctl -a -t open --context context:primary-signature -v TurboTalk-<version>-macos-arm64.dmg
    ```
 
-   **Expected for this beta:** `rejected` with `source=no usable signature` or similar — that is correct for an ad-hoc-signed DMG. The right-click → Open trick in step 4 is how users get past it. If output is `accepted` with `source=Notarized Developer ID`, somebody enabled notarization for this release; back out and rebuild without it (we are not publishing notarized in this beta).
+   **Expected for this beta:** `rejected` with `source=no usable signature` or similar — that is correct for an unsigned/ad-hoc DMG. The right-click → Open trick in step 4 is how users get past it. If output is `accepted` with `source=Notarized Developer ID`, somebody enabled notarization for this release; back out and rebuild without it (we are not publishing notarized in this beta).
 
 3. **Mount and install.**
 
@@ -285,7 +285,7 @@ Run this section after every release build (ad-hoc signed DMG for this beta) and
 
 4. **First launch (right-click → Open).**
 
-   **Action:** Open `/Applications`, **right-click** (or Control-click) `Turbo Talk.app`, and choose **Open**. macOS will show a Gatekeeper warning ("Apple cannot verify…"). Click **Open** in that dialog.
+   **Action:** Open `/Applications`, **right-click** (or Control-click) `Turbo Talk.app`, and choose **Open**. macOS will show a Gatekeeper warning ("Apple cannot verify…"). Click **Open** in that dialog. If macOS shows only a refusal dialog, open System Settings → Privacy & Security and click **Open Anyway** for Turbo Talk, then try again.
 
    **Expected:** The app window appears after you click Open in the Gatekeeper dialog. A normal double-click on first launch will refuse — that is expected for the ad-hoc beta. After the right-click → Open trick has been used once, future double-clicks work normally.
 
@@ -355,7 +355,7 @@ Record the outcome of this run in `SESSION-STATUS.md` under the release entry. O
 
 ## Windows beta smoke test
 
-> **Status:** Smoke test will be runnable once Win/Linux sidecar binaries are bundled (pending TASK-27). The steps below are correct in shape; until the bundled `whisper-cli` for Windows lands, Test 3 onward will fail at the transcription step.
+> **Status:** Packaging can produce a Windows installer with the bundled Whisper sidecar, but the smoke test is not expected to pass yet. Windows hotkey + paste are still unsupported stubs (TASK-25/26), so Test 3 onward cannot prove the dictation loop until those land.
 
 **Target platform:** Windows 10 (1809+) or Windows 11, x64. All steps assume the app is installed from the NSIS `.exe` installer.
 
@@ -578,7 +578,7 @@ If empty or missing, settings were not written on quit.
 
 ## Linux beta smoke test (X11)
 
-> **Status:** Smoke test will be runnable once Win/Linux sidecar binaries are bundled (pending TASK-27). The steps below are correct in shape; until the bundled `whisper-cli` for Linux lands, Test 3 onward will fail at the transcription step.
+> **Status:** Smoke test will be runnable once Linux sidecar, hotkey, and paste paths are bundled and validated on real X11 hardware. Until then, Test 3 onward cannot prove the dictation loop.
 
 > **Wayland is not supported.** This test must be run on an X11 session. On GNOME/KDE/most modern distros that default to Wayland, log out and choose "GNOME on Xorg" / "Plasma (X11)" at the login screen before running this test. See `README.md` → Wayland note.
 
