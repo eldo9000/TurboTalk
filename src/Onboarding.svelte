@@ -13,7 +13,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { commands } from './bindings.ts';
 
-  let { onComplete } = $props();
+  let { onComplete, onUnsupportedContinue } = $props();
 
   let readiness          = $state(null);
   let pollHandle         = null;
@@ -133,6 +133,10 @@
     };
   });
 
+  let unsupportedPlatform = $derived(
+    readiness?.accessibility === 'unsupported' || readiness?.microphone === 'unsupported'
+  );
+
   function stepClass(state) {
     if (state === 'active') return 'border-[var(--accent)]/40 bg-[var(--accent)]/5';
     if (state === 'done')   return 'border-[var(--border,#2a2a2a)] opacity-60';
@@ -151,11 +155,29 @@
     <div class="flex flex-col gap-1.5">
       <h1 class="text-[18px] font-semibold leading-tight">Welcome to Turbo Talk</h1>
       <p class="text-[12px] text-[var(--muted,#9a9a9a)] leading-relaxed">
-        Three quick setup steps before you can start dictating.
+        {unsupportedPlatform
+          ? 'This beta is macOS-only for recording, global hotkeys, and paste.'
+          : 'Three quick setup steps before you can start dictating.'}
       </p>
     </div>
 
     {#if readiness}
+      {#if unsupportedPlatform}
+        <div class="flex flex-col gap-3 p-3.5 rounded-lg border border-yellow-500/30 bg-yellow-500/10">
+          <div class="flex flex-col gap-1">
+            <h2 class="text-[13px] font-medium leading-tight text-yellow-200">Unsupported platform</h2>
+            <p class="text-[11px] text-[var(--muted,#9a9a9a)] leading-snug">
+              Turbo Talk's beta dictation loop currently depends on macOS Accessibility,
+              microphone permission, and paste APIs. Those controls are unavailable here,
+              so recording and paste will not work on this platform.
+            </p>
+          </div>
+          <button onclick={() => onUnsupportedContinue?.()}
+            class="self-start px-3 py-1.5 rounded-md border border-yellow-500/40 text-[12px] font-medium text-yellow-100 hover:bg-yellow-500/15 transition-colors">
+            Continue without dictation
+          </button>
+        </div>
+      {:else}
       <!-- Step 1: Accessibility (restart required, surfaced first) -->
       <div class="flex gap-3 p-3.5 rounded-lg border {stepClass(stepStates.accessibility)}">
         <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.accessibility)}">
@@ -274,6 +296,7 @@
           {/if}
         </div>
       </div>
+      {/if}
     {:else}
       <p class="text-[12px] text-[var(--muted,#9a9a9a)]">Checking system…</p>
     {/if}

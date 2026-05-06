@@ -243,6 +243,12 @@ export type HotkeyConfig = {
 	 *  otherwise.
 	 */
 	cancel_on_esc?: boolean,
+	/**
+	 *  Cancel an in-flight recording when the user holds the trigger key for
+	 *  `HOLD_CANCEL_DURATION` (500 ms) while the recorder is Recording or
+	 *  Transcribing. Lets the user abort without reaching for Escape.
+	 */
+	cancel_on_hold?: boolean,
 };
 
 export type PermissionStatus = "granted" | "denied" | "not_determined" | "unsupported";

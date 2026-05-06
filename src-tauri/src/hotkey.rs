@@ -28,10 +28,10 @@ mod common {
     static CANCEL_PENDING: AtomicBool = AtomicBool::new(false);
 
     /// Number of pending `ptt_up` invocations that should be silently
-    /// swallowed. Each suppressed record-key down stroke (cancel path or
-    /// "extend cooldown" tap-mash path) increments this; each `ptt_up` worker
-    /// checks-and-decrements it before doing any real work. Counter, not
-    /// flag, because a 5–6-tap mash burst arms multiple in a row.
+    /// swallowed. The cancel paths (Esc, hold-to-cancel, IPC, tray) increment
+    /// this so the matching key-up no-ops instead of cascading into
+    /// IllegalTransition / CANCEL_PENDING. Counter, not flag, in case multiple
+    /// cancel signals stack before the user releases.
     pub(super) static SUPPRESS_PTT_UP_COUNT: AtomicU32 = AtomicU32::new(0);
 
     /// Add one to `SUPPRESS_PTT_UP_COUNT`. Call from the listener thread
@@ -129,48 +129,71 @@ mod common {
     /// critical section is a single load/store and never blocks audio work.
     static CURRENT_JOB_ID: parking_lot::Mutex<Option<u64>> = parking_lot::Mutex::new(None);
 
-    /// Last observed key-down for the configured PTT key. Read+written from
-    /// the OS keyboard listener thread on every record-key press; the lock is
-    /// uncontended in practice (one writer, no concurrent readers).
-    pub(super) static LAST_RECORD_KEY_DOWN: parking_lot::Mutex<Option<std::time::Instant>> =
-        parking_lot::Mutex::new(None);
-
-    /// Window inside which two consecutive record-key down strokes are treated
-    /// as a "tap to cancel" gesture rather than two independent presses.
-    pub(super) const TAP_CANCEL_WINDOW: std::time::Duration =
+    /// Hold-to-cancel: how long the trigger key must be held during a busy
+    /// recorder (Recording or Transcribing) before the gesture fires. Longer
+    /// than typical tap-to-toggle latency so a normal toggle stop never trips
+    /// the cancel.
+    pub(super) const HOLD_CANCEL_DURATION: std::time::Duration =
         std::time::Duration::from_millis(500);
 
-    /// After a tap-cancel fires, lock out new recordings for this long. Stops
-    /// the third / fourth tap in a "mash to cancel" burst from immediately
-    /// kicking off a new recording the moment the recorder returns to Ready.
-    pub(super) const TAP_CANCEL_COOLDOWN: std::time::Duration =
-        std::time::Duration::from_millis(1000);
+    /// Generation counter for hold-to-cancel candidate presses. Each qualifying
+    /// trigger-key down stroke increments this; the timer thread captures its
+    /// generation at arm time and aborts at the deadline if the value has
+    /// since moved (newer press, or release-then-press).
+    static HOLD_CANCEL_GEN: AtomicU64 = AtomicU64::new(0);
 
-    /// Timestamp of the last tap-cancel. Compared against `TAP_CANCEL_COOLDOWN`
-    /// at the top of `ptt_down` to suppress accidental immediate re-records.
-    static LAST_TAP_CANCEL_AT: parking_lot::Mutex<Option<std::time::Instant>> =
-        parking_lot::Mutex::new(None);
+    /// True between trigger-key down and up for the most recent press, when
+    /// that press armed a hold-to-cancel timer. Cleared on release so the
+    /// timer's deadline check sees "no longer held" and bails.
+    static HOLD_CANCEL_KEY_DOWN: AtomicBool = AtomicBool::new(false);
 
-    /// Mark "tap-cancel just happened" so subsequent record-key presses are
-    /// rejected for the cooldown window. Called from the OS listener thread
-    /// at the same moment `trigger_cancel` is invoked via the tap path.
-    pub(super) fn mark_tap_cancel() {
-        *LAST_TAP_CANCEL_AT.lock() = Some(std::time::Instant::now());
-    }
-
-    /// Cancel via the rapid-tap gesture. Same teardown as `trigger_cancel`,
-    /// plus (a) records the cancel timestamp so `ptt_down` can suppress the
-    /// trailing taps in a 2–3-tap burst, and (b) emits a distinct
-    /// `recording-cancelled-tap` event so the frontend can tell the gesture
-    /// apart from Escape / tray / IPC cancels.
-    pub(super) fn trigger_tap_cancel(
+    /// Arm a hold-to-cancel timer if the recorder is in a cancellable state.
+    /// Call from the OS listener thread on trigger-key down (after auto-repeat
+    /// dedup). When the deadline elapses, if the same press is still held and
+    /// the recorder is still Recording or Transcribing, fire `trigger_cancel`.
+    /// Also arms `SUPPRESS_PTT_UP_COUNT` so the upcoming key-up's `ptt_up`
+    /// no-ops instead of cascading into `CANCEL_PENDING`.
+    pub(super) fn arm_hold_cancel(
         recorder: &Arc<Recorder>,
         tray_icon: &TrayIcon,
         app: &AppHandle,
     ) {
-        mark_tap_cancel();
-        emit_critical(app, "recording-cancelled-tap", ());
-        trigger_cancel(recorder, tray_icon, app);
+        let s = recorder.state();
+        if !matches!(
+            s,
+            crate::recorder::State::Recording | crate::recorder::State::Transcribing
+        ) {
+            return;
+        }
+        let gen = HOLD_CANCEL_GEN.fetch_add(1, Ordering::AcqRel) + 1;
+        HOLD_CANCEL_KEY_DOWN.store(true, Ordering::Release);
+        let rec = recorder.clone();
+        let tray = tray_icon.clone();
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(HOLD_CANCEL_DURATION);
+            if HOLD_CANCEL_GEN.load(Ordering::Acquire) != gen {
+                return;
+            }
+            if !HOLD_CANCEL_KEY_DOWN.load(Ordering::Acquire) {
+                return;
+            }
+            if !matches!(
+                rec.state(),
+                crate::recorder::State::Recording | crate::recorder::State::Transcribing
+            ) {
+                return;
+            }
+            arm_ptt_up_suppression();
+            trigger_cancel(&rec, &tray, &app);
+        });
+    }
+
+    /// Disarm any in-flight hold-to-cancel timer. Call from the listener on
+    /// trigger-key up. Cheap — just clears the held flag; the timer thread
+    /// observes it at the deadline.
+    pub(super) fn disarm_hold_cancel() {
+        HOLD_CANCEL_KEY_DOWN.store(false, Ordering::Release);
     }
 
     /// Cancel any in-flight recording from anywhere outside the normal PTT
@@ -182,11 +205,7 @@ mod common {
     /// produces a key-up, toggle does not), which only the listener / caller
     /// knows. Callers must call `arm_ptt_up_suppression()` themselves before
     /// calling this when a `ptt_up` should be swallowed.
-    pub(super) fn trigger_cancel(
-        recorder: &Arc<Recorder>,
-        tray_icon: &TrayIcon,
-        app: &AppHandle,
-    ) {
+    pub(super) fn trigger_cancel(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
         if matches!(recorder.state(), crate::recorder::State::Ready) {
             return;
         }
@@ -227,10 +246,12 @@ mod common {
             //   Morse  — two-blip "thinking" pattern while transcribing
             //   Bottle — gentle glass clink at paste time
             //   Tink   — softest of the system sounds, paired with cancel
-            ChimeEvent::Start      => (cfg.sound_on_start,      "/System/Library/Sounds/Pop.aiff"),
-            ChimeEvent::Transcribe => (cfg.sound_on_transcribe, "/System/Library/Sounds/Morse.aiff"),
-            ChimeEvent::Finish     => (cfg.sound_on_finish,     "/System/Library/Sounds/Bottle.aiff"),
-            ChimeEvent::Cancel     => (cfg.sound_on_cancel,     "/System/Library/Sounds/Tink.aiff"),
+            ChimeEvent::Start => (cfg.sound_on_start, "/System/Library/Sounds/Pop.aiff"),
+            ChimeEvent::Transcribe => {
+                (cfg.sound_on_transcribe, "/System/Library/Sounds/Morse.aiff")
+            }
+            ChimeEvent::Finish => (cfg.sound_on_finish, "/System/Library/Sounds/Bottle.aiff"),
+            ChimeEvent::Cancel => (cfg.sound_on_cancel, "/System/Library/Sounds/Tink.aiff"),
         };
         if !enabled {
             return;
@@ -269,22 +290,6 @@ mod common {
         let tray = tray_icon.clone();
         let app = app.clone();
         std::thread::spawn(move || {
-            // Tap-cancel cooldown: a "mash the record key to cancel" gesture
-            // ends with the user having tapped one or two times PAST the cancel
-            // — we don't want those trailing taps to immediately kick off a
-            // fresh recording. Skip the press silently if we're inside the
-            // cooldown window. Logged so it's visible in the trace, not
-            // emitted as `dictation-busy` (the press wasn't a real start
-            // attempt — it was the tail of a cancel burst).
-            if let Some(t) = *LAST_TAP_CANCEL_AT.lock() {
-                if t.elapsed() < TAP_CANCEL_COOLDOWN {
-                    tracing::info!(
-                        "[hotkey] start ignored — within tap-cancel cooldown ({} ms left)",
-                        (TAP_CANCEL_COOLDOWN - t.elapsed()).as_millis()
-                    );
-                    return;
-                }
-            }
             // One-in-flight policy: only `Ready` is allowed to start a new job.
             // If the recorder is busy (anything from FinalizingAudio through
             // Pasting still running from a prior press), report it as
@@ -433,6 +438,20 @@ mod common {
                                 job_id_opt,
                                 final_text.chars().count()
                             );
+                            if final_text.is_empty() {
+                                tracing::info!(
+                                    "[cleanup   job_id={:?}] empty final transcript — skipping paste",
+                                    job_id_opt
+                                );
+                                emit_critical(&app, "recording-discarded", "empty-final-text");
+                                rec.finish();
+                                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                                if let Some(job_id) = job_id_opt {
+                                    emit_stage(&app, job_id, "ready");
+                                }
+                                play_chime(ChimeEvent::Finish);
+                                return;
+                            }
                             emit_critical(&app, "transcript", final_text.clone());
 
                             // Cleaning → Pasting
@@ -626,10 +645,10 @@ mod imp {
                         let flags = event.get_flags();
 
                         // Read current config (RwLock read — nanoseconds, uncontended)
-                        let (target_keycode, target_flag, toggle_mode, cancel_on_esc) = {
+                        let (target_keycode, target_flag, toggle_mode, cancel_on_esc, cancel_on_hold) = {
                             let hk = hk_cb.read();
                             let (kc, f) = key_for_name(&hk.key);
-                            (kc, f, hk.mode == "toggle", hk.cancel_on_esc)
+                            (kc, f, hk.mode == "toggle", hk.cancel_on_esc, hk.cancel_on_hold)
                         };
 
                         // Escape → cancel any in-flight recording. Read-only on
@@ -660,50 +679,22 @@ mod imp {
                         if let CGEventType::FlagsChanged = etype {
                             if keycode == target_keycode {
                                 let is_key_down = flags.contains(target_flag);
-                                // Tap-cancel: in toggle mode only, two record-key
-                                // down strokes within `TAP_CANCEL_WINDOW` of each
-                                // other are read as a "mash to cancel" safety
-                                // gesture. Hold mode doesn't need this — release
-                                // already stops the recording cleanly. Always on
-                                // in toggle mode (no opt-out): it's a safety net
-                                // for accidental double-toggles.
-                                if is_key_down && toggle_mode {
-                                    let now = std::time::Instant::now();
-                                    let mut last = common::LAST_RECORD_KEY_DOWN.lock();
-                                    let recent = last
-                                        .map(|t| {
-                                            now.duration_since(t) < common::TAP_CANCEL_WINDOW
-                                        })
-                                        .unwrap_or(false);
-                                    *last = Some(now);
-                                    drop(last);
-                                    if recent {
-                                        // First "recent" tap during a busy
-                                        // recorder cancels; subsequent taps in
-                                        // the burst extend the cooldown so a
-                                        // 5- or 6-tap anxious mash can't slip
-                                        // past into a fresh recording. Either
-                                        // branch suppresses normal PTT dispatch
-                                        // for this stroke; toggle-mode releases
-                                        // are already no-ops, so no ptt_up
-                                        // suppression is needed.
-                                        let s = recorder_cb.state();
-                                        let do_cancel = matches!(
-                                            s,
-                                            crate::recorder::State::Recording
-                                                | crate::recorder::State::Transcribing
+                                // Hold-to-cancel: any trigger-key down stroke
+                                // while the recorder is busy (Recording or
+                                // Transcribing) arms a 500 ms timer. If the
+                                // user keeps holding past the deadline, the
+                                // in-flight job is cancelled. Released early
+                                // → timer no-ops, normal PTT semantics apply.
+                                if is_key_down {
+                                    if cancel_on_hold {
+                                        common::arm_hold_cancel(
+                                            &recorder_cb,
+                                            &tray_cb,
+                                            &app_cb,
                                         );
-                                        if do_cancel {
-                                            common::trigger_tap_cancel(
-                                                &recorder_cb,
-                                                &tray_cb,
-                                                &app_cb,
-                                            );
-                                        } else {
-                                            common::mark_tap_cancel();
-                                        }
-                                        return None;
                                     }
+                                } else {
+                                    common::disarm_hold_cancel();
                                 }
                                 if toggle_mode {
                                     if is_key_down {
@@ -918,12 +909,13 @@ mod imp {
 
             let result = rdev::listen(move |event: rdev::Event| {
                 // Read current config under RwLock — nanoseconds, uncontended.
-                let (target_key, toggle_mode, cancel_on_esc) = {
+                let (target_key, toggle_mode, cancel_on_esc, cancel_on_hold) = {
                     let hk = hotkey_state.read();
                     (
                         key_for_name(&hk.key),
                         hk.mode == "toggle",
                         hk.cancel_on_esc,
+                        hk.cancel_on_hold,
                     )
                 };
 
@@ -938,9 +930,7 @@ mod imp {
                             crate::recorder::State::Recording
                                 | crate::recorder::State::Transcribing
                         ) {
-                            if !toggle_mode
-                                && matches!(s, crate::recorder::State::Recording)
-                            {
+                            if !toggle_mode && matches!(s, crate::recorder::State::Recording) {
                                 common::arm_ptt_up_suppression();
                             }
                             common::trigger_cancel(&recorder, &tray_icon, &app);
@@ -958,45 +948,11 @@ mod imp {
                         if was_down {
                             return;
                         }
-                        // Tap-cancel: two record-key down strokes within
-                        // `TAP_CANCEL_WINDOW`, while a recording is in flight,
-                        // abort the recording.
-                        // Tap-cancel: toggle-mode only, always on (safety net
-                        // for accidental double-toggles). Hold mode releases
-                        // already stop the recording cleanly so it isn't
-                        // needed there.
-                        if toggle_mode {
-                            let now = std::time::Instant::now();
-                            let mut last = common::LAST_RECORD_KEY_DOWN.lock();
-                            let recent = last
-                                .map(|t| now.duration_since(t) < common::TAP_CANCEL_WINDOW)
-                                .unwrap_or(false);
-                            *last = Some(now);
-                            drop(last);
-                            if recent {
-                                // First "recent" tap during a busy recorder
-                                // cancels; subsequent taps in the burst extend
-                                // the cooldown so 5–6 anxious mashes can't
-                                // slip past into a fresh recording. Either
-                                // branch suppresses normal PTT dispatch for
-                                // this stroke. Toggle-mode releases are
-                                // no-ops, so no ptt_up suppression needed.
-                                let s = recorder.state();
-                                let do_cancel = matches!(
-                                    s,
-                                    crate::recorder::State::Recording
-                                        | crate::recorder::State::Transcribing
-                                );
-                                if do_cancel {
-                                    common::trigger_tap_cancel(&recorder, &tray_icon, &app);
-                                } else {
-                                    common::mark_tap_cancel();
-                                }
-                                // Reset the down-tracking flag so the matching
-                                // release isn't read as a spurious key-up.
-                                down_for_cb.store(false, Ordering::Release);
-                                return;
-                            }
+                        // Hold-to-cancel: arm a 500 ms timer if the recorder
+                        // is busy. Held past the deadline → cancel; released
+                        // early → no-op and normal PTT semantics apply.
+                        if cancel_on_hold {
+                            common::arm_hold_cancel(&recorder, &tray_icon, &app);
                         }
                         if toggle_mode {
                             if recorder.is_recording() {
@@ -1013,6 +969,7 @@ mod imp {
                         if !was_down {
                             return;
                         }
+                        common::disarm_hold_cancel();
                         if !toggle_mode {
                             common::ptt_up(&recorder, &tray_icon, &app);
                         }
@@ -1026,7 +983,7 @@ mod imp {
             if let Err(e) = result {
                 tracing::error!("[hotkey] rdev::listen failed: {:?}", e);
                 let _ = down; // closure consumed `down_for_cb`; avoid unused warning
-                // Surface to UI via the cloned-outside-thread `app_for_error`.
+                              // Surface to UI via the cloned-outside-thread `app_for_error`.
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_millis(1200));
                     common::emit_critical(

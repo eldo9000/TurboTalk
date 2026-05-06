@@ -679,7 +679,7 @@ pub fn run() {
                 std::thread::sleep(std::time::Duration::from_millis(50));
                 if level_rec.device_lost() {
                     tracing::warn!("[lib] observed device-lost flag — cancelling recorder");
-                    level_rec.cancel();
+                    level_rec.cancel_after_device_lost();
                     let _ = level_tray.set_icon(Some(tray::make_icon(tray::TrayState::Idle)));
                     let _ = level_app.emit("device-lost", ());
                     // `recording-discarded` keeps the overlay's existing

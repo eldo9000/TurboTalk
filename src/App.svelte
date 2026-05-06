@@ -43,10 +43,13 @@
   // focus if any prerequisite (Accessibility, Microphone, model) regresses.
   // Onboarding component clears it via onComplete when all three pass.
   let showOnboarding = $state(true);
+  let unsupportedPlatformDismissed = $state(false);
 
   async function recheckReadiness() {
     const r = await commands.checkReadiness();
-    showOnboarding = !r.ready;
+    const unsupportedPlatform =
+      r.accessibility === 'unsupported' || r.microphone === 'unsupported';
+    showOnboarding = !r.ready && !(unsupportedPlatform && unsupportedPlatformDismissed);
   }
 
   // Theme — override OS setting with user preference
@@ -193,13 +196,13 @@ Reply with only the single word, lowercase, no punctuation.
   // Settings tab
   const cfgBin             = 'auto';
   let cfgLaunchLogin       = $state(false);
-  let copiedDiagnostics    = $state(false);
   let cfgDevice            = $state('default');
   let audioDevices         = $state([]);
   let settingsSaveMsg      = $state('');
   let cfgHotkeyKey         = $state('right_option');
   let cfgHotkeyMode        = $state('hold');
   let cfgCancelOnEsc       = $state(true);
+  let cfgCancelOnHold      = $state(true);
 
   let hotkeySide           = $state('right');  // 'left' | 'right'
   let hotkeyKeyPart        = $state('option'); // key name without side prefix, or full numpad_* value
@@ -515,6 +518,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfgHotkeyKey         = cfg.hotkey?.key                     ?? 'right_option';
     cfgHotkeyMode        = cfg.hotkey?.mode                    ?? 'hold';
     cfgCancelOnEsc       = cfg.hotkey?.cancel_on_esc            ?? true;
+    cfgCancelOnHold      = cfg.hotkey?.cancel_on_hold           ?? true;
     const parsed         = parseHotkeyKey(cfgHotkeyKey);
     hotkeySide           = parsed.side;
     hotkeyKeyPart        = parsed.keyPart;
@@ -536,13 +540,14 @@ Reply with only the single word, lowercase, no punctuation.
     const cfg = await commands.getConfig();
     if (!cfg.whisper) cfg.whisper = { bin: 'auto', model: '', models: [] };
     if (!cfg.audio)   cfg.audio   = { device: 'default' };
-    if (!cfg.hotkey)  cfg.hotkey  = { key: 'right_option', mode: 'hold', cancel_on_esc: true };
+    if (!cfg.hotkey)  cfg.hotkey  = { key: 'right_option', mode: 'hold', cancel_on_esc: true, cancel_on_hold: true };
     cfg.whisper.bin                   = cfgBin;
     cfg.audio.device                  = cfgDevice;
     cfg.theme                         = cfgTheme;
     cfg.hotkey.key                    = cfgHotkeyKey;
     cfg.hotkey.mode                   = cfgHotkeyMode;
     cfg.hotkey.cancel_on_esc          = cfgCancelOnEsc;
+    cfg.hotkey.cancel_on_hold         = cfgCancelOnHold;
     cfg.history_auto_delete           = cfgHistoryAutoDelete;
     cfg.save_history                  = cfgSaveHistory;
     cfg.show_overlay                  = cfgShowOverlay;
@@ -559,25 +564,6 @@ Reply with only the single word, lowercase, no punctuation.
     }
     const launchRes = await commands.setLaunchAtLogin(cfgLaunchLogin);
     settingsSaveMsg = launchRes.status === 'ok' ? 'Saved.' : 'Error: ' + launchRes.error;
-  }
-
-  async function copyDiagnostics() {
-    const d = await commands.runDiagnostics();
-    const lines = [
-      'TurboTalk diagnostics',
-      `platform: ${d.platform}`,
-      `audio_input_available: ${d.audio_input_available}`,
-      `model_file_exists: ${d.model_file_exists}`,
-      `model_file_path: ${d.model_file_path}`,
-      `sidecar_available: ${d.sidecar_available}`,
-      `sidecar_path: ${d.sidecar_path}`,
-      `cleanup_mode: ${d.cleanup_mode}`,
-      ...(d.ollama_status ? [`ollama_status: ${d.ollama_status}`] : []),
-      `paste_capability: ${d.paste_capability}`,
-    ];
-    await navigator.clipboard.writeText(lines.join('\n'));
-    copiedDiagnostics = true;
-    setTimeout(() => { copiedDiagnostics = false; }, 2000);
   }
 
   function switchTab(tab) {
@@ -666,13 +652,21 @@ Reply with only the single word, lowercase, no punctuation.
     window.addEventListener('keydown', handleKeydown);
 
     const unlisteners = [];
-    listen('ptt-down',         () => { recording = true; }).then(u => unlisteners.push(u));
-    listen('ptt-up',           () => { recording = false; }).then(u => unlisteners.push(u));
+    listen('ptt-down',         () => {
+      recording = true;
+      transcribing = false;
+    }).then(u => unlisteners.push(u));
+    listen('ptt-up',           () => {
+      recording = false;
+      transcribing = true;
+    }).then(u => unlisteners.push(u));
     listen('download-progress', (e) => {
       const { name, pct } = e.payload;
       downloadProgress = { ...downloadProgress, [name]: pct };
     }).then(u => unlisteners.push(u));
     listen('transcript',  (e) => {
+      recording = false;
+      transcribing = false;
       const text = e.payload;
       if (text) {
         // Backend enforces the 50-entry on-disk cap; the frontend keeps the
@@ -701,10 +695,13 @@ Reply with only the single word, lowercase, no punctuation.
     }).then(u => unlisteners.push(u));
     listen('transcript-error', (e) => {
       recording = false;
+      transcribing = false;
       transcriptError = e.payload || 'Transcription failed.';
       setTimeout(() => { transcriptError = ''; }, 5000);
     }).then(u => unlisteners.push(u));
     listen('paste-error', (e) => {
+      recording = false;
+      transcribing = false;
       // Transcript still appears in history; surface a distinct banner so the
       // user knows nothing was actually pasted into the focused app.
       transcriptError = e.payload || "Couldn't paste — check Accessibility permission";
@@ -815,11 +812,17 @@ Reply with only the single word, lowercase, no punctuation.
        are all green. Re-mounted when readiness regresses (e.g. user revoked
        a permission between sessions). -->
   {#if showOnboarding}
-    <Onboarding onComplete={() => { showOnboarding = false; }} />
+    <Onboarding
+      onComplete={() => { showOnboarding = false; }}
+      onUnsupportedContinue={() => {
+        unsupportedPlatformDismissed = true;
+        showOnboarding = false;
+      }}
+    />
   {/if}
 
   <!-- Titlebar -->
-  <div data-tauri-drag-region class="relative h-10 shrink-0 flex items-end select-none bg-[color-mix(in_srgb,#000_18%,var(--surface-raised))]">
+  <div data-tauri-drag-region class="relative h-10 shrink-0 flex items-end select-none bg-white dark:bg-[color-mix(in_srgb,#000_18%,var(--surface-raised))]">
 
     <!-- Traffic-light spacer (left) -->
     <div class="w-[76px] shrink-0 h-full" data-tauri-drag-region></div>
@@ -893,16 +896,19 @@ Reply with only the single word, lowercase, no punctuation.
             <button
               onclick={() => copyHistoryItem(item)}
               title="Click to copy"
-              class="w-full text-left text-[13px] leading-relaxed px-2 py-2 rounded transition-colors
-                     cursor-pointer select-text
-                     hover:bg-[color-mix(in_srgb,#fff_6%,var(--surface-raised))]
-                     {copiedTs === item.ts ? 'text-[var(--accent)]' : 'text-[var(--text-primary)]'}"
+              class="relative w-full text-left text-[13px] leading-relaxed px-2 py-2 rounded transition-colors
+                     cursor-pointer select-text text-[var(--text-primary)]
+                     hover:bg-[color-mix(in_srgb,#fff_6%,var(--surface-raised))]"
             >
+              <span style="display: block; max-height: 4.875em; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 1.5em), transparent); mask-image: linear-gradient(to bottom, black calc(100% - 1.5em), transparent); {copiedTs === item.ts ? 'visibility: hidden;' : ''}">
+                {item.text}
+              </span>
               {#if copiedTs === item.ts}
-                Copied!
-              {:else}
-                <span style="display: block; max-height: 4.875em; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 1.5em), transparent); mask-image: linear-gradient(to bottom, black calc(100% - 1.5em), transparent);">
-                  {item.text}
+                <span class="absolute inset-0 flex items-center justify-center gap-1.5 font-medium text-emerald-400 pointer-events-none">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                  Copied
                 </span>
               {/if}
             </button>
@@ -912,10 +918,13 @@ Reply with only the single word, lowercase, no punctuation.
       <div class="shrink-0 flex items-center justify-center gap-2 px-3 py-2">
         <button
           onclick={() => recording ? commands.stopRecording() : commands.startRecording()}
+          disabled={transcribing}
+          title="Record into the history list. Transcript stays here — won't paste into another app."
           class="flex items-center gap-1.5 text-[11px] font-medium px-3 py-1 rounded border transition-colors
                  {recording
                    ? 'text-red-400 border-red-400/50 hover:border-red-400'
-                   : 'text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]'}"
+                   : 'text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]'}
+                 {transcribing ? 'opacity-50 cursor-default pointer-events-none' : ''}"
         >
           <span class="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0"></span>
           {recording ? 'Stop' : 'Record'}
@@ -947,7 +956,7 @@ Reply with only the single word, lowercase, no punctuation.
       <div class="flex-1 min-w-0">
         <span class="text-xs font-mono text-[var(--text-primary)]">{m.name}</span>
         <span class="text-[10px] text-[var(--text-tertiary,#666)] ml-1.5">{m.size}</span>
-        <p class="text-[10px] mt-0.5 {m.warn ? 'text-yellow-400' : 'text-[var(--text-tertiary,#666)]'}">{m.description}</p>
+        <p class="text-[10px] mt-0.5 {m.warn ? 'text-orange-500 dark:text-yellow-400' : 'text-[var(--text-tertiary,#666)]'}">{m.description}</p>
       </div>
       {#if isDownloading}
         <span class="shrink-0 text-[10px] text-[var(--accent)] tabular-nums w-7 text-right">{pct}%</span>
@@ -1009,8 +1018,8 @@ Reply with only the single word, lowercase, no punctuation.
                    : 'bg-[var(--accent)]/8 border-[var(--accent)]/40 hover:border-[var(--accent)]/60'}"
         >
           <div class="flex items-center gap-1.5 mb-1.5">
-            <span class="text-[var(--accent)] text-xs leading-none">★</span>
-            <span class="text-[10px] uppercase tracking-wider font-semibold text-[var(--accent)]">Recommended</span>
+            <span class="text-orange-500 dark:text-yellow-400 text-xs leading-none">★</span>
+            <span class="text-[10px] uppercase tracking-wider font-semibold text-orange-500 dark:text-yellow-400">Recommended</span>
           </div>
           <div class="flex items-center gap-2">
             <div class="flex-1 min-w-0">
@@ -1326,8 +1335,6 @@ Reply with only the single word, lowercase, no punctuation.
   <!-- Settings tab -->
   {#if activeTab === 'settings'}
     <div class="flex-1 min-h-0 overflow-y-auto text-[12px]">
-
-      <!-- Input -->
       <div class="px-4 py-3 space-y-3">
 
         <!-- Hotkey: side tabs + key dropdown on same row -->
@@ -1376,19 +1383,22 @@ Reply with only the single word, lowercase, no punctuation.
           </div>
         </div>
 
-        <!-- Cancel-recording shortcuts -->
+        <!-- Cancel shortcuts -->
         <div class="space-y-1">
-          <SectionLabel size="xs" class="!opacity-50">Cancel recording</SectionLabel>
-          <Checkbox
-            bind:checked={cfgCancelOnEsc}
-            onchange={() => saveSettings()}
-          >Press Escape</Checkbox>
+          <SectionLabel size="xs" class="!opacity-50">Cancel</SectionLabel>
+          <div class="flex items-center gap-2 flex-wrap">
+            <Checkbox
+              bind:checked={cfgCancelOnEsc}
+              onchange={() => saveSettings()}
+            >Press Escape</Checkbox>
+            <Checkbox
+              bind:checked={cfgCancelOnHold}
+              onchange={() => saveSettings()}
+            >Hold trigger key</Checkbox>
+          </div>
         </div>
 
-      </div>
-
-      <!-- Display -->
-      <div class="px-4 py-3 space-y-2.5">
+        <!-- Theme -->
         <div class="space-y-1">
           <SectionLabel size="xs" class="!opacity-50">Theme</SectionLabel>
           <SegmentedControl
@@ -1402,93 +1412,81 @@ Reply with only the single word, lowercase, no punctuation.
             onchange={(v) => { cfgTheme = v; saveSettings(); }}
           />
         </div>
+
+        <!-- History -->
         <div class="space-y-1">
-          <SectionLabel for="history-auto-delete" size="xs" class="!opacity-50">Auto-delete history</SectionLabel>
-          <Select
-            items={HISTORY_AUTO_DELETE_ITEMS}
-            bind:value={cfgHistoryAutoDelete}
-            onchange={() => saveSettings()}
-            disabled={!cfgSaveHistory}
+          <SectionLabel for="history-auto-delete" size="xs" class="!opacity-50 block">Auto-delete history</SectionLabel>
+          <div class="flex items-center gap-3">
+            <Checkbox
+              bind:checked={cfgSaveHistory}
+              onchange={() => saveSettings()}
+            >Save history</Checkbox>
+            <div class="flex-1 min-w-0">
+              <Select
+                items={HISTORY_AUTO_DELETE_ITEMS}
+                bind:value={cfgHistoryAutoDelete}
+                onchange={() => saveSettings()}
+                disabled={!cfgSaveHistory}
+              />
+            </div>
+          </div>
+        </div>
+
+        <!-- Audio indicators -->
+        <div class="space-y-1">
+          <SectionLabel size="xs" class="!opacity-50">Audio indicators</SectionLabel>
+          <div class="flex items-center gap-2 flex-wrap">
+            <Checkbox bind:checked={cfgSoundOnStart}      onchange={() => saveSettings()}>Start</Checkbox>
+            <Checkbox bind:checked={cfgSoundOnTranscribe} onchange={() => saveSettings()}>Transcribe</Checkbox>
+            <Checkbox bind:checked={cfgSoundOnFinish}     onchange={() => saveSettings()}>Finish</Checkbox>
+            <Checkbox bind:checked={cfgSoundOnCancel}     onchange={() => saveSettings()}>Cancel</Checkbox>
+          </div>
+        </div>
+
+        <!-- Volume -->
+        <div class="space-y-1">
+          <div class="flex items-center justify-between">
+            <SectionLabel size="xs" class="!opacity-50">Volume</SectionLabel>
+            <span class="text-[13px] text-[var(--text-primary)] tabular-nums">{Math.round(cfgSoundVolume * 100)}%</span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            bind:value={cfgSoundVolume}
+            oninput={() => saveSettings()}
+            class="fade-range"
+            style="--fade-range-pct:{cfgSoundVolume * 100}%"
           />
         </div>
-        <Checkbox
-          bind:checked={cfgSaveHistory}
-          onchange={() => saveSettings()}
-        >Save history</Checkbox>
-      </div>
 
-      <!-- Audio indicators -->
-      <div class="px-4 py-3 space-y-2.5">
-        <SectionLabel size="xs" class="!opacity-50">Audio indicators</SectionLabel>
-        <div class="flex items-center gap-4">
-          <Checkbox bind:checked={cfgSoundOnStart}      onchange={() => saveSettings()}>Start</Checkbox>
-          <Checkbox bind:checked={cfgSoundOnTranscribe} onchange={() => saveSettings()}>Transcribe</Checkbox>
-          <Checkbox bind:checked={cfgSoundOnFinish}     onchange={() => saveSettings()}>Finish</Checkbox>
-          <Checkbox bind:checked={cfgSoundOnCancel}     onchange={() => saveSettings()}>Cancel</Checkbox>
-        </div>
-        <div class="flex items-center justify-between">
-          <SectionLabel size="xs" class="!opacity-50">Volume</SectionLabel>
-          <span class="text-[13px] text-[var(--text-primary)] tabular-nums">{Math.round(cfgSoundVolume * 100)}%</span>
-        </div>
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          bind:value={cfgSoundVolume}
-          oninput={() => saveSettings()}
-          class="fade-range"
-          style="--fade-range-pct:{cfgSoundVolume * 100}%"
-        />
-      </div>
-
-      <!-- System -->
-      <div class="px-4 py-3 space-y-2">
-        <SectionLabel size="xs" class="!opacity-50">System</SectionLabel>
-        <Checkbox
-          bind:checked={cfgLaunchLogin}
-          onchange={() => saveSettings()}
-        >Launch at login</Checkbox>
-        <Checkbox
-          bind:checked={cfgShowOverlay}
-          onchange={() => saveSettings()}
-        >Show recording overlay</Checkbox>
-        <div>
-          <Checkbox
-            bind:checked={cfgTranscriptIndicator}
-            onchange={() => saveSettings()}
-          >Transcript size indicator</Checkbox>
-          <p class="text-[var(--text-muted)] text-[11px] mt-1 ml-1">
-            A visual estimate of how long and how much talking you've been doing.
-          </p>
-        </div>
-      </div>
-
-      {#if import.meta.env.DEV}
-        <div class="px-4 py-3 space-y-2 mt-auto">
-          <p class="text-[10px] font-semibold uppercase tracking-widest text-red-400/70">Dev</p>
-          <div class="flex items-center gap-2">
-            <button
-              onclick={copyDiagnostics}
-              class="px-3 py-1 rounded border border-red-500/30 text-[11px] font-medium
-                     text-red-400/80 hover:text-red-300
-                     hover:border-red-500/70 transition-colors whitespace-nowrap"
-            >Copy diagnostics</button>
-            {#if copiedDiagnostics}
-              <span class="text-[11px] text-red-400/70">Copied</span>
-            {/if}
-          </div>
-          <div class="flex items-center gap-2">
-            <button
-              onclick={() => commands.openDataFolder()}
-              class="px-3 py-1 rounded border border-red-500/30 text-[11px] font-medium
-                     text-red-400/80 hover:text-red-300
-                     hover:border-red-500/70 transition-colors whitespace-nowrap"
-            >Open data folder</button>
+        <!-- System -->
+        <div class="space-y-1">
+          <SectionLabel size="xs" class="!opacity-50">System</SectionLabel>
+          <div class="flex flex-col items-start gap-2">
+            <Checkbox
+              bind:checked={cfgLaunchLogin}
+              onchange={() => saveSettings()}
+            >Launch at login</Checkbox>
+            <Checkbox
+              bind:checked={cfgShowOverlay}
+              onchange={() => saveSettings()}
+            >Active recording overlay</Checkbox>
+            <div>
+              <Checkbox
+                bind:checked={cfgTranscriptIndicator}
+                onchange={() => saveSettings()}
+                disabled={!cfgShowOverlay}
+              >Recording length overlay</Checkbox>
+              <p class="text-[var(--text-muted)] text-[11px] mt-1 ml-1">
+                A visual estimate of how long and how much talking you've been doing.
+              </p>
+            </div>
           </div>
         </div>
-      {/if}
 
+      </div>
     </div>
   {/if}
 

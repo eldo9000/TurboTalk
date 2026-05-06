@@ -105,6 +105,37 @@ fn is_executable(p: &std::path::Path) -> bool {
     }
 }
 
+fn ollama_version_endpoint(raw_url: &str) -> anyhow::Result<url::Url> {
+    crate::cleanup::validate_ollama_url(raw_url)?
+        .join("api/version")
+        .map_err(|e| anyhow::anyhow!("could not build Ollama diagnostics URL: {e}"))
+}
+
+async fn check_ollama_status(raw_url: &str) -> String {
+    let endpoint = match ollama_version_endpoint(raw_url) {
+        Ok(endpoint) => endpoint,
+        Err(e) => return format!("unreachable: invalid Ollama URL: {e}"),
+    };
+
+    match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .connect_timeout(std::time::Duration::from_secs(2))
+        .build()
+    {
+        Ok(client) => match client.get(endpoint).send().await {
+            Ok(resp) => {
+                if resp.status().is_success() || resp.status().as_u16() < 500 {
+                    "reachable".to_string()
+                } else {
+                    format!("unreachable: HTTP {}", resp.status())
+                }
+            }
+            Err(e) => format!("unreachable: {}", e),
+        },
+        Err(e) => format!("error building client: {}", e),
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn run_diagnostics() -> DiagnosticsResult {
@@ -138,23 +169,7 @@ pub async fn run_diagnostics() -> DiagnosticsResult {
 
     // ── Ollama reachability (chaperone mode only) ─────────────────────────────
     let ollama_status = if cfg.cleanup.mode == crate::settings::CleanupMode::Chaperone {
-        let url = cfg.cleanup.ollama_url.clone();
-        match reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(2))
-            .build()
-        {
-            Ok(client) => match client.get(&url).send().await {
-                Ok(resp) => {
-                    if resp.status().is_success() || resp.status().as_u16() < 500 {
-                        "reachable".to_string()
-                    } else {
-                        format!("unreachable: HTTP {}", resp.status())
-                    }
-                }
-                Err(e) => format!("unreachable: {}", e),
-            },
-            Err(e) => format!("error building client: {}", e),
-        }
+        check_ollama_status(&cfg.cleanup.ollama_url).await
     } else {
         String::new()
     };
@@ -177,5 +192,47 @@ pub async fn run_diagnostics() -> DiagnosticsResult {
         cleanup_mode,
         ollama_status,
         paste_capability,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ollama_diagnostics_accepts_loopback_urls() {
+        assert_eq!(
+            ollama_version_endpoint("http://localhost:11434")
+                .expect("localhost")
+                .as_str(),
+            "http://localhost:11434/api/version"
+        );
+        assert_eq!(
+            ollama_version_endpoint("http://127.0.0.1:11434")
+                .expect("ipv4 loopback")
+                .as_str(),
+            "http://127.0.0.1:11434/api/version"
+        );
+        assert_eq!(
+            ollama_version_endpoint("http://[::1]:11434")
+                .expect("ipv6 loopback")
+                .as_str(),
+            "http://[::1]:11434/api/version"
+        );
+    }
+
+    #[test]
+    fn ollama_diagnostics_rejects_non_loopback_urls() {
+        for url in [
+            "http://10.0.0.1:11434",
+            "http://192.168.1.50:11434",
+            "http://169.254.169.254/latest/meta-data",
+            "https://example.com",
+        ] {
+            assert!(
+                ollama_version_endpoint(url).is_err(),
+                "diagnostics must not permit outbound Ollama probe to {url}"
+            );
+        }
     }
 }

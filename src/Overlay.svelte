@@ -182,12 +182,6 @@
       draw();
     }).then(u => uns.push(u));
 
-    listen('recording-cancelled-tap', () => {
-      clearInterval(transcribeTimer);
-      mode = 'idle';
-      draw();
-    }).then(u => uns.push(u));
-
     listen('recording-too-short', () => {
       clearInterval(transcribeTimer);
       mode = 'idle';

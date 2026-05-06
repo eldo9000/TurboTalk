@@ -92,8 +92,8 @@ fn fill_circle(px: &mut [u8], size: u32, r: u8, g: u8, b: u8) {
 
 fn draw_x(px: &mut [u8], size: u32) {
     let cx = size as f32 / 2.0;
-    let arm    = 10.0f32; // Euclidean half-arm length in pixels
-    let half_w =  2.0f32; // line half-width in pixels
+    let arm = 10.0f32; // Euclidean half-arm length in pixels
+    let half_w = 2.0f32; // line half-width in pixels
     let s = std::f32::consts::SQRT_2;
 
     for y in 0..size {
@@ -113,7 +113,7 @@ fn draw_x(px: &mut [u8], size: u32) {
                 let i = ((y * size + x) * 4) as usize;
                 // Only paint inside the circle (where the background alpha is set).
                 if px[i + 3] > 128 {
-                    px[i]     = 255;
+                    px[i] = 255;
                     px[i + 1] = 255;
                     px[i + 2] = 255;
                 }

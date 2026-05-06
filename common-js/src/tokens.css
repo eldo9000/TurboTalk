@@ -141,6 +141,10 @@ html.dark {
 :root:not(.dark) .fade-check:hover {
   border-color: #909090;
 }
+:root:not(.dark) .fade-check:checked {
+  background: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 70%, #000);
+}
 
 /* ── Base reset ────────────────────────────────────────────────────────────── */
 *, *::before, *::after {
