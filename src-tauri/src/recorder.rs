@@ -210,6 +210,14 @@ impl Recorder {
     ///
     /// Idempotent: calling cancel() while in Ready is a no-op.
     pub fn cancel(&self) {
+        self.cancel_inner(false);
+    }
+
+    pub fn cancel_after_device_lost(&self) {
+        self.cancel_inner(true);
+    }
+
+    fn cancel_inner(&self, device_lost: bool) {
         let mut s = self.state.lock();
         match *s {
             State::Ready => {
@@ -218,12 +226,20 @@ impl Recorder {
             State::Transcribing => {
                 // Kill the in-flight whisper-cli subprocess (best-effort).
                 crate::transcribe::abort_active();
-                self.capture.cancel();
+                if device_lost {
+                    self.capture.cancel_after_device_lost();
+                } else {
+                    self.capture.cancel();
+                }
                 tracing::info!("[recorder] Transcribing → Ready (user cancelled)");
                 *s = State::Ready;
             }
             State::Recording | State::FinalizingAudio | State::Cleaning | State::Pasting => {
-                self.capture.cancel();
+                if device_lost {
+                    self.capture.cancel_after_device_lost();
+                } else {
+                    self.capture.cancel();
+                }
                 tracing::info!("[recorder] {} → Ready (cancelled)", *s);
                 *s = State::Ready;
             }

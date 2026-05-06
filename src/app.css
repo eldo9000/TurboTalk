@@ -71,3 +71,27 @@ html, body, #app {
   );
   border-radius: 1px;
 }
+
+:root:not(.dark) .fade-range {
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 var(--fade-range-pct, 0%),
+    #d0d0d0 var(--fade-range-pct, 0%) 100%
+  );
+}
+:root:not(.dark) .fade-range::-webkit-slider-thumb {
+  background: var(--accent);
+}
+:root:not(.dark) .fade-range::-webkit-slider-thumb:hover {
+  background: var(--accent-hover);
+}
+:root:not(.dark) .fade-range::-moz-range-thumb {
+  background: var(--accent);
+}
+:root:not(.dark) .fade-range::-moz-range-track {
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 var(--fade-range-pct, 0%),
+    #d0d0d0 var(--fade-range-pct, 0%) 100%
+  );
+}

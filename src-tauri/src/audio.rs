@@ -465,10 +465,8 @@ impl AudioCapture {
         // native rate / channels. Cleared (not just resized) because a
         // device change between presses must not leak old-device samples
         // into the new ring.
-        let preroll_cap =
-            (PREROLL_MS as usize * sample_rate as usize * channels as usize) / 1000;
-        self.preroll_capacity
-            .store(preroll_cap, Ordering::SeqCst);
+        let preroll_cap = (PREROLL_MS as usize * sample_rate as usize * channels as usize) / 1000;
+        self.preroll_capacity.store(preroll_cap, Ordering::SeqCst);
         {
             let mut ring = self.preroll.lock();
             ring.clear();
@@ -676,19 +674,6 @@ impl AudioCapture {
         // Cancel any pending idle close — we're about to record.
         *self.idle_close_at.lock() = None;
 
-        // TASK-22: spawn the streaming finalizer worker and the
-        // capture-feeder thread. The worker owns the resampler + VAD
-        // state and consumes chunks off the cpal callback's critical
-        // path. The feeder polls `samples` every ~10 ms and ships any
-        // newly-appended tail to the worker.
-        let finalizer = StreamingFinalizer::start(src_rate, src_channels, NORMALIZE_PEAK);
-        *self.streaming.lock() = Some(finalizer);
-
-        let feeder_handle = self.spawn_feeder();
-        *self.feeder.lock() = Some(feeder_handle);
-
-        self.is_recording.store(true, Ordering::SeqCst);
-
         // TASK-37: drain the pre-roll ring into `samples` so the first
         // ~PREROLL_MS of audio (captured while the stream was warm but
         // is_recording=false) is prepended to the recording. Time
@@ -715,6 +700,22 @@ impl AudioCapture {
         } else {
             tracing::info!("[audio] start: pre-roll ring empty (cold start)");
         }
+
+        // Flip recording before the feeder starts so callbacks append any
+        // post-press samples after the pre-roll already in `samples`. The
+        // feeder cursor begins at 0 and therefore sends pre-roll first.
+        self.is_recording.store(true, Ordering::SeqCst);
+
+        // TASK-22: spawn the streaming finalizer worker and the
+        // capture-feeder thread. The worker owns the resampler + VAD
+        // state and consumes chunks off the cpal callback's critical
+        // path. The feeder polls `samples` every ~10 ms and ships any
+        // newly-appended tail to the worker.
+        let finalizer = StreamingFinalizer::start(src_rate, src_channels, NORMALIZE_PEAK);
+        *self.streaming.lock() = Some(finalizer);
+
+        let feeder_handle = self.spawn_feeder();
+        *self.feeder.lock() = Some(feeder_handle);
 
         tracing::info!("[audio] recording started");
         Ok(())
@@ -834,6 +835,14 @@ impl AudioCapture {
     /// which case the stream is broken and we drop it. The idle
     /// watchdog will close the warm stream after `IDLE_TIMEOUT`.
     pub fn cancel(&self) {
+        self.cancel_inner(false);
+    }
+
+    pub fn cancel_after_device_lost(&self) {
+        self.cancel_inner(true);
+    }
+
+    fn cancel_inner(&self, device_lost: bool) {
         self.is_recording.store(false, Ordering::SeqCst);
 
         // Tear down the streaming finalizer + feeder. We drop the
@@ -856,9 +865,11 @@ impl AudioCapture {
         // and called cancel(). At this point start() will see
         // `device_lost=false` again, but the broken stream is already
         // gone here.
-        if self.device_lost.load(Ordering::SeqCst) {
+        if device_lost || self.device_lost.load(Ordering::SeqCst) {
             *self.warm_stream.lock() = None;
             *self.warm_device_name.lock() = None;
+            self.preroll.lock().clear();
+            self.preroll_capacity.store(0, Ordering::SeqCst);
             tracing::info!("[audio] stream closed (device lost)");
         }
 
@@ -1233,9 +1244,7 @@ mod tests {
         // Each sample's value encodes its global index so we can verify
         // the kept window is the *latest* 300.
         for chunk in 0..10 {
-            let data: Vec<f32> = (0..100)
-                .map(|i| (chunk * 100 + i) as f32)
-                .collect();
+            let data: Vec<f32> = (0..100).map(|i| (chunk * 100 + i) as f32).collect();
             let mut g = ring.lock();
             g.extend(data.iter().copied());
             if g.len() > CAP {

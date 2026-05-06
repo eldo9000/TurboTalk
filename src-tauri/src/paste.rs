@@ -60,9 +60,7 @@ pub fn frontmost_app() -> Option<String> {
     use std::sync::atomic::{AtomicBool, Ordering};
     static WARNED: AtomicBool = AtomicBool::new(false);
     if !WARNED.swap(true, Ordering::Relaxed) {
-        tracing::warn!(
-            "[paste] frontmost_app() called on unsupported platform — returning None"
-        );
+        tracing::warn!("[paste] frontmost_app() called on unsupported platform — returning None");
     }
     None
 }
@@ -87,6 +85,11 @@ pub fn paste(text: &str) -> anyhow::Result<()> {
         .status()?;
 
     if !status.success() {
+        // Accessibility or Automation denial should not leave the user's
+        // clipboard overwritten with the dictated text.
+        if let Some(prev) = prior.as_ref() {
+            let _ = cb.set_text(prev.clone());
+        }
         anyhow::bail!("osascript keystroke failed: {}", status);
     }
 
@@ -142,8 +145,8 @@ pub fn paste(text: &str) -> anyhow::Result<()> {
     // Small delay so the clipboard write is visible to the target app.
     std::thread::sleep(std::time::Duration::from_millis(50));
 
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| anyhow::anyhow!("enigo init failed: {e}"))?;
+    let mut enigo =
+        Enigo::new(&Settings::default()).map_err(|e| anyhow::anyhow!("enigo init failed: {e}"))?;
 
     enigo
         .key(Key::Control, Direction::Press)

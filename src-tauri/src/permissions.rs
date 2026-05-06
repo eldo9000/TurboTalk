@@ -63,8 +63,7 @@ fn microphone_status() -> PermissionStatus {
     let Some(media_type) = (unsafe { AVMediaTypeAudio }) else {
         return PermissionStatus::Unsupported;
     };
-    let status =
-        unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) };
+    let status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) };
     // AVAuthorizationStatus is a struct(NSInteger) with associated consts,
     // not a Rust enum, so equality is the only pattern available.
     if status == AVAuthorizationStatus::Authorized {
@@ -120,9 +119,7 @@ pub async fn request_microphone_permission() -> PermissionStatus {
             // RcBlock is dropped at the end of this thread; AVFoundation
             // retains its own reference for as long as it needs.
             unsafe {
-                AVCaptureDevice::requestAccessForMediaType_completionHandler(
-                    media_type, &block,
-                );
+                AVCaptureDevice::requestAccessForMediaType_completionHandler(media_type, &block);
             }
         });
         // 30s upper bound covers "user walked away from the prompt".
@@ -144,11 +141,8 @@ fn model_present() -> bool {
     let Ok(rd) = std::fs::read_dir(&dir) else {
         return false;
     };
-    rd.flatten().any(|e| {
-        e.path()
-            .extension()
-            .is_some_and(|ext| ext == "bin")
-    })
+    rd.flatten()
+        .any(|e| e.path().extension().is_some_and(|ext| ext == "bin"))
 }
 
 // ── Public commands ─────────────────────────────────────────────────────────
@@ -244,9 +238,7 @@ pub fn prompt_for_accessibility() -> PermissionStatus {
         // CFDictionaryRef. The dictionary lives for the duration of this
         // call; the function does not retain it beyond the call.
         let trusted = unsafe {
-            AXIsProcessTrustedWithOptions(
-                opts.as_concrete_TypeRef() as *const std::ffi::c_void,
-            )
+            AXIsProcessTrustedWithOptions(opts.as_concrete_TypeRef() as *const std::ffi::c_void)
         };
         if trusted {
             PermissionStatus::Granted

@@ -1,7 +1,11 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-05-05
-**Current state:** Audio-latency sprint complete (TASK-36–38). `audio.rs` keeps the cpal stream warm between recordings with a 45 s idle-close watchdog (TASK-36, commit `c0e9e15`); a 300 ms pre-roll ring buffer prepends pre-press audio so leading words aren't clipped (TASK-37, commit `6f8cccd`); `settings.rs` caches the parsed config in a process-wide RwLock so PTT-down skips the per-press file read (TASK-38, commit `41aa859`). PTT-down should now capture within ~10 ms instead of 50–500 ms. Manual on-device verification by user is the remaining proof.
+**Last updated:** 2026-05-06
+**Current state:** Next-beta blocker fix sprint landed and being pushed to `main` for CI packaging. Fixed/protected: scratch-that skips transcript/paste; cancel during Whisper can kill the child; paste failure restores prior clipboard; device-lost cancellation drops the warm stream; diagnostics now uses loopback-only Ollama validation; `PRIVACY.md`/`SMOKE-TEST.md` match `config.toml` + `history.json`; frontend shows transcribing state, handles unsupported platforms honestly, and hides manual Record outside dev. Verification: `cargo test --manifest-path src-tauri/Cargo.toml` passed (80 passed, 1 ignored VAD real-audio test); `npm run typecheck` passed; `npm run build` passed with pre-existing Svelte/shared-build warnings; local `TurboTalk-0.8.6-macos-arm64.dmg.sha256` verified.
+
+**Next action:** Watch the GitHub Actions release workflow for the pushed beta-candidate build. Success signal: macOS arm64 and Windows x64 package jobs are green and upload `0.8.6` artifacts; then run the installed-artifact smoke test before tagging/publishing a beta release.
+
+Previous state: Audio-latency sprint complete (TASK-36–38). `audio.rs` keeps the cpal stream warm between recordings with a 45 s idle-close watchdog (TASK-36, commit `c0e9e15`); a 300 ms pre-roll ring buffer prepends pre-press audio so leading words aren't clipped (TASK-37, commit `6f8cccd`); `settings.rs` caches the parsed config in a process-wide RwLock so PTT-down skips the per-press file read (TASK-38, commit `41aa859`). PTT-down should now capture within ~10 ms instead of 50–500 ms. Manual on-device verification by user is the remaining proof.
 
 Previous state: Guided Ollama setup sprint complete (TASK-32–35). `ollama.rs` adds `ping_ollama`, `check_ollama_model`, `open_url`, `pull_ollama_model` backend commands; Modes Advanced panel has live Ollama detection + model-pull UI with progress bar; chaperone-fallback ui-error toast fires (rate-limited 60s) when Ollama is unreachable during dictation.
 
@@ -207,7 +211,7 @@ Tasks archived at `tasks/done/TASK-09..TASK-12.md`.
 - **rdev → CGEventTap** — macOS 26 broke rdev (TSM `dispatch_assert_queue` crash). Direct
   `CGEventTap` via `core-graphics 0.24`. Right Option detected by keycode 0x3D only, no TSM.
 - **Homebrew whisper-cpp** — not bundled as Tauri sidecar yet; hardcoded path for now.
-- **ggml-base.en** — 141MB, ~130ms on M4 via Metal. Adequate for M1.
+- **Default model: ggml-large-v3-turbo** — 1.6 GB, multilingual, fast. Set as the shipped default in `settings.rs` and surfaced as "Recommended" in onboarding + Models tab. (M0/M1 used ggml-base.en, 141 MB / ~130 ms on M4.)
 - **Window: 380×280** — no custom titlebar, native macOS traffic lights only.
 - **Reference, not fork** — built from scratch. Handy/typr/sagascript as references.
 

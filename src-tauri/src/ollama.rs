@@ -321,8 +321,7 @@ pub fn pull_ollama_model(app: tauri::AppHandle, model_name: String) -> Result<()
 #[specta::specta]
 pub fn open_url(url: String) -> Result<(), String> {
     // ── Validate ──────────────────────────────────────────────────────────────
-    let parsed = url::Url::parse(url.trim())
-        .map_err(|e| format!("invalid URL: {e}"))?;
+    let parsed = url::Url::parse(url.trim()).map_err(|e| format!("invalid URL: {e}"))?;
 
     if parsed.scheme() != "https" {
         return Err("URL must use https".into());
@@ -333,8 +332,7 @@ pub fn open_url(url: String) -> Result<(), String> {
         .ok_or_else(|| "URL has no host".to_string())?;
 
     // Allowlist: ollama.com and any subdomain.
-    let allowed = host == "ollama.com"
-        || host.ends_with(".ollama.com");
+    let allowed = host == "ollama.com" || host.ends_with(".ollama.com");
 
     if !allowed {
         return Err(format!(

@@ -199,6 +199,7 @@ If nothing is pasted anywhere, check that the destination window is a text-edita
 **Setup:**
 
 - Settings are configured (model path set, any preferences toggled).
+- The Save history setting is enabled. This is the default.
 - Complete at least one successful dictation (Test 3) so there is at least one history entry.
 
 **Action:**
@@ -213,6 +214,7 @@ If nothing is pasted anywhere, check that the destination window is a text-edita
 
 - The model path and any other settings you configured are still present after relaunch — nothing is reset to defaults.
 - The history view shows the dictation(s) performed before quitting.
+- `~/.config/librewin/turbotalk/history.json` exists and contains a plain JSON array capped at the newest 50 entries.
 - The app is in idle/ready state and is ready to dictate again without any re-setup.
 
 **If it fails:**
@@ -223,7 +225,7 @@ In Terminal, run:
 ls ~/.config/librewin/turbotalk/
 ```
 
-If the directory is empty or missing, settings were not written to disk on quit. If the directory has files but settings appear blank after relaunch, there may be a read error on startup. Note what you see and include it in your report.
+If the directory is empty or missing, settings were not written to disk on quit. The expected settings file is `config.toml`; the expected history file is `history.json` when Save history is enabled. If the directory has files but settings appear blank after relaunch, there may be a read error on startup. Note what you see and include it in your report.
 
 ---
 
@@ -313,7 +315,7 @@ Run this section after every release build (ad-hoc signed DMG for this beta) and
    ls ~/.config/librewin/turbotalk/
    ```
 
-   **Expected:** The directory exists and contains the expected config file (`settings.json`) and, if history is enabled, a `history/` directory — matching the paths documented in `PRIVACY.md` → "How to delete everything." If the directory is missing entirely after a successful dictation, settings persistence is broken when launched from `/Applications`.
+   **Expected:** The directory exists and contains the expected config file (`config.toml`) and, with the default Save history setting enabled, `history.json` — matching the paths documented in `PRIVACY.md` → "How to delete everything." If Save history was disabled during testing, `history.json` may be absent or unchanged. If the directory is missing entirely after a successful dictation, settings persistence is broken when launched from `/Applications`.
 
 9. **Quit and relaunch.**
 
@@ -332,8 +334,8 @@ Run this section after every release build (ad-hoc signed DMG for this beta) and
     **Action:** Follow `PRIVACY.md` → "How to delete everything." Specifically:
 
     - If you enabled autostart at any point, run `launchctl unload ~/Library/LaunchAgents/com.librewin.turbotalk.plist` and then delete that plist file.
-    - Delete `~/.config/librewin/turbotalk/settings.json`.
-    - Delete `~/.config/librewin/turbotalk/history/` (entire directory).
+    - Delete `~/.config/librewin/turbotalk/config.toml`.
+    - Delete `~/.config/librewin/turbotalk/history.json`.
     - Delete `~/.config/librewin/turbotalk/models/` (entire directory, or whichever model path you configured).
 
     Then verify nothing remains:

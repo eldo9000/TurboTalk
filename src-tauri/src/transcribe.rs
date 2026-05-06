@@ -14,9 +14,11 @@
 //     and downloading external binaries is out of scope for this task.
 // See `tasks/done/TASK-18-persistent-whisper-transcription-worker.md` for
 // full deferral evidence.
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Allowed roots for the whisper-cli binary:
 /// - the directory containing the running executable (release bundle sidecar)
@@ -267,17 +269,41 @@ impl TranscriptionWorker {
 
         // TASK-23: spawn the child and immediately store it in `active_child` so
         // `abort()` can kill it mid-transcription. On completion we clear the slot.
-        let child = std::process::Command::new(&self.bin).args(&args).spawn()?;
+        let mut child = std::process::Command::new(&self.bin)
+            .args(&args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let stderr = child.stderr.take();
+        let stderr_reader = stderr.map(|mut stderr| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let _ = stderr.read_to_end(&mut buf);
+                buf
+            })
+        });
         *self.active_child.lock() = Some(child);
 
-        // Wait for completion and collect output. After wait_with_output returns,
-        // the process has exited — clear the active-child slot regardless of outcome.
-        let child = self
-            .active_child
-            .lock()
-            .take()
-            .expect("active_child was stolen between spawn and wait");
-        let output = child.wait_with_output()?;
+        // Poll instead of `wait_with_output()` so `abort()` can take and kill
+        // the child while transcription is in flight.
+        let status = loop {
+            let maybe_status = {
+                let mut slot = self.active_child.lock();
+                let Some(child) = slot.as_mut() else {
+                    anyhow::bail!("Transcription cancelled.");
+                };
+                child.try_wait()?
+            };
+            if let Some(status) = maybe_status {
+                *self.active_child.lock() = None;
+                break status;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+
+        let stderr = stderr_reader
+            .and_then(|h| h.join().ok())
+            .unwrap_or_default();
 
         let whisper_ms = t_whisper_start.elapsed().as_millis();
         tracing::info!("[transcribe] whisper took {} ms", whisper_ms);
@@ -285,15 +311,15 @@ impl TranscriptionWorker {
         // Even on exit-0, stderr can contain warnings ("argument not recognized") that
         // explain why the .txt below is missing. Log it at debug; promote to warn if
         // the next read fails.
-        if !output.stderr.is_empty() {
+        if !stderr.is_empty() {
             tracing::debug!(
                 "[transcribe] whisper-cli stderr: {}",
-                String::from_utf8_lossy(&output.stderr)
+                String::from_utf8_lossy(&stderr)
             );
         }
 
-        if !output.status.success() {
-            let code = output.status.code().unwrap_or(-1);
+        if !status.success() {
+            let code = status.code().unwrap_or(-1);
             anyhow::bail!(
                 "Transcription failed (whisper-cli error {}). Check that the model file is valid.",
                 code
@@ -301,7 +327,7 @@ impl TranscriptionWorker {
         }
 
         let text = std::fs::read_to_string(&txt_path).map_err(|_| {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = String::from_utf8_lossy(&stderr);
             anyhow::anyhow!(
                 "whisper output file not found: {:?}\n--- whisper-cli stderr ---\n{}",
                 txt_path,
@@ -324,15 +350,14 @@ impl TranscriptionWorker {
     /// test in the tests module below.
     pub fn abort(&self) {
         let mut slot = self.active_child.lock();
-        if let Some(ref mut child) = *slot {
+        if let Some(mut child) = slot.take() {
             if let Err(e) = child.kill() {
                 tracing::warn!("[transcribe] abort: child.kill() failed: {}", e);
             } else {
                 tracing::info!("[transcribe] abort: whisper-cli subprocess killed");
             }
+            let _ = child.wait();
         }
-        // Clear the slot regardless — the child is either dead or already gone.
-        *slot = None;
     }
 }
 

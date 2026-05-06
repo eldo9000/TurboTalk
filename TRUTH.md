@@ -13,7 +13,7 @@ confirmed again by user during v0.8 beta prep on 2026-05-03:
 
 1. Hold Right Alt → mic opens (<200ms), red dot pulses
 2. Speak → audio captured 24 kHz mono F32 via cpal
-3. Release Right Alt → whisper-cli runs ggml-base.en via Metal (~130ms on M4)
+3. Release Right Alt → whisper-cli runs the configured model via Metal (default: ggml-large-v3-turbo)
 4. Transcript appears in TurboTalk window AND is pasted into the focused app via Cmd+V
 5. Prior clipboard contents are restored after paste
 
@@ -90,7 +90,7 @@ Proof: `[audio] wrote 42240 samples` (1.76s voice), transcript landed in Notes.a
   on its background thread. Replaced with direct `CGEventTap` via `core-graphics 0.24`.
   Right Option detected by keycode 0x3D + `CGEventFlagAlternate` only — no TSM call.
 - **Homebrew whisper-cpp** — Metal-accelerated, not bundled as Tauri sidecar yet (M2).
-- **ggml-base.en** — 141MB, ~130ms latency on M4. Tiny model rejected (stub weights in brew bundle).
+- **Default model: ggml-large-v3-turbo** — 1.6 GB, multilingual, fast. Onboarding downloads it on first run; surfaced as "Recommended" in the Models tab. Earlier M0/M1 work used ggml-base.en (141 MB, ~130 ms on M4); the tiny model was rejected outright (stub weights in brew bundle).
 
 ## Tauri config rationale
 
