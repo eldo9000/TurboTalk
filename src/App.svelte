@@ -239,18 +239,40 @@ Reply with only the single word, lowercase, no punctuation.
   let outerEl = $state(null);
   // Ref to the settings tab inner content div — used for exact-fit height.
   // The outer div has flex-1 which collapses in an unconstrained container,
-  // so we measure the inner div directly and add fixed chrome heights.
+  // so we measure the inner div directly and add measured chrome.
   let settingsInnerEl = $state(null);
-  // h-10 titlebar + h-7 bottom bar = 68px of fixed chrome
-  const SETTINGS_CHROME_H = 68;
+  // Refs to the fixed chrome (titlebar + bottom bar). Measured at the anchor
+  // zoom so chrome height is no longer a hardcoded 68 — h-10 + h-7 happens to
+  // equal 68 today, but any future change to either bar must not force a
+  // matching constant edit, and DOM-side measurement absorbs any subpixel
+  // rounding the browser introduces.
+  let titlebarEl   = $state(null);
+  let bottomBarEl  = $state(null);
+  // Captured during the unconstrained measurement pass alongside settingsTabH;
+  // see chromeHeight() below.
+  let chromeH      = $state(0);
 
   const WINDOW_W  = 440;
+
+  // Visual anchor: at this zoom, every page is known to look correct today.
+  // Measurement is taken with style.zoom forced to 100%, so naturalH is in
+  // unscaled CSS pixels regardless of the user's saved zoom; the $effect
+  // below scales by the active zoom to produce Tauri logical pixels.
+  const ZOOM_ANCHOR = 1.25;
+  // Small guard band added once to the computed window height to absorb
+  // fractional WebKit/Tauri rounding at non-integer zoom (1.25, 1.75).
+  // Kept tiny on purpose — this is rounding slack, not design padding.
+  const WINDOW_SIZE_SLACK = 2;
 
   // The window is "compact" (half the natural Modes-tab height) by default,
   // and "expanded" (full natural height) only on the Modes tab with Advanced
   // (Chaperone) selected — the only mode that genuinely needs the extra
   // vertical room (Ollama URL + classifier model + vocabulary + prompt).
   const COMPACT_HEIGHT_FACTOR = 0.5;
+
+  // Cache the last requested logical size so a no-op effect run (e.g. an
+  // unrelated $state read) doesn't re-issue setSize and risk a resize loop.
+  let lastWindowSize = { w: 0, h: 0 };
 
   $effect(() => {
     const zoom = ZOOM_LEVELS[zoomIdx] / 100;
@@ -263,10 +285,11 @@ Reply with only the single word, lowercase, no punctuation.
       activeTab === 'models'   && modelsTabH   > 0 ? modelsTabH   :
       modesH > 0 ? modesH :
       settingsH;
-    getCurrentWindow().setSize(new LogicalSize(
-      Math.ceil(w * zoom),
-      Math.ceil(h * zoom),
-    ));
+    const targetW = Math.ceil(w * zoom);
+    const targetH = Math.ceil(h * zoom) + WINDOW_SIZE_SLACK;
+    if (targetW === lastWindowSize.w && targetH === lastWindowSize.h) return;
+    lastWindowSize = { w: targetW, h: targetH };
+    getCurrentWindow().setSize(new LogicalSize(targetW, targetH));
   });
 
   // ── Zoom ──────────────────────────────────────────────────────────────────
@@ -571,6 +594,17 @@ Reply with only the single word, lowercase, no punctuation.
     settingsSaveMsg = launchRes.status === 'ok' ? 'Saved.' : 'Error: ' + launchRes.error;
   }
 
+  // Measure live chrome (titlebar + bottom bar) in unscaled CSS pixels.
+  // getBoundingClientRect is zoom-scaled in WebKit/Chromium, so divide by the
+  // currently-applied CSS zoom to recover the natural-space value the sizing
+  // $effect expects (it multiplies by zoom itself).
+  function chromeHeight() {
+    const tb = titlebarEl?.getBoundingClientRect().height ?? 0;
+    const bb = bottomBarEl?.getBoundingClientRect().height ?? 0;
+    const cssZoom = parseFloat(document.documentElement.style.zoom || '100') / 100 || 1;
+    return Math.ceil((tb + bb) / cssZoom);
+  }
+
   function switchTab(tab) {
     activeTab = tab;
     if (tab === 'models')   openModels();
@@ -588,7 +622,8 @@ Reply with only the single word, lowercase, no punctuation.
       await tick();
       await new Promise(r => requestAnimationFrame(r));
       if (settingsInnerEl) {
-        settingsTabH = settingsInnerEl.scrollHeight + SETTINGS_CHROME_H;
+        const ch = chromeHeight() || chromeH;
+        settingsTabH = settingsInnerEl.scrollHeight + ch;
       }
     });
   }
@@ -608,7 +643,16 @@ Reply with only the single word, lowercase, no punctuation.
     // Both measurements must complete before settingsH is committed — once settingsH
     // is non-zero the outermost div gets h-full overflow-hidden, making scrollHeight
     // return the window height rather than the natural content height.
+    //
+    // Measurement is taken with style.zoom forced to 100% so scrollHeight is in
+    // canonical, unscaled CSS pixels regardless of the user's saved zoom. The
+    // sizing $effect then multiplies by the active zoom factor. Without this
+    // pin, scrollHeight at non-100% startup zoom can drift by a pixel or two
+    // and produce intermittent outer scrollbars at zooms other than the 125%
+    // anchor (TASK-39).
     document.documentElement.style.opacity = '0';
+    const savedZoomCss = document.documentElement.style.zoom;
+    document.documentElement.style.zoom = '100%';
     const savedMode = cfgCleanupMode;
 
     // 1. Modes — non-chaperone (single-column Simple layout, taller of Off/Simple).
@@ -643,11 +687,13 @@ Reply with only the single word, lowercase, no punctuation.
     await openSettings();
     await tick();
     await new Promise(r => requestAnimationFrame(r));
+    const measuredChromeH = chromeHeight();
     const measuredSettingsTabH = settingsInnerEl
-      ? settingsInnerEl.scrollHeight + SETTINGS_CHROME_H
+      ? settingsInnerEl.scrollHeight + measuredChromeH
       : outerEl ? outerEl.scrollHeight : 0;
 
     // Commit all heights — this activates the h-full constraint hereafter.
+    if (measuredChromeH)       chromeH      = measuredChromeH;
     if (measuredChaperoneH)    settingsH    = measuredChaperoneH;
     if (measuredModesH)        modesH       = measuredModesH;
     if (measuredModelsH)       modelsTabH   = measuredModelsH;
@@ -655,6 +701,9 @@ Reply with only the single word, lowercase, no punctuation.
 
     activeTab = 'history';
     await tick();
+    // Restore the user's saved zoom (the $effect did not re-fire because we
+    // mutated style.zoom imperatively above without touching zoomIdx).
+    document.documentElement.style.zoom = savedZoomCss || `${ZOOM_LEVELS[zoomIdx]}%`;
     document.documentElement.style.opacity = '';
 
     function handleKeydown(e) {
@@ -837,7 +886,7 @@ Reply with only the single word, lowercase, no punctuation.
   {/if}
 
   <!-- Titlebar -->
-  <div data-tauri-drag-region class="relative h-10 shrink-0 flex items-end select-none bg-white dark:bg-[color-mix(in_srgb,#000_18%,var(--surface-raised))]">
+  <div bind:this={titlebarEl} data-tauri-drag-region class="relative h-10 shrink-0 flex items-end select-none bg-white dark:bg-[color-mix(in_srgb,#000_18%,var(--surface-raised))]">
 
     <!-- Traffic-light spacer (left) -->
     <div class="w-[76px] shrink-0 h-full" data-tauri-drag-region></div>
@@ -1548,7 +1597,7 @@ Reply with only the single word, lowercase, no punctuation.
   {/if}
 
   <!-- Bottom bar — zoom left, about right -->
-  <div class="shrink-0 h-7 flex items-center justify-between px-2
+  <div bind:this={bottomBarEl} class="shrink-0 h-7 flex items-center justify-between px-2
               select-none">
     <div class="flex items-center gap-1">
       <button
