@@ -365,11 +365,11 @@ mod tests {
         // 1.0 s..2.0 s: chirp 200→2000 Hz with light AM, peak 0.4
         let burst_start = SR;
         let burst_end = 2 * SR;
-        for i in burst_start..burst_end {
+        for (i, sample) in buf.iter_mut().enumerate().take(burst_end).skip(burst_start) {
             let t = (i - burst_start) as f32 / SR as f32;
             let f = 200.0 + 1800.0 * t;
             let am = 0.5 * (1.0 + (2.0 * std::f32::consts::PI * 4.0 * t).sin());
-            buf[i] = (2.0 * std::f32::consts::PI * f * t).sin() * 0.4 * am;
+            *sample = (2.0 * std::f32::consts::PI * f * t).sin() * 0.4 * am;
         }
 
         let (start, end) = trim(&buf);
@@ -434,7 +434,7 @@ mod tests {
         let mut noisy = vec![0.0f32; SR]; // 1 s
         for (i, s) in noisy.iter_mut().enumerate() {
             // Pseudo-random low-amplitude noise.
-            *s = ((i as f32 * 12.9898).sin() * 43758.5453).fract() * 0.2 - 0.1;
+            *s = ((i as f32 * 12.9898).sin() * 43758.547).fract() * 0.2 - 0.1;
         }
         let _ = trim(&noisy);
 
