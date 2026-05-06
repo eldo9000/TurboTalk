@@ -25,11 +25,12 @@ Proof: `[audio] wrote 42240 samples` (1.76s voice), transcript landed in Notes.a
   `Turbo Talk.app`, and macOS arm64 DMG.
 - v0.8 intentionally skips Apple Developer credentials, so the beta is
   unsigned/ad-hoc and not notarized.
-- Local `TurboTalk-0.8.6-macos-arm64.dmg.sha256` verifies. The `v0.8.6`
-  tag points at commit `352a251`; GitHub Actions release run 25414134047
-  completed successfully. The `v0.8.6` beta is published as a GitHub
-  prerelease with macOS arm64 and Windows x64 artifacts. macOS is the usable
-  beta path; Windows remains packaging-only until hotkey + paste land.
+- Local `TurboTalk-0.8.7-macos-arm64.dmg.sha256` verifies. The `v0.8.7`
+  tag points at commit `577186d`; GitHub Actions release workflow is
+  building the matrix (macos-arm64 + windows-x64). The `v0.8.7` beta is
+  published as a GitHub prerelease once both legs go green. macOS is the
+  usable beta path; Windows remains packaging-only until hotkey + paste
+  land.
 - A GitHub-downloaded macOS artifact is quarantined by macOS and may show
   "Apple could not verify Turbo Talk.app" on normal double-click. That is
   expected until Developer ID signing + notarization land; use right-click
