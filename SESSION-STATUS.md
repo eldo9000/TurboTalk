@@ -1,6 +1,6 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-05-07
+**Last updated:** 2026-05-06
 **Current state:** TASK-39 main-window zoom layout fix landed in `src/App.svelte`. Three changes: (1) onMount now forces `style.zoom = '100%'` during the natural-height measurement pass and restores the user's saved zoom afterward, so `scrollHeight` is captured in canonical unscaled CSS pixels regardless of the previously-saved zoom level; (2) hardcoded `SETTINGS_CHROME_H = 68` is replaced by a `chromeHeight()` helper that measures the live `titlebarEl` + `bottomBarEl` `getBoundingClientRect` and divides by the active CSS zoom to recover natural-space height; (3) the sizing `$effect` now adds a 2 px `WINDOW_SIZE_SLACK` for fractional WebKit/Tauri rounding and caches `lastWindowSize` to skip no-op `setSize` calls and avoid resize loops. `ZOOM_ANCHOR = 1.25` is named explicitly so the anchor relationship is documented in code. `npm run typecheck` and `npm run build` both pass.
 
 **Next action:** Manual Tauri-window visual proof at 100/125/150/175/200 across History, Models, Modes (Simple), Modes (Advanced/Chaperone), and Settings. Confirm no unintended outer scrollbar at any zoom and that 125% remains visually unchanged. Browser-only DOM inspection at `localhost:1428` cannot fully exercise `getCurrentWindow().setSize`. Once verified, move `tasks/TASK-39-main-window-zoom-layout.md` to `tasks/done/` and commit.
@@ -53,7 +53,13 @@ Developer signing/notarization remains intentionally skipped for v0.8.
 
 ## Where We Are
 
-Released `v0.8.6` beta prerelease on 2026-05-06.
+Released `v0.8.7` beta prerelease on 2026-05-06. Picks up the held-PTT
+multi-monitor overlay fix, the Whisper non-speech token strip, and the
+LSUIElement/agent-style main window. CI release run for the v0.8.7 tag is
+in flight; once green, the GitHub draft release is published as a
+prerelease with macOS arm64 DMG and Windows x64 setup attached.
+
+Previous: Released `v0.8.6` beta prerelease on 2026-05-06.
 
 Roadmap M0 and M1 are done. Core loop works:
 Right Alt → record → whisper transcription → paste into focused app.
