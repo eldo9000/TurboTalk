@@ -21,7 +21,8 @@
         "hiddenTitle": true,
         "resizable": false,
         "center": true,
-        "transparent": false
+        "transparent": false,
+        "skipTaskbar": true
       },
       {
         "label": "overlay",
