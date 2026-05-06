@@ -1,6 +1,6 @@
 # Turbo Talk
 
-Voice dictation for getting work done.
+Free voice dictation for getting work done.
 
 ---
 
