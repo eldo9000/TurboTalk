@@ -335,6 +335,9 @@ mod common {
             );
 
             let _ = tray.set_icon(Some(tray::make_icon(TrayState::Recording)));
+            // Pin the overlay window to the cursor's monitor *before* emitting
+            // ptt-down so the recording UI never flashes on the wrong display.
+            crate::reposition_overlay_to_cursor_monitor(&app);
             emit_critical(&app, "ptt-down", ());
             emit_stage(&app, job_id, "recording");
             play_chime(ChimeEvent::Start);

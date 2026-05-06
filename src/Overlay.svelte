@@ -1,8 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
-  import { getCurrentWindow, primaryMonitor, monitorFromPoint, cursorPosition } from '@tauri-apps/api/window';
-  import { LogicalPosition } from '@tauri-apps/api/dpi';
+  import { getCurrentWindow, cursorPosition } from '@tauri-apps/api/window';
   import { commands } from './bindings.ts';
 
   let mode      = $state('idle'); // 'idle' | 'recording' | 'transcribing'
@@ -41,12 +40,6 @@
   const CANVAS_W   = 140; // CSS pixels
   const CANVAS_H   = 28;
   const HISTORY    = 52;  // columns in the histogram
-  const WIN_W      = 260;
-  const WIN_H      = 80;
-  const BOTTOM_GAP = 110;
-  const GUTTER     = 100;
-  const OUTER_W    = WIN_W + GUTTER * 2;
-  const OUTER_H    = WIN_H + GUTTER * 2;
 
   let levels = Array(HISTORY).fill(0);
   let cursorInZone = $state(false);
@@ -89,44 +82,26 @@
     // Initial config read for the transcript-size indicator. Failure here is
     // non-fatal — indicator stays hidden until a config-update event arrives.
     try {
-      const cfg = await commands.loadConfig();
+      const cfg = await commands.getConfig();
       indicatorEnabled = cfg.transcript_size_indicator ?? true;
     } catch (_) { /* keep indicator off */ }
 
-    // Pick the monitor where the user's cursor lives — that's the screen
-    // the focused app is most likely on. Falls back to the primary monitor
-    // if the cursor query fails (early-boot, multi-user fast-switch, etc.).
-    // Position math is done in logical units relative to the chosen
-    // monitor's origin so the overlay lands on the correct screen on
-    // multi-display setups.
-    let hoverZone = { x: 0, y: 0, w: OUTER_W, h: OUTER_H };
+    // Window placement (which monitor + position on that monitor) is owned
+    // entirely by the Rust side — see `reposition_overlay_to_cursor_monitor`
+    // in src-tauri/src/lib.rs. The frontend only mirrors the resulting frame
+    // to compute the cursor-peek-through hoverZone; it never moves the
+    // window itself, since the JS `monitorFromPoint` API misclassifies the
+    // active monitor on macOS multi-scale setups (retina + 1× external).
+    let hoverZone = { x: 0, y: 0, w: 0, h: 0 };
 
-    async function positionOverlay() {
-      let mon = null;
+    async function refreshHoverZone() {
       try {
-        const cur = await cursorPosition();
-        mon = await monitorFromPoint(cur.x, cur.y);
-      } catch (_) { /* fall through to primary */ }
-      if (!mon) mon = await primaryMonitor();
-      if (!mon) return;
-      const sf = mon.scaleFactor;
-      const mw = mon.size.width  / sf;
-      const mh = mon.size.height / sf;
-      const ox = mon.position.x / sf;
-      const oy = mon.position.y / sf;
-      const px = Math.round(ox + (mw - WIN_W) / 2);
-      const py = Math.round(oy + mh - WIN_H - BOTTOM_GAP);
-      const outerX = px - GUTTER;
-      const outerY = py - GUTTER;
-      hoverZone = {
-        x: Math.round(outerX * sf),
-        y: Math.round(outerY * sf),
-        w: Math.round(OUTER_W * sf),
-        h: Math.round(OUTER_H * sf),
-      };
-      await win.setPosition(new LogicalPosition(outerX, outerY));
+        const pos  = await win.outerPosition(); // physical px
+        const size = await win.outerSize();     // physical px
+        hoverZone = { x: pos.x, y: pos.y, w: size.width, h: size.height };
+      } catch (_) { /* leave previous zone in place */ }
     }
-    await positionOverlay();
+    await refreshHoverZone();
 
     const cursorTimer = setInterval(async () => {
       try {
@@ -145,10 +120,11 @@
       wordPills = [];
       mode = 'recording';
       draw();
-      // Move to the monitor the user is currently on — they may have
-      // dragged their focused app to a different screen since last time.
-      // Fire-and-forget so we don't delay the recording-start signal.
-      positionOverlay().catch(() => {});
+      // Backend has just repositioned the window onto the cursor's monitor
+      // (see reposition_overlay_to_cursor_monitor). Pick up the new frame
+      // so the cursor-peek-through hoverZone matches reality. Slight delay
+      // so the post-set_position frame has settled.
+      setTimeout(() => { refreshHoverZone(); }, 200);
     }).then(u => uns.push(u));
 
     listen('ptt-up', () => {

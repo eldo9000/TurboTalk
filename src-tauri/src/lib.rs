@@ -80,6 +80,203 @@ fn save_config(
     Ok(())
 }
 
+/// Logical pill-bottom geometry, shared with the frontend's expectations.
+/// The window is 460×280, but the visible pill is a 260×80 rect inside it
+/// surrounded by a 100 px gutter (room for blur/shadow). For the pill to
+/// land `BOTTOM_GAP` above the screen bottom, the *window's* top-left needs
+/// to sit at `screen_bottom - (WIN_H + BOTTOM_GAP + GUTTER)`. We bake that
+/// into the y math here so the frontend never re-positions.
+const OVERLAY_W_LOGICAL: f64 = 460.0;
+const OVERLAY_PILL_BOTTOM_OFFSET: f64 = 290.0; // WIN_H 80 + BOTTOM_GAP 110 + GUTTER 100
+
+/// Reposition the overlay window so its content lands on whichever monitor the
+/// mouse cursor is currently on. Called from `ptt_down` before the frontend
+/// renders any visible content, and once at app startup. Best-effort —
+/// silently no-ops if any of the platform queries fail.
+///
+/// Coordinate-space note (macOS / tao quirk):
+///   - `cursor_position()` reports primary-scaled physical pixels — i.e. the
+///     NSPoint location of the cursor multiplied by the *primary* monitor's
+///     scale factor.
+///   - `Monitor::position()` reports the screen origin in logical NSPoints
+///     (despite the `PhysicalPosition` type label).
+///   - `Monitor::size()` reports actual physical pixels, scaled by that
+///     monitor's own scale factor.
+/// To do a correct point-in-monitor test we have to normalize all three into
+/// the same space. We pick logical NSPoints: divide cursor by primary scale,
+/// take position as-is, divide size by own scale. Tauri's built-in
+/// `monitor_from_point` does *not* handle this mix correctly on multi-scale
+/// setups (retina laptop + 1x external) — it returns the wrong monitor —
+/// which is why we do the math by hand.
+#[cfg(target_os = "macos")]
+pub fn reposition_overlay_to_cursor_monitor(app: &tauri::AppHandle) {
+    use tauri::{LogicalPosition, Manager};
+    let Some(overlay) = app.get_webview_window("overlay") else { return };
+    let cursor = match app.cursor_position() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("[overlay] cursor_position failed: {:?}", e);
+            return;
+        }
+    };
+    let monitors = match overlay.available_monitors() {
+        Ok(m) if !m.is_empty() => m,
+        Ok(_) => {
+            tracing::warn!("[overlay] available_monitors empty — skip reposition");
+            return;
+        }
+        Err(e) => {
+            tracing::warn!("[overlay] available_monitors failed: {:?}", e);
+            return;
+        }
+    };
+
+    let primary_scale = overlay
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.scale_factor())
+        .unwrap_or(1.0);
+    let cx = cursor.x / primary_scale;
+    let cy = cursor.y / primary_scale;
+
+    tracing::info!(
+        "[overlay] cursor=({:.0},{:.0}) primary_scale={:.2} → logical=({:.0},{:.0})",
+        cursor.x,
+        cursor.y,
+        primary_scale,
+        cx,
+        cy
+    );
+    for (i, m) in monitors.iter().enumerate() {
+        let p = m.position();
+        let s = m.size();
+        let scale = m.scale_factor();
+        let lw = s.width as f64 / scale;
+        let lh = s.height as f64 / scale;
+        tracing::info!(
+            "[overlay] monitor[{}] pos=({},{}) size=({},{}) scale={:.2} logical_bounds=[{:.0},{:.0})x[{:.0},{:.0})",
+            i,
+            p.x,
+            p.y,
+            s.width,
+            s.height,
+            scale,
+            p.x as f64,
+            p.x as f64 + lw,
+            p.y as f64,
+            p.y as f64 + lh
+        );
+    }
+
+    let matched_idx = monitors.iter().position(|m| {
+        let p = m.position();
+        let s = m.size();
+        let logical_w = s.width as f64 / m.scale_factor();
+        let logical_h = s.height as f64 / m.scale_factor();
+        cx >= p.x as f64
+            && cx < (p.x as f64 + logical_w)
+            && cy >= p.y as f64
+            && cy < (p.y as f64 + logical_h)
+    });
+    let monitor = match matched_idx {
+        Some(i) => {
+            tracing::info!("[overlay] matched monitor[{}]", i);
+            monitors[i].clone()
+        }
+        None => {
+            tracing::warn!(
+                "[overlay] cursor logical=({:.0},{:.0}) matched no monitor — falling back to current/primary",
+                cx,
+                cy
+            );
+            let Some(m) = overlay
+                .current_monitor()
+                .ok()
+                .flatten()
+                .or_else(|| overlay.primary_monitor().ok().flatten())
+            else {
+                return;
+            };
+            m
+        }
+    };
+
+    let mp = monitor.position();
+    let ms = monitor.size();
+    let scale = monitor.scale_factor();
+    let mon_w_logical = ms.width as f64 / scale;
+    let mon_h_logical = ms.height as f64 / scale;
+    let x = mp.x as f64 + (mon_w_logical - OVERLAY_W_LOGICAL) / 2.0;
+    let y = mp.y as f64 + mon_h_logical - OVERLAY_PILL_BOTTOM_OFFSET;
+
+    let pre = overlay.outer_position().ok();
+    tracing::info!(
+        "[overlay] set_position logical=({:.0},{:.0}) (target monitor pos=({},{}) scale={:.2}) pre_outer={:?}",
+        x,
+        y,
+        mp.x,
+        mp.y,
+        scale,
+        pre
+    );
+
+    // macOS NSPanel quirk: a transparent + decorations-off + alwaysOnTop
+    // window is created as an NSPanel with elevated window level, and
+    // `setFrameTopLeftPoint:` against that panel is silently dropped — we
+    // confirmed this from `pre_outer == post_outer` over multiple presses.
+    // Demoting the level (set_always_on_top(false)) takes the panel out of
+    // the elevated-level state where the position-pinning behavior applies.
+    // We restore alwaysOnTop immediately after the move.
+    let _ = overlay.set_always_on_top(false);
+    if let Err(e) = overlay.set_position(LogicalPosition::new(x, y)) {
+        tracing::warn!("[overlay] set_position failed: {:?}", e);
+    }
+    let _ = overlay.set_always_on_top(true);
+
+    if let Ok(post) = overlay.outer_position() {
+        tracing::info!("[overlay] post_outer={:?}", post);
+    }
+}
+
+/// Windows / Linux variant — straightforward physical-pixel bounds check
+/// since both platforms report cursor, monitor position, and monitor size
+/// all in physical pixels of the virtual desktop. Untested on real hardware
+/// (TurboTalk currently ships macOS-only); revisit once the Win/Linux audio
+/// + hotkey paths come online.
+#[cfg(not(target_os = "macos"))]
+pub fn reposition_overlay_to_cursor_monitor(app: &tauri::AppHandle) {
+    use tauri::{LogicalPosition, Manager};
+    let Some(overlay) = app.get_webview_window("overlay") else { return };
+    let Ok(cursor) = app.cursor_position() else { return };
+    let Ok(monitors) = overlay.available_monitors() else { return };
+
+    let monitor = monitors
+        .iter()
+        .find(|m| {
+            let p = m.position();
+            let s = m.size();
+            cursor.x >= p.x as f64
+                && cursor.x < (p.x as f64 + s.width as f64)
+                && cursor.y >= p.y as f64
+                && cursor.y < (p.y as f64 + s.height as f64)
+        })
+        .cloned()
+        .or_else(|| overlay.current_monitor().ok().flatten())
+        .or_else(|| overlay.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else { return };
+
+    let mp = monitor.position();
+    let ms = monitor.size();
+    let scale = monitor.scale_factor();
+    let mon_w_logical = ms.width as f64 / scale;
+    let mon_h_logical = ms.height as f64 / scale;
+    let x = (mp.x as f64 + (ms.width as f64 - OVERLAY_W_LOGICAL * scale) / 2.0) / scale;
+    let y = mp.y as f64 / scale + mon_h_logical - OVERLAY_PILL_BOTTOM_OFFSET;
+
+    let _ = overlay.set_position(LogicalPosition::new(x, y));
+}
+
 fn apply_overlay_visibility(app: &tauri::AppHandle, show: bool) {
     // Only toggle when the requested state differs from the current state.
     // Calling `show()` on an already-visible window on macOS reorders it to
@@ -439,22 +636,63 @@ use tauri::{
     Emitter, Manager, WindowEvent,
 };
 
-/// Position `win` centered horizontally, just below the macOS menu bar.
-fn center_top(win: &tauri::WebviewWindow) {
-    let monitor = win
-        .current_monitor()
+/// Position `win` directly below the mouse cursor, centered on it horizontally.
+/// Works on dual-monitor setups — whichever display the cursor is on, that's
+/// where the window lands.
+fn position_below_cursor(app: &tauri::AppHandle, win: &tauri::WebviewWindow) {
+    use tauri::LogicalPosition;
+
+    let Ok(cursor) = app.cursor_position() else { return };
+
+    // On macOS, cursor_position reports primary-scaled physical pixels.
+    // Divide by the primary monitor's scale factor to get logical NSPoints,
+    // which is the same space monitor positions are reported in.
+    let primary_scale = win
+        .primary_monitor()
         .ok()
         .flatten()
+        .map(|m| m.scale_factor())
+        .unwrap_or(1.0);
+
+    #[cfg(target_os = "macos")]
+    let (cx, cy) = (cursor.x / primary_scale, cursor.y / primary_scale);
+    #[cfg(not(target_os = "macos"))]
+    let (cx, cy) = (cursor.x, cursor.y);
+
+    // Find the monitor containing the cursor.
+    let monitors = win.available_monitors().ok().unwrap_or_default();
+    let monitor = monitors
+        .iter()
+        .find(|m| {
+            let p = m.position();
+            let s = m.size();
+            let scale = m.scale_factor();
+            let lw = s.width as f64 / scale;
+            let lh = s.height as f64 / scale;
+            cx >= p.x as f64 && cx < p.x as f64 + lw
+                && cy >= p.y as f64 && cy < p.y as f64 + lh
+        })
+        .cloned()
+        .or_else(|| win.current_monitor().ok().flatten())
         .or_else(|| win.primary_monitor().ok().flatten());
+
     let Some(monitor) = monitor else { return };
     let scale = monitor.scale_factor();
-    let screen_w = monitor.size().width as f64 / scale;
+    let mp = monitor.position();
+    let ms = monitor.size();
+    let mon_x = mp.x as f64;
+    let mon_w = ms.width as f64 / scale;
+
     let win_w = win
         .outer_size()
         .map(|s| s.width as f64 / scale)
         .unwrap_or(440.0);
-    let x = (screen_w - win_w) / 2.0;
-    let _ = win.set_position(tauri::LogicalPosition::new(x, 28.0));
+
+    // Center on cursor horizontally, 8px below it; clamp to monitor width.
+    let x = (cx - win_w / 2.0).clamp(mon_x, mon_x + mon_w - win_w);
+    let y = cy + 8.0;
+
+    let _ = win.set_position(LogicalPosition::new(x, y));
 }
 
 /// Build the tauri-specta type-export descriptor. Lives in its own function
@@ -550,6 +788,17 @@ pub fn run() {
             permissions::prompt_for_accessibility,
         ])
         .setup(|app| {
+            // ── macOS: hide from Dock and Cmd-Tab. The tray icon is the only
+            // persistent affordance; the main window is opened on demand.
+            // Runtime call (rather than Info.plist LSUIElement alone) so it
+            // also applies to `tauri dev` runs, which don't go through the
+            // bundle's plist.
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::ActivationPolicy;
+                app.set_activation_policy(ActivationPolicy::Accessory);
+            }
+
             // ── Tray icon ──────────────────────────────────────────────────
             let launch_enabled = {
                 use tauri_plugin_autostart::ManagerExt;
@@ -610,7 +859,7 @@ pub fn run() {
                             return;
                         }
                         if let Some(win) = app.get_webview_window("main") {
-                            center_top(&win);
+                            position_below_cursor(app, &win);
                             let _ = win.show();
                             let _ = win.set_focus();
                         }
@@ -659,9 +908,9 @@ pub fn run() {
             let hotkey_state: HotkeyState = Arc::new(RwLock::new(cfg.hotkey.clone()));
             app.manage(hotkey_state.clone());
 
-            // ── Main window — position at launch same as tray-click ──────────
+            // ── Main window — position below cursor at launch ─────────────
             if let Some(win) = app.get_webview_window("main") {
-                center_top(&win);
+                position_below_cursor(&app.handle(), &win);
             }
 
             // ── Overlay — cursor-transparent so clicks always pass through ──
@@ -671,6 +920,10 @@ pub fn run() {
                     let _ = overlay.hide();
                 }
             }
+            // Pin the overlay to the cursor's monitor at startup so the very
+            // first press doesn't have to fight a stale primary-monitor
+            // placement from `center: true` in tauri.conf.json.
+            reposition_overlay_to_cursor_monitor(&app.handle());
 
             // ── Hotkey ─────────────────────────────────────────────────────
             // Stream opens on first keypress; always re-queries the config device
