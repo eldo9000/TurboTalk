@@ -66,21 +66,22 @@ Three options for how the transcript is post-processed before paste:
 ## Install — macOS
 
 1. Download the DMG from the [releases page](https://github.com/eldo9000/TurboTalk-App/releases) and drag `Turbo Talk.app` into `/Applications`.
-2. First launch: **right-click → Open** (the beta is ad-hoc signed, not notarized — macOS will refuse a normal double-click the first time).
+2. First launch: **right-click → Open**. GitHub-downloaded beta builds are unsigned/not notarized and carry macOS's download quarantine flag, so a normal double-click may show "Apple could not verify Turbo Talk.app" and refuse to open.
 3. Walk through the three-step onboarding wizard: grant Accessibility → grant Microphone → pick a transcription model.
 4. Open Settings, set your trigger key, choose hold-to-talk or toggle.
 5. Open TextEdit, hold the trigger key, say "hello world", release — your sentence appears at the cursor.
 
+If right-click → Open is still blocked, open System Settings → Privacy & Security and choose **Open Anyway** for Turbo Talk. This warning is expected until the beta is Developer ID signed and notarized.
+
 ## Install — Windows
 
-> Beta in progress — once the Win sidecar binary is bundled, the `.exe` will appear on the releases page.
+> Experimental packaging only. CI can build the Windows installer and bundled Whisper sidecar, but the Windows hotkey and paste implementations are still stubs, so the dictation loop is not release-ready on Windows yet.
 
 1. Download `TurboTalk-<version>-windows-x64-setup.exe` from the releases page.
 2. Double-click. Windows SmartScreen will show **"Windows protected your PC"** because the installer is unsigned. Click **More info → Run anyway** to proceed.
 3. Complete the NSIS installer.
 4. If the app fails to launch with a WebView2 error (most common on Windows 10), install the WebView2 Evergreen runtime from <https://developer.microsoft.com/microsoft-edge/webview2/>. Windows 11 ships with it preinstalled.
-5. Launch TurboTalk from the Start menu, complete onboarding, set your trigger key.
-6. Open Notepad, hold the trigger key, say "hello world", release — your sentence appears at the cursor.
+5. Launch TurboTalk from the Start menu only for packaging/runtime inspection. End-to-end dictation is blocked until Windows hotkey + paste land.
 
 ## Install — Linux (X11)
 
@@ -136,7 +137,7 @@ No other macOS system permissions are requested. There is no Automation prompt p
 ### Known limitations
 
 - **macOS:** Apple Silicon only. Ad-hoc signed only — not Apple-notarized. Expect a Gatekeeper warning on first launch (right-click → Open the first time).
-- **Windows:** Unsigned `.exe` — SmartScreen will show a "Windows protected your PC" warning the first time you run the installer. Click **More info → Run anyway** to proceed. WebView2 runtime is required (preinstalled on Windows 11; Windows 10 users may need <https://developer.microsoft.com/microsoft-edge/webview2/>).
+- **Windows:** Installer packaging exists, but end-to-end dictation is not supported yet. Hotkey + paste are still unsupported off macOS. The `.exe` is unsigned, so SmartScreen warns on first run. WebView2 runtime is required (preinstalled on Windows 11; Windows 10 users may need <https://developer.microsoft.com/microsoft-edge/webview2/>).
 - **Linux:** X11 only — **Wayland is not supported.** AppImage requires FUSE (`libfuse2` on Debian/Ubuntu). Tray-icon support depends on your desktop's AppIndicator support (GNOME may need an extension).
 - **All platforms:** No auto-updater. Re-download to update.
 - History is saved to disk by default, retained for 10 days. Configurable in Settings — choose `restart` (clear on launch), `1d`, `5d`, `10d`, or `30d`. Capped at 50 entries either way.

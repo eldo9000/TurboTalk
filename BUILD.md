@@ -1,8 +1,9 @@
 # TurboTalk Build
 
-How to produce the first-beta TurboTalk artifact. Today that means **macOS
-arm64 only**. Cross-platform builds are deferred — see the bottom of this
-file for what would need to land first.
+How to produce TurboTalk beta artifacts. Today the only usable runtime beta is
+**macOS arm64**. CI can also package a Windows installer with the bundled
+Whisper sidecar, but Windows hotkey + paste are still unsupported stubs, so it
+is not a working dictation release yet. Linux builds remain deferred.
 
 > For the full release procedure (versioning, tagging, publishing, release
 > notes), see `RELEASING.md`.
@@ -29,7 +30,7 @@ npm run package
 `npm run package` chains:
 
 1. `npm run preflight` — verifies the bundled Whisper sidecar/dylibs exist.
-2. `tauri build` — produces the signed (ad-hoc) `.app` and `.dmg` under
+2. `tauri build` — produces the unsigned/ad-hoc `.app` and `.dmg` under
    `src-tauri/target/release/bundle/`.
 3. `node scripts/rename-artifact.mjs` — copies the DMG to a stable,
    convention-named path and writes a matching `.sha256` checksum file.
@@ -37,13 +38,13 @@ npm run package
 Expected output paths:
 
 ```
-dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg
-dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg.sha256
+dist-artifacts/TurboTalk-<version>-macos-arm64.dmg
+dist-artifacts/TurboTalk-<version>-macos-arm64.dmg.sha256
 ```
 
 Verify the DMG is intact with
-`shasum -a 256 -c dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg.sha256`
-(expect `TurboTalk-0.8.0-macos-arm64.dmg: OK`).
+`shasum -a 256 -c dist-artifacts/TurboTalk-<version>-macos-arm64.dmg.sha256`
+(expect `TurboTalk-<version>-macos-arm64.dmg: OK`).
 
 `dist-artifacts/` is gitignored. The original Tauri-named DMG remains in
 `target/release/bundle/dmg/` if you need it.
@@ -56,26 +57,27 @@ TurboTalk-<version>-<os>-<arch>.<ext>
 
 | Field | Source | Example |
 |---|---|---|
-| `<version>` | `package.json` `version` (must match `src-tauri/tauri.conf.json`) | `0.8.0` |
+| `<version>` | `package.json` `version` (must match `src-tauri/tauri.conf.json`) | `0.8.6` |
 | `<os>` | platform identifier | `macos`, `windows`, `linux` |
 | `<arch>` | user-facing arch label | `arm64`, `x64` |
 | `<ext>` | platform-native installer | `dmg`, `exe`, `AppImage` |
 
-Today only the macOS arm64 variant is produced. The version is read from
-`package.json` at rename time, so bumping the version in both
-`package.json` and `src-tauri/tauri.conf.json` is the only change needed
+The version is read from `package.json` at rename time, so bumping the version
+in both `package.json` and `src-tauri/tauri.conf.json` is the only change needed
 to retag artifacts.
 
 ## Smoke test the artifact
 
 After `npm run package` finishes, verify the DMG actually works. This is
-the Block 2 proof gate from `BETA-AUDIT-ROADMAP.md` — until you have
-done this, the build is not proven.
+the installed-artifact proof gate from `SMOKE-TEST.md` — until you have done
+this, the build is not proven.
 
-- Open `dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg`.
+- Open `dist-artifacts/TurboTalk-<version>-macos-arm64.dmg`.
 - Drag `Turbo Talk.app` to `/Applications`.
-- The build is ad-hoc signed, so launch with right-click → Open the
-  first time and accept the Gatekeeper warning.
+- GitHub-downloaded beta builds are unsigned/not notarized and quarantined by
+  macOS, so launch with right-click → Open the first time and accept the
+  Gatekeeper warning. If macOS still blocks it, use System Settings → Privacy &
+  Security → Open Anyway.
 - Grant **Microphone** and **Accessibility / Input Monitoring** when the
   OS prompts.
 - Hold the configured push-to-talk hotkey, dictate one short phrase
@@ -113,7 +115,9 @@ release zip (version + sha256 are baked into
 Companion DLLs are bundled into the installer via
 `src-tauri/tauri.windows.conf.json` (`bundle.resources`).
 
-The fetch step is a no-op on non-Windows hosts.
+The fetch step downloads sidecars only on Windows hosts; it is a no-op on
+non-Windows hosts. Packaging can complete, but the resulting app is still not a
+working Windows dictation beta until hotkey + paste implementations land.
 
 Linux beta artifacts are still blocked — Linux is excluded from
 `.github/workflows/release.yml` until the rdev hotkey + paste paths are
@@ -123,23 +127,22 @@ validated on real X11 hardware.
 
 - **Real `hotkey` and `paste` implementations** for non-mac platforms.
   Today `src-tauri/src/hotkey.rs` and `src-tauri/src/paste.rs` ship
-  `Err("unsupported platform")` stubs off-mac. Win/Linux impls are
-  TASK-25 / TASK-26.
+  unsupported stubs off-mac. Win/Linux impls are TASK-25 / TASK-26.
 - **Linux Whisper sidecar**: upstream whisper.cpp does not publish a
   pre-built Linux binary. Either build from source in CI or ship a
   static binary in a separate prebuilds repo before re-enabling Linux
   in the release matrix.
-- **Rename helper extension**: `scripts/rename-artifact.mjs` only emits
-  `macos-arm64.dmg` today. Adding Windows (`-windows-x64-setup.exe`) and
-  Linux (`-linux-x64.AppImage`) outputs is straightforward once the
-  source paths produced by `tauri build` on those targets are known.
+- **Linux artifact rename path**: `scripts/rename-artifact.mjs` handles macOS
+  and Windows today. Linux (`-linux-x64.AppImage`) can be added once the source
+  paths produced by `tauri build` on that target are known.
 
 ## Release build (signed + notarized)
 
-The default `npm run package` build is ad-hoc signed
+The default `npm run package` build is unsigned/ad-hoc
 (`signingIdentity: "-"` in `src-tauri/tauri.conf.json`) and is fine for
-the developer's own machine. Any Mac that has not run TurboTalk before
-will refuse to launch it:
+the developer's own machine. Downloaded artifacts from GitHub carry Apple's
+quarantine flag; any Mac that has not run TurboTalk before may refuse to launch
+it:
 
 > "Turbo Talk" cannot be opened because the developer cannot be verified.
 
@@ -234,7 +237,7 @@ waiting on Apple, not stuck.
 Expected output (same path as the dev build):
 
 ```
-dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg
+dist-artifacts/TurboTalk-<version>-macos-arm64.dmg
 ```
 
 ### Verify the result
@@ -244,10 +247,10 @@ Run these on the build machine **before** sending the DMG to anyone:
 ```bash
 # Verifies the DMG itself is signed and notarized.
 spctl -a -t open --context context:primary-signature -v \
-  dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg
+  dist-artifacts/TurboTalk-<version>-macos-arm64.dmg
 
 # Verifies the .app inside the DMG (mount the DMG first).
-hdiutil attach dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg
+hdiutil attach dist-artifacts/TurboTalk-<version>-macos-arm64.dmg
 spctl -a -vv "/Volumes/Turbo Talk/Turbo Talk.app"
 codesign -dv --verbose=4 "/Volumes/Turbo Talk/Turbo Talk.app"
 hdiutil detach "/Volumes/Turbo Talk"
@@ -256,12 +259,12 @@ hdiutil detach "/Volumes/Turbo Talk"
 Healthy `spctl` output for the DMG looks like:
 
 ```
-dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg: accepted
+dist-artifacts/TurboTalk-<version>-macos-arm64.dmg: accepted
 source=Notarized Developer ID
 ```
 
 If you see `source=Developer ID` (no "Notarized"), the staple failed —
-re-run `xcrun stapler staple dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg`
+re-run `xcrun stapler staple dist-artifacts/TurboTalk-<version>-macos-arm64.dmg`
 and re-verify.
 
 If you see `rejected`, the cert chain is bad or the notary submission

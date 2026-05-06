@@ -19,15 +19,21 @@ confirmed again by user during v0.8 beta prep on 2026-05-03:
 
 Proof: `[audio] wrote 42240 samples` (1.76s voice), transcript landed in Notes.app.
 
-## v0.8 beta packaging status — confirmed 2026-05-04
+## v0.8 beta packaging status — updated 2026-05-06
 
 - `npm run package` builds the production frontend, release Rust binary,
   `Turbo Talk.app`, and macOS arm64 DMG.
 - v0.8 intentionally skips Apple Developer credentials, so the beta is
-  ad-hoc signed and not notarized.
-- The final canonical artifact exists at
-  `dist-artifacts/TurboTalk-0.8.0-macos-arm64.dmg` with a matching `.sha256`;
-  `shasum -a 256 -c` passes when run from `dist-artifacts/`.
+  unsigned/ad-hoc and not notarized.
+- Local `TurboTalk-0.8.6-macos-arm64.dmg.sha256` verifies. The `v0.8.6`
+  tag points at commit `352a251`; GitHub Actions release run 25414134047
+  completed successfully. The `v0.8.6` beta is published as a GitHub
+  prerelease with macOS arm64 and Windows x64 artifacts. macOS is the usable
+  beta path; Windows remains packaging-only until hotkey + paste land.
+- A GitHub-downloaded macOS artifact is quarantined by macOS and may show
+  "Apple could not verify Turbo Talk.app" on normal double-click. That is
+  expected until Developer ID signing + notarization land; use right-click
+  Open / Privacy & Security → Open Anyway for this beta.
 - Packaged app diagnostics confirmed microphone input works, model exists, and
   the bundled sidecar resolves from
   `/Applications/Turbo Talk.app/Contents/MacOS/whisper-cli`.
@@ -89,7 +95,7 @@ Proof: `[audio] wrote 42240 samples` (1.76s voice), transcript landed in Notes.a
 - **rdev dropped** — macOS 26 enforces `dispatch_assert_queue` on TSM APIs; rdev crashes
   on its background thread. Replaced with direct `CGEventTap` via `core-graphics 0.24`.
   Right Option detected by keycode 0x3D + `CGEventFlagAlternate` only — no TSM call.
-- **Homebrew whisper-cpp** — Metal-accelerated, not bundled as Tauri sidecar yet (M2).
+- **Bundled whisper.cpp sidecar** — macOS arm64 sidecar is committed; Windows x64 sidecar is fetched in packaging from pinned upstream whisper.cpp v1.8.4; Linux sidecar is still absent.
 - **Default model: ggml-large-v3-turbo** — 1.6 GB, multilingual, fast. Onboarding downloads it on first run; surfaced as "Recommended" in the Models tab. Earlier M0/M1 work used ggml-base.en (141 MB, ~130 ms on M4); the tiny model was rejected outright (stub weights in brew bundle).
 
 ## Tauri config rationale
