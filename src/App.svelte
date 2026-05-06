@@ -16,13 +16,12 @@
     { value: 'control',         label: 'Control ⌃' },
     { value: 'command',         label: 'Command ⌘' },
     { value: 'shift',           label: 'Shift ⇧' },
-    { category: 'Numpad' },
-    { value: 'numpad_enter',    label: 'Num Enter' },
-    { value: 'numpad_0',        label: 'Num 0' },
-    { value: 'numpad_decimal',  label: 'Num .' },
-    { value: 'numpad_add',      label: 'Num +' },
-    { value: 'numpad_subtract', label: 'Num −' },
-    { value: 'numpad_multiply', label: 'Num *' },
+    { value: 'numpad_enter',    label: 'Enter' },
+    { value: 'numpad_0',        label: '0' },
+    { value: 'numpad_decimal',  label: '.' },
+    { value: 'numpad_add',      label: '+' },
+    { value: 'numpad_subtract', label: '−' },
+    { value: 'numpad_multiply', label: '*' },
   ];
 
   const HISTORY_AUTO_DELETE_ITEMS = [
@@ -238,6 +237,12 @@ Reply with only the single word, lowercase, no punctuation.
 
   // Ref to the outermost div — used to measure total natural content height.
   let outerEl = $state(null);
+  // Ref to the settings tab inner content div — used for exact-fit height.
+  // The outer div has flex-1 which collapses in an unconstrained container,
+  // so we measure the inner div directly and add fixed chrome heights.
+  let settingsInnerEl = $state(null);
+  // h-10 titlebar + h-7 bottom bar = 68px of fixed chrome
+  const SETTINGS_CHROME_H = 68;
 
   const WINDOW_W  = 440;
 
@@ -579,7 +584,13 @@ Reply with only the single word, lowercase, no punctuation.
         settingsH = outerEl.scrollHeight;
       }
     });
-    if (tab === 'settings') openSettings();
+    if (tab === 'settings') openSettings().then(async () => {
+      await tick();
+      await new Promise(r => requestAnimationFrame(r));
+      if (settingsInnerEl) {
+        settingsTabH = settingsInnerEl.scrollHeight + SETTINGS_CHROME_H;
+      }
+    });
   }
 
   onMount(async () => {
@@ -625,12 +636,16 @@ Reply with only the single word, lowercase, no punctuation.
     await new Promise(r => requestAnimationFrame(r));
     const measuredModelsH = outerEl ? outerEl.scrollHeight : 0;
 
-    // 4. Settings tab (single-column, height depends on how many sections are visible)
+    // 4. Settings tab — measure the inner content div directly.
+    // The outer div has flex-1 which collapses in an unconstrained container,
+    // so outerEl.scrollHeight under-counts; inner div's scrollHeight is reliable.
     activeTab = 'settings';
     await openSettings();
     await tick();
     await new Promise(r => requestAnimationFrame(r));
-    const measuredSettingsTabH = outerEl ? outerEl.scrollHeight : 0;
+    const measuredSettingsTabH = settingsInnerEl
+      ? settingsInnerEl.scrollHeight + SETTINGS_CHROME_H
+      : outerEl ? outerEl.scrollHeight : 0;
 
     // Commit all heights — this activates the h-full constraint hereafter.
     if (measuredChaperoneH)    settingsH    = measuredChaperoneH;
@@ -1335,7 +1350,7 @@ Reply with only the single word, lowercase, no punctuation.
   <!-- Settings tab -->
   {#if activeTab === 'settings'}
     <div class="flex-1 min-h-0 overflow-y-auto text-[12px]">
-      <div class="px-4 py-3 space-y-3">
+      <div bind:this={settingsInnerEl} class="px-4 py-3 space-y-3">
 
         <!-- Hotkey: side tabs + key dropdown on same row -->
         <div class="space-y-1">
