@@ -282,6 +282,12 @@ impl TranscriptionWorker {
 
         // Poll until the server is ready (up to 30 s, 150 × 200 ms).
         // large-v3-turbo (1.5 GB) can take 5-10 s to load on first cold start.
+        // Use a short per-request timeout so a half-open TCP connection (server
+        // accepting but not yet responding) doesn't stall the entire poll loop.
+        let poll_client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_millis(400))
+            .build()
+            .unwrap_or_default();
         let http_client = reqwest::blocking::Client::new();
         let base_url = format!("http://127.0.0.1:{}", port);
         let mut ready = false;
@@ -291,7 +297,7 @@ impl TranscriptionWorker {
                 "[transcribe] whisper-server readiness poll attempt {}",
                 attempt + 1
             );
-            if http_client.get(&base_url).send().is_ok() {
+            if poll_client.get(&base_url).send().is_ok() {
                 ready = true;
                 break;
             }
