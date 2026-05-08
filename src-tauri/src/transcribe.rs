@@ -340,7 +340,9 @@ impl TranscriptionWorker {
         })?;
         let _ = std::fs::remove_file(&txt_path);
 
-        Ok(text.trim().to_string())
+        let trimmed = text.trim().to_string();
+        tracing::info!("[transcribe] transcript: {:?}", trimmed);
+        Ok(trimmed)
     }
 
     /// Kill any active whisper-cli subprocess. Best-effort: if the process has

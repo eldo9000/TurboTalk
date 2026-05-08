@@ -732,7 +732,15 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt::init();
+    let file_appender = tracing_appender::rolling::never("/tmp", "turbotalk-bench.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+    let filter = tracing_subscriber::EnvFilter::new("turbotalk_lib=info,warn");
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .with(tracing_subscriber::fmt::layer().with_writer(non_blocking).with_ansi(false))
+        .init();
 
     // ── Typed Rust↔TS contract ─────────────────────────────────────────────
     // Every command crossing the IPC boundary that the frontend talks to is
