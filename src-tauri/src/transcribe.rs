@@ -232,7 +232,9 @@ impl TranscriptionWorker {
         // Flags tuned for short-form push-to-talk dictation (not long-form transcription):
         //   -mc 0            max-context 0 = don't carry prior-segment text into decoding
         //                    (whisper.cpp's equivalent of OpenAI Whisper's --no-context)
-        //   --beam-size 5    moderate bump from default 1; better short-utterance accuracy
+        //   --beam-size 1    greedy decode; set alongside --best-of 1 for true greedy
+        //   --best-of 1      required for true greedy — default best_of=5 would still run
+        //                    5 candidate decodes even with beam-size 1
         //   --temperature 0  deterministic decoding; whisper.cpp still falls back internally on no-speech
         //   --suppress-nst   suppress non-speech tokens (e.g. <|nospeech|>); pairs with VAD
         // The user-editable `cleanup.vocabulary` (already used by the Chaperone classifier) is
@@ -250,7 +252,9 @@ impl TranscriptionWorker {
             "-mc".into(),
             "0".into(),
             "--beam-size".into(),
-            "5".into(),
+            "1".into(),
+            "--best-of".into(),
+            "1".into(),
             "--temperature".into(),
             "0".into(),
             "--suppress-nst".into(),
