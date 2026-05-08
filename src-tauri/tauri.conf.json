@@ -50,7 +50,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/whisper-cli"],
+    "externalBin": ["binaries/whisper-cli", "binaries/whisper-server"],
     "macOS": {
       "signingIdentity": "-",
       "hardenedRuntime": true,

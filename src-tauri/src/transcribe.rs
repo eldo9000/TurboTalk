@@ -1,26 +1,16 @@
-// Spawns whisper-cli, feeds it the WAV, reads back the transcript.
-// Output strategy: -otxt writes <wav_path>.wav.txt; we read and delete that file.
+// Spawns whisper-server as a long-lived sidecar, feeds it the WAV via HTTP
+// POST /inference, and reads back the JSON transcript.
 //
-// TASK-20 (option 3): the spawn lifecycle is wrapped in `TranscriptionWorker`
-// so callers go through one type with a `Mutex` enforcing the one-in-flight
-// invariant from TASK-14. The worker still spawns `whisper-cli` per call —
-// there is **no model warmup** in this option. Options 1 (`whisper-rs`) and
-// 2 (`whisper-server` long-lived sidecar) were both blocked on this host on
-// 2026-05-02:
-//   - Option 1: `cargo check` of `whisper-rs = "0.16"` (metal feature) hung
-//     in `whisper-rs-sys`'s build script for 300+ s, same `cmTC_*` cmake
-//     probe symptom as the original TASK-18 deferral. Repro confirmed.
-//   - Option 2: `whisper-server` is not bundled in `src-tauri/binaries/`,
-//     and downloading external binaries is out of scope for this task.
-// See `tasks/done/TASK-18-persistent-whisper-transcription-worker.md` for
-// full deferral evidence.
-use std::io::Read;
+// TASK-47: replace the per-call whisper-cli spawn (TASK-20 option 3) with a
+// persistent whisper-server that keeps the model loaded across dictations.
+// The server is spawned once per worker lifetime (one per model config); the
+// worker is cached in the process-wide WORKER slot and rebuilt only when the
+// model changes or after an abort.
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-/// Allowed roots for the whisper-cli binary:
+/// Allowed roots for the whisper binary:
 /// - the directory containing the running executable (release bundle sidecar)
 /// - the cargo target/ tree of this crate (dev builds)
 /// - the `src-tauri/binaries/` directory bundled at compile time (dev fallback)
@@ -59,15 +49,9 @@ fn is_allowed_whisper_path(p: &Path) -> bool {
     roots.iter().any(|root| canon.starts_with(root))
 }
 
-/// Build the list of candidate sidecar filenames to search for, in priority
-/// order. Tauri convention is to suffix the externalBin name with the target
-/// triple at bundle time (and `.exe` on Windows), so the per-target candidate
-/// matches what ends up in the release bundle. The unsuffixed `whisper-cli`
-/// candidate covers dev builds where the binary may have been dropped in
-/// `src-tauri/binaries/` without the triple suffix.
-///
-/// TARGET_TRIPLE is injected by `build.rs` from Cargo's `TARGET` build-script
-/// env var.
+/// Build the list of candidate sidecar filenames for whisper-cli, in priority
+/// order. Kept for path-validation tests.
+#[allow(dead_code)]
 fn sidecar_candidates() -> Vec<String> {
     let triple = env!("TARGET_TRIPLE");
     let exe_suffix = if triple.contains("windows") {
@@ -81,14 +65,28 @@ fn sidecar_candidates() -> Vec<String> {
     ]
 }
 
-/// Locate the whisper-cli binary.
+/// Build the list of candidate sidecar filenames for whisper-server, in
+/// priority order. Mirrors `sidecar_candidates()` but for the server binary.
+fn server_sidecar_candidates() -> Vec<String> {
+    let triple = env!("TARGET_TRIPLE");
+    let exe_suffix = if triple.contains("windows") {
+        ".exe"
+    } else {
+        ""
+    };
+    vec![
+        format!("whisper-server{}", exe_suffix),
+        format!("whisper-server-{}{}", triple, exe_suffix),
+    ]
+}
+
+/// Locate the whisper-cli binary (used only for path-validation tests; the
+/// live transcription path now uses `find_whisper_server`).
 /// Priority: bundled sidecar (next to exe) → dev binaries dir → configured path.
-/// The configured-path fallback is only honored if the path canonicalizes to
-/// a location inside an allowed root; otherwise an error is returned.
+#[allow(dead_code)]
 fn find_whisper(configured_bin: &str) -> anyhow::Result<PathBuf> {
     let sidecars = sidecar_candidates();
 
-    // Release bundle: sidecar is placed next to the main executable in Contents/MacOS/
     if let Ok(exe) = std::env::current_exe() {
         let parent = exe.parent().unwrap_or_else(|| Path::new("."));
         for sidecar in &sidecars {
@@ -100,7 +98,6 @@ fn find_whisper(configured_bin: &str) -> anyhow::Result<PathBuf> {
         }
     }
 
-    // Dev mode: sidecar lives in src-tauri/binaries/ at compile time
     for sidecar in &sidecars {
         let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("binaries")
@@ -111,8 +108,6 @@ fn find_whisper(configured_bin: &str) -> anyhow::Result<PathBuf> {
         }
     }
 
-    // Last resort: configured path. Validated against the allow-list to prevent
-    // arbitrary code execution via a tampered config.toml.
     let configured = PathBuf::from(configured_bin);
     if !configured.exists() || !is_allowed_whisper_path(&configured) {
         tracing::error!(
@@ -129,12 +124,58 @@ fn find_whisper(configured_bin: &str) -> anyhow::Result<PathBuf> {
     Ok(configured)
 }
 
+/// Locate the whisper-server binary.
+/// Priority: bundled sidecar (next to exe) → dev binaries dir → configured path.
+/// Mirrors `find_whisper` but uses server-binary name candidates.
+fn find_whisper_server(configured_bin: &str) -> anyhow::Result<PathBuf> {
+    let sidecars = server_sidecar_candidates();
+
+    // Release bundle: sidecar is placed next to the main executable in Contents/MacOS/
+    if let Ok(exe) = std::env::current_exe() {
+        let parent = exe.parent().unwrap_or_else(|| Path::new("."));
+        for sidecar in &sidecars {
+            let p = parent.join(sidecar);
+            if p.exists() {
+                tracing::debug!("[transcribe] using bundled whisper-server sidecar: {:?}", p);
+                return Ok(p);
+            }
+        }
+    }
+
+    // Dev mode: sidecar lives in src-tauri/binaries/ at compile time
+    for sidecar in &sidecars {
+        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries")
+            .join(sidecar);
+        if dev.exists() {
+            tracing::debug!("[transcribe] using dev whisper-server sidecar: {:?}", dev);
+            return Ok(dev);
+        }
+    }
+
+    // Last resort: configured path. Validated against the allow-list.
+    let configured = PathBuf::from(configured_bin);
+    if !configured.exists() || !is_allowed_whisper_path(&configured) {
+        tracing::error!(
+            "[transcribe] whisper-server sidecar not found (checked bundle and dev paths); \
+             configured bin: {}",
+            configured_bin
+        );
+        anyhow::bail!(
+            "whisper-server sidecar not found. Reinstall the app or check that whisper-server \
+             exists in the app bundle."
+        );
+    }
+    tracing::debug!("[transcribe] using configured whisper-server bin: {}", configured_bin);
+    Ok(configured)
+}
+
 /// Canonicalize `raw_model` and verify it lives inside `canon_models_dir`.
 /// Blocks `model = "/etc/passwd"` style attacks and symlink escapes from the
 /// models dir. Returns the canonicalized model path on success.
 ///
 /// Extracted from `run()` so unit tests can exercise the path-traversal
-/// guard against a temp dir without spawning whisper-cli.
+/// guard against a temp dir without spawning whisper.
 fn validate_model_path(raw_model: &str, canon_models_dir: &Path) -> anyhow::Result<PathBuf> {
     let canon_model = PathBuf::from(raw_model).canonicalize().map_err(|_| {
         anyhow::anyhow!(
@@ -151,43 +192,47 @@ fn validate_model_path(raw_model: &str, canon_models_dir: &Path) -> anyhow::Resu
     Ok(canon_model)
 }
 
-/// Lifecycle owner for whisper transcription. TASK-20 option 3: this struct
-/// holds the validated model path and prompt for the current configuration so
-/// callers don't re-run path validation per recording. The internal `Mutex`
-/// makes the one-in-flight invariant from TASK-14 explicit at the type level
-/// — any second concurrent caller blocks here rather than racing the spawn.
+/// Lifecycle owner for whisper transcription. TASK-47: this struct spawns a
+/// long-lived `whisper-server` process at construction time and reuses it for
+/// all subsequent `transcribe` calls — keeping the model warm across
+/// dictations and eliminating the per-call model-reload latency.
 ///
-/// **This implementation does NOT keep the whisper model warm.** Each
-/// `transcribe` call still spawns `whisper-cli` and reloads the model. Options
-/// 1 (`whisper-rs`) and 2 (`whisper-server`) were both blocked on this host
-/// on 2026-05-02 — see the module-level deferral note. A real warm worker
-/// remains future work; this struct is the seam where it will eventually
-/// plug in.
+/// The internal `spawn_lock` enforces the one-in-flight invariant from
+/// TASK-14: any second concurrent caller blocks here rather than racing the
+/// HTTP POST. `server_child` is protected by a separate `parking_lot::Mutex`
+/// so `abort()` can kill the server from another thread without taking the
+/// coarser `spawn_lock`.
 pub struct TranscriptionWorker {
-    /// Canonicalized whisper-cli binary path. Validated at construction.
+    /// whisper-server binary path. Validated at construction.
+    #[allow(dead_code)]
     bin: PathBuf,
     /// Canonicalized model path. Validated at construction; lives inside
     /// `~/.config/librewin/turbotalk/models/`.
     model: PathBuf,
     /// Vocabulary phrases passed to whisper as `--prompt`. Empty = no prompt.
+    /// Stored for future use when the server API supports per-request prompts.
+    #[allow(dead_code)]
     vocabulary: Vec<String>,
-    /// Spawn serialization. Held across the whole `transcribe` call so the
-    /// process tree can never have two whisper-cli instances at once.
-    /// (Option 3 has no warm context to protect, but this matches the shape
-    /// options 1 and 2 will need.)
+    /// Spawn serialization. Held across the whole `transcribe` call so there
+    /// is never more than one in-flight HTTP POST to the server at once.
     spawn_lock: Mutex<()>,
-    /// The active whisper-cli child process. Set immediately after `spawn()`
-    /// and cleared on completion. Allows `abort()` to kill the subprocess
-    /// mid-transcription (TASK-23).
-    active_child: parking_lot::Mutex<Option<std::process::Child>>,
+    /// The long-lived whisper-server child process. Set at construction,
+    /// cleared by `abort()` or the `Drop` impl.
+    server_child: parking_lot::Mutex<Option<std::process::Child>>,
+    /// Port the server is listening on.
+    server_port: u16,
+    /// Reusable HTTP client for POST /inference requests.
+    http_client: reqwest::blocking::Client,
 }
 
 impl TranscriptionWorker {
     /// Build a worker from a snapshot of the current settings. Validates the
-    /// binary path and the model path eagerly so a misconfigured `config.toml`
-    /// surfaces at construction time, not deep inside a spawn call.
+    /// binary path and the model path eagerly, then spawns `whisper-server`
+    /// and waits for it to become ready.
     pub fn from_config(cfg: &crate::settings::Config) -> anyhow::Result<Self> {
-        let bin = find_whisper(&cfg.whisper.bin)?;
+        // Use "whisper-server" as the default configured bin name; the
+        // find_whisper_server search resolves the actual path.
+        let bin = find_whisper_server("whisper-server")?;
         let canon_models_dir = crate::settings::canonical_models_dir().ok_or_else(|| {
             anyhow::anyhow!(
                 "models directory does not exist — create ~/.config/librewin/turbotalk/models/ \
@@ -195,12 +240,77 @@ impl TranscriptionWorker {
             )
         })?;
         let model = validate_model_path(&cfg.whisper.model, &canon_models_dir)?;
+
+        let model_str = model
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("model path is not valid UTF-8: {:?}", model))?
+            .to_string();
+
+        // Pick a random available port.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let port = listener.local_addr()?.port();
+        drop(listener); // free the port so whisper-server can bind it
+
+        // Compute GGML_BACKEND_PATH — same logic as the old per-call spawn.
+        let backend_dir: PathBuf = {
+            let bin_parent = bin.parent().unwrap_or_else(|| std::path::Path::new("."));
+            let resources_candidate = bin_parent.join("../Resources");
+            if resources_candidate.exists() {
+                resources_candidate
+            } else {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries")
+            }
+        };
+        tracing::debug!("[transcribe] GGML_BACKEND_PATH = {:?}", backend_dir);
+
+        // Spawn whisper-server. It will load the model and start listening.
+        let child = std::process::Command::new(&bin)
+            .args([
+                "-m",
+                &model_str,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                &port.to_string(),
+                "--inference-path",
+                "/inference",
+            ])
+            .env("GGML_BACKEND_PATH", &backend_dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+
+        // Poll until the server is ready (up to 3 s, 30 × 100 ms).
+        let http_client = reqwest::blocking::Client::new();
+        let base_url = format!("http://127.0.0.1:{}", port);
+        let mut ready = false;
+        for attempt in 0..30 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            tracing::debug!(
+                "[transcribe] whisper-server readiness poll attempt {}",
+                attempt + 1
+            );
+            if http_client.get(&base_url).send().is_ok() {
+                ready = true;
+                break;
+            }
+        }
+        if !ready {
+            anyhow::bail!(
+                "whisper-server did not become ready within 3 s on port {}",
+                port
+            );
+        }
+        tracing::info!("[transcribe] whisper-server ready on port {}", port);
+
         Ok(Self {
             bin,
             model,
             vocabulary: cfg.cleanup.vocabulary.clone(),
             spawn_lock: Mutex::new(()),
-            active_child: parking_lot::Mutex::new(None),
+            server_child: parking_lot::Mutex::new(Some(child)),
+            server_port: port,
+            http_client,
         })
     }
 
@@ -211,188 +321,62 @@ impl TranscriptionWorker {
         &self.model
     }
 
-    /// Run whisper-cli on `wav` and return the **raw** trimmed transcript text.
-    /// Holds `spawn_lock` for the whole call.
-    ///
-    /// TASK-23: uses `spawn()` + `wait_with_output()` (instead of `output()`)
-    /// so the active `Child` is stored in `self.active_child` while running.
-    /// This allows `abort()` to kill the subprocess from another thread.
-    /// Behavior on the happy path is identical to the prior `output()` approach.
+    /// POST the WAV file to `/inference` and return the **raw** trimmed
+    /// transcript text. Holds `spawn_lock` for the whole call.
     pub fn transcribe(&self, wav: &Path) -> anyhow::Result<String> {
         let _guard = self.spawn_lock.lock().unwrap_or_else(|e| e.into_inner());
 
-        let model_str = self
-            .model
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("model path is not valid UTF-8: {:?}", self.model))?;
-
-        // whisper-cli appends .txt to the full input filename: <wav>.wav.txt
-        let txt_path = PathBuf::from(format!("{}.txt", wav.display()));
-
-        // Flags tuned for short-form push-to-talk dictation (not long-form transcription):
-        //   -mc 0            max-context 0 = don't carry prior-segment text into decoding
-        //                    (whisper.cpp's equivalent of OpenAI Whisper's --no-context)
-        //   --beam-size 1    greedy decode; set alongside --best-of 1 for true greedy
-        //   --best-of 1      required for true greedy — default best_of=5 would still run
-        //                    5 candidate decodes even with beam-size 1
-        //   --temperature 0  deterministic decoding; whisper.cpp still falls back internally on no-speech
-        //   --suppress-nst   suppress non-speech tokens (e.g. <|nospeech|>); pairs with VAD
-        // The user-editable `cleanup.vocabulary` (already used by the Chaperone classifier) is
-        // also fed to whisper as `--prompt` to bias spelling of names/jargon/identifiers.
-        let mut args: Vec<String> = vec![
-            "-m".into(),
-            model_str.to_string(),
-            "-f".into(),
-            wav.to_str().unwrap().to_string(),
-            "-otxt".into(),
-            "-np".into(),
-            "-nt".into(),
-            "-l".into(),
-            "en".into(),
-            "-mc".into(),
-            "0".into(),
-            "--beam-size".into(),
-            "1".into(),
-            "--best-of".into(),
-            "1".into(),
-            "--temperature".into(),
-            "0".into(),
-            "--suppress-nst".into(),
-        ];
-        if !self.vocabulary.is_empty() {
-            args.push("--prompt".into());
-            args.push(self.vocabulary.join(", "));
-        }
-
-        // TASK-21: capture per-recording whisper subprocess wall time so we can
-        // compare it against the audio-finalization stage sum and decide whether
-        // the streaming finalizer in TASK-19 is worth implementing. The
-        // measurement brackets exactly the spawn → exit window — the model load
-        // and the actual decode are both inside it, which is what we want.
         let t_whisper_start = Instant::now();
 
-        // Compute the GGML backend search path so whisper-cli loads the bundled
-        // Metal backend instead of falling back to the hardcoded Homebrew path
-        // baked into libggml.0.dylib.
-        //
-        // The libggml.0.dylib bundled in src-tauri/binaries/ (version 0.10.1) has
-        // "/opt/homebrew/Cellar/ggml/0.10.1/libexec" as its compile-time default
-        // backend search path.  That path does not exist on a Homebrew-free Mac,
-        // so ggml would find no backends and fall back to a slow software path —
-        // or fail entirely.  Setting GGML_BACKEND_PATH overrides the default and
-        // points ggml at the .so files we bundle alongside the app.
-        //
-        // Path resolution:
-        //   dev:      self.bin lives in src-tauri/binaries/ → .so files are there too
-        //   packaged: self.bin lives in Contents/MacOS/whisper-cli,
-        //             Tauri bundles resources to Contents/Resources/,
-        //             so the .so files are one level up and over.
-        let backend_dir: std::path::PathBuf = {
-            let bin_parent = self.bin.parent().unwrap_or_else(|| std::path::Path::new("."));
-            let resources_candidate = bin_parent.join("../Resources");
-            if resources_candidate.exists() {
-                // Packaged .app: binary is in Contents/MacOS/, backends in Contents/Resources/
-                resources_candidate
-            } else {
-                // Dev: binary resolves to target/debug/; backends live in src-tauri/binaries/
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries")
-            }
-        };
-        tracing::debug!("[transcribe] GGML_BACKEND_PATH = {:?}", backend_dir);
+        let response = self
+            .http_client
+            .post(format!("http://127.0.0.1:{}/inference", self.server_port))
+            .multipart(reqwest::blocking::multipart::Form::new().file("file", wav)?)
+            .send()?;
 
-        // TASK-23: spawn the child and immediately store it in `active_child` so
-        // `abort()` can kill it mid-transcription. On completion we clear the slot.
-        let mut child = std::process::Command::new(&self.bin)
-            .args(&args)
-            .env("GGML_BACKEND_PATH", &backend_dir)
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        let stderr = child.stderr.take();
-        let stderr_reader = stderr.map(|mut stderr| {
-            std::thread::spawn(move || {
-                let mut buf = Vec::new();
-                let _ = stderr.read_to_end(&mut buf);
-                buf
-            })
-        });
-        *self.active_child.lock() = Some(child);
+        if !response.status().is_success() {
+            anyhow::bail!("whisper-server returned {}", response.status());
+        }
 
-        // Poll instead of `wait_with_output()` so `abort()` can take and kill
-        // the child while transcription is in flight.
-        let status = loop {
-            let maybe_status = {
-                let mut slot = self.active_child.lock();
-                let Some(child) = slot.as_mut() else {
-                    anyhow::bail!("Transcription cancelled.");
-                };
-                child.try_wait()?
-            };
-            if let Some(status) = maybe_status {
-                *self.active_child.lock() = None;
-                break status;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        };
-
-        let stderr = stderr_reader
-            .and_then(|h| h.join().ok())
-            .unwrap_or_default();
+        let json: serde_json::Value = response.json()?;
+        let text = json["text"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("whisper-server response missing 'text' field"))?
+            .trim()
+            .to_string();
 
         let whisper_ms = t_whisper_start.elapsed().as_millis();
         tracing::info!("[transcribe] whisper took {} ms", whisper_ms);
+        tracing::info!("[transcribe] transcript: {:?}", text);
 
-        // Even on exit-0, stderr can contain warnings ("argument not recognized") that
-        // explain why the .txt below is missing. Log it at debug; promote to warn if
-        // the next read fails.
-        if !stderr.is_empty() {
-            tracing::info!(
-                "[transcribe] whisper-cli stderr: {}",
-                String::from_utf8_lossy(&stderr)
-            );
-        }
-
-        if !status.success() {
-            let code = status.code().unwrap_or(-1);
-            anyhow::bail!(
-                "Transcription failed (whisper-cli error {}). Check that the model file is valid.",
-                code
-            );
-        }
-
-        let text = std::fs::read_to_string(&txt_path).map_err(|_| {
-            let stderr = String::from_utf8_lossy(&stderr);
-            anyhow::anyhow!(
-                "whisper output file not found: {:?}\n--- whisper-cli stderr ---\n{}",
-                txt_path,
-                stderr
-            )
-        })?;
-        let _ = std::fs::remove_file(&txt_path);
-
-        let trimmed = text.trim().to_string();
-        tracing::info!("[transcribe] transcript: {:?}", trimmed);
-        Ok(trimmed)
+        Ok(text)
     }
 
-    /// Kill any active whisper-cli subprocess. Best-effort: if the process has
-    /// already exited, or if the kill syscall fails for any reason, we log at
-    /// warn and move on. No-op if no transcription is currently in flight.
+    /// Kill the whisper-server subprocess. Best-effort: logs at warn on
+    /// failure. No-op if the server has already exited.
     ///
-    /// Called by `Recorder::cancel()` when the user triggers a cancel
-    /// while a recording is in the `Transcribing` state.
-    ///
-    /// The abort path is fully unit-testable — see the `abort_noop_when_idle`
-    /// test in the tests module below.
+    /// After `abort()` the worker is in a broken state — the caller must
+    /// rebuild. `abort_active()` calls `invalidate_worker()` after this.
     pub fn abort(&self) {
-        let mut slot = self.active_child.lock();
+        let mut slot = self.server_child.lock();
         if let Some(mut child) = slot.take() {
             if let Err(e) = child.kill() {
-                tracing::warn!("[transcribe] abort: child.kill() failed: {}", e);
+                tracing::warn!("[transcribe] abort: server kill() failed: {}", e);
             } else {
-                tracing::info!("[transcribe] abort: whisper-cli subprocess killed");
+                tracing::info!("[transcribe] abort: whisper-server subprocess killed");
             }
             let _ = child.wait();
+        }
+    }
+}
+
+impl Drop for TranscriptionWorker {
+    fn drop(&mut self) {
+        let mut slot = self.server_child.lock();
+        if let Some(mut child) = slot.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+            tracing::info!("[transcribe] whisper-server stopped");
         }
     }
 }
@@ -406,14 +390,17 @@ impl TranscriptionWorker {
 /// built (or invalidated)".
 static WORKER: Mutex<Option<std::sync::Arc<TranscriptionWorker>>> = Mutex::new(None);
 
-/// Abort any in-flight whisper-cli subprocess. Called by `Recorder::cancel()`
+/// Abort the in-flight whisper-server subprocess. Called by `Recorder::cancel()`
 /// when a cancel is triggered while in `Transcribing` state (TASK-23).
-/// If no worker is cached or no subprocess is active, this is a no-op.
+/// After killing the server, the cached worker is invalidated so the next
+/// dictation rebuilds it (and thus restarts the server).
 pub fn abort_active() {
     let slot = WORKER.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(worker) = &*slot {
         worker.abort();
     }
+    drop(slot); // release WORKER lock before calling invalidate_worker
+    invalidate_worker();
 }
 
 /// Drop the cached worker. Called by `settings::save` (via `lib.rs`) when the
@@ -430,7 +417,7 @@ pub fn invalidate_worker() {
 /// Get-or-build the worker against the current settings snapshot. If the
 /// cached worker's model differs from the current `cfg.whisper.model`, it is
 /// dropped and rebuilt. Returns an `Arc` so the spawn call can drop the outer
-/// mutex before the (potentially long) whisper invocation.
+/// mutex before the (potentially long) HTTP POST.
 fn worker_for(
     cfg: &crate::settings::Config,
 ) -> anyhow::Result<std::sync::Arc<TranscriptionWorker>> {
@@ -460,18 +447,16 @@ fn worker_for(
     Ok(fresh)
 }
 
-/// Run whisper-cli on `wav` and return the **raw** trimmed transcript text.
+/// Run whisper transcription on `wav` and return the **raw** trimmed transcript.
 ///
 /// This function is responsible only for the Whisper stage: locating the
-/// sidecar binary, validating the model path, spawning the process, and
-/// reading back the `.txt` output. It does **not** call `cleanup::process` —
-/// the caller is expected to drive the `Transcribing → Cleaning → Pasting`
-/// stages explicitly so each stage's latency is observable (TASK-15).
+/// sidecar binary, validating the model path, and sending the HTTP POST.
+/// It does **not** call `cleanup::process` — the caller drives the stages.
 ///
-/// TASK-20: routes through `TranscriptionWorker` for lifecycle ownership.
-/// On worker-build failure (e.g. invalid model path) the function returns
-/// the error directly — the cached worker remains absent so a fixed config
-/// is picked up on the next call.
+/// TASK-47: routes through `TranscriptionWorker` which keeps whisper-server
+/// alive across calls. On worker-build failure (e.g. invalid model path) the
+/// function returns the error directly — the cached worker remains absent so
+/// a fixed config is picked up on the next call.
 pub fn run_raw(wav: &Path) -> anyhow::Result<String> {
     let cfg = crate::settings::load();
     let worker = worker_for(&cfg)?;
@@ -624,25 +609,28 @@ mod tests {
     }
 
     // ----------------------------------------------------------------------
-    // TASK-23: TranscriptionWorker::abort() no-op test.
+    // TASK-47: TranscriptionWorker::abort() no-op test.
     //
-    // `abort()` on a worker with no active Child must return cleanly without
-    // panicking. We build a minimal worker directly (bypassing the model-path
-    // validation that `from_config` would run) to keep the test self-contained.
+    // `abort()` on a worker with no active server_child slot must return
+    // cleanly without panicking. We build a minimal worker directly (bypassing
+    // the server-spawn that `from_config` would run) to keep the test
+    // self-contained.
 
     #[test]
     fn abort_noop_when_idle() {
-        // Build a minimal worker with an empty active_child slot.
+        // Build a minimal worker with an empty server_child slot.
         let worker = TranscriptionWorker {
             bin: PathBuf::from("/nonexistent"),
             model: PathBuf::from("/nonexistent"),
             vocabulary: vec![],
             spawn_lock: Mutex::new(()),
-            active_child: parking_lot::Mutex::new(None),
+            server_child: parking_lot::Mutex::new(None),
+            server_port: 0,
+            http_client: reqwest::blocking::Client::new(),
         };
         // Must return cleanly, no panic.
         worker.abort();
         // Slot remains None.
-        assert!(worker.active_child.lock().is_none());
+        assert!(worker.server_child.lock().is_none());
     }
 }
