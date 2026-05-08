@@ -280,12 +280,13 @@ impl TranscriptionWorker {
             .stderr(std::process::Stdio::piped())
             .spawn()?;
 
-        // Poll until the server is ready (up to 3 s, 30 × 100 ms).
+        // Poll until the server is ready (up to 30 s, 150 × 200 ms).
+        // large-v3-turbo (1.5 GB) can take 5-10 s to load on first cold start.
         let http_client = reqwest::blocking::Client::new();
         let base_url = format!("http://127.0.0.1:{}", port);
         let mut ready = false;
-        for attempt in 0..30 {
-            std::thread::sleep(std::time::Duration::from_millis(100));
+        for attempt in 0..150 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
             tracing::debug!(
                 "[transcribe] whisper-server readiness poll attempt {}",
                 attempt + 1
@@ -297,7 +298,7 @@ impl TranscriptionWorker {
         }
         if !ready {
             anyhow::bail!(
-                "whisper-server did not become ready within 3 s on port {}",
+                "whisper-server did not become ready within 30 s on port {}",
                 port
             );
         }
