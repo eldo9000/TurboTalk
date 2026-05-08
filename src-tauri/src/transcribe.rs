@@ -290,12 +290,12 @@ impl TranscriptionWorker {
         let backend_dir: std::path::PathBuf = {
             let bin_parent = self.bin.parent().unwrap_or_else(|| std::path::Path::new("."));
             let resources_candidate = bin_parent.join("../Resources");
-            // In a packaged .app the Resources dir is a real directory.
-            // In dev (binaries/ dir) it does not exist, so we stay with bin_parent.
             if resources_candidate.exists() {
+                // Packaged .app: binary is in Contents/MacOS/, backends in Contents/Resources/
                 resources_candidate
             } else {
-                bin_parent.to_path_buf()
+                // Dev: binary resolves to target/debug/; backends live in src-tauri/binaries/
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries")
             }
         };
         tracing::debug!("[transcribe] GGML_BACKEND_PATH = {:?}", backend_dir);
@@ -346,7 +346,7 @@ impl TranscriptionWorker {
         // explain why the .txt below is missing. Log it at debug; promote to warn if
         // the next read fails.
         if !stderr.is_empty() {
-            tracing::debug!(
+            tracing::info!(
                 "[transcribe] whisper-cli stderr: {}",
                 String::from_utf8_lossy(&stderr)
             );
