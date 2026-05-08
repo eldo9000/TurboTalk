@@ -276,8 +276,8 @@ impl TranscriptionWorker {
                 "/inference",
             ])
             .env("GGML_BACKEND_PATH", &backend_dir)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .spawn()?;
 
         // Poll until the server is ready (up to 30 s, 150 × 200 ms).
