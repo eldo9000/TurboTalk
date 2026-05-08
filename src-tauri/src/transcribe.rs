@@ -271,10 +271,40 @@ impl TranscriptionWorker {
         // and the actual decode are both inside it, which is what we want.
         let t_whisper_start = Instant::now();
 
+        // Compute the GGML backend search path so whisper-cli loads the bundled
+        // Metal backend instead of falling back to the hardcoded Homebrew path
+        // baked into libggml.0.dylib.
+        //
+        // The libggml.0.dylib bundled in src-tauri/binaries/ (version 0.10.1) has
+        // "/opt/homebrew/Cellar/ggml/0.10.1/libexec" as its compile-time default
+        // backend search path.  That path does not exist on a Homebrew-free Mac,
+        // so ggml would find no backends and fall back to a slow software path —
+        // or fail entirely.  Setting GGML_BACKEND_PATH overrides the default and
+        // points ggml at the .so files we bundle alongside the app.
+        //
+        // Path resolution:
+        //   dev:      self.bin lives in src-tauri/binaries/ → .so files are there too
+        //   packaged: self.bin lives in Contents/MacOS/whisper-cli,
+        //             Tauri bundles resources to Contents/Resources/,
+        //             so the .so files are one level up and over.
+        let backend_dir: std::path::PathBuf = {
+            let bin_parent = self.bin.parent().unwrap_or_else(|| std::path::Path::new("."));
+            let resources_candidate = bin_parent.join("../Resources");
+            // In a packaged .app the Resources dir is a real directory.
+            // In dev (binaries/ dir) it does not exist, so we stay with bin_parent.
+            if resources_candidate.exists() {
+                resources_candidate
+            } else {
+                bin_parent.to_path_buf()
+            }
+        };
+        tracing::debug!("[transcribe] GGML_BACKEND_PATH = {:?}", backend_dir);
+
         // TASK-23: spawn the child and immediately store it in `active_child` so
         // `abort()` can kill it mid-transcription. On completion we clear the slot.
         let mut child = std::process::Command::new(&self.bin)
             .args(&args)
+            .env("GGML_BACKEND_PATH", &backend_dir)
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()?;
