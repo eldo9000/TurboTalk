@@ -196,6 +196,7 @@ Reply with only the single word, lowercase, no punctuation.
   const cfgBin             = 'auto';
   let cfgLaunchLogin       = $state(false);
   let cfgDevice            = $state('default');
+  let cfgMicWarmth         = $state(5); // 0 | 5 | 30 — see settings.audio.idle_timeout_secs
   let audioDevices         = $state([]);
   let settingsSaveMsg      = $state('');
   let cfgHotkeyKey         = $state('right_option');
@@ -543,6 +544,7 @@ Reply with only the single word, lowercase, no punctuation.
       commands.getLaunchAtLogin(),
     ]);
     cfgDevice            = cfg.audio?.device                   ?? 'default';
+    cfgMicWarmth         = cfg.audio?.idle_timeout_secs        ?? 5;
     cfgHotkeyKey         = cfg.hotkey?.key                     ?? 'right_option';
     cfgHotkeyMode        = cfg.hotkey?.mode                    ?? 'hold';
     cfgCancelOnEsc       = cfg.hotkey?.cancel_on_esc            ?? true;
@@ -567,10 +569,11 @@ Reply with only the single word, lowercase, no punctuation.
   async function saveSettings() {
     const cfg = await commands.getConfig();
     if (!cfg.whisper) cfg.whisper = { bin: 'auto', model: '', models: [] };
-    if (!cfg.audio)   cfg.audio   = { device: 'default' };
+    if (!cfg.audio)   cfg.audio   = { device: 'default', idle_timeout_secs: 5 };
     if (!cfg.hotkey)  cfg.hotkey  = { key: 'right_option', mode: 'hold', cancel_on_esc: true, cancel_on_hold: true };
     cfg.whisper.bin                   = cfgBin;
     cfg.audio.device                  = cfgDevice;
+    cfg.audio.idle_timeout_secs       = cfgMicWarmth;
     cfg.theme                         = cfgTheme;
     cfg.hotkey.key                    = cfgHotkeyKey;
     cfg.hotkey.mode                   = cfgHotkeyMode;
@@ -1453,6 +1456,23 @@ Reply with only the single word, lowercase, no punctuation.
               />
             </div>
           </div>
+        </div>
+
+        <!-- Mic warmth: how long the input stream stays open after a recording.
+             OFF restores normal system audio routing (YouTube/music) instantly
+             at the cost of a ~200 ms cold-start on the next press. -->
+        <div class="space-y-1">
+          <SectionLabel size="xs" class="!opacity-50">Mic warmth</SectionLabel>
+          <SegmentedControl
+            variant="filled"
+            options={[
+              { value: 0,  label: 'Off'  },
+              { value: 5,  label: '5s'   },
+              { value: 30, label: '30s'  },
+            ]}
+            value={cfgMicWarmth}
+            onchange={(v) => { cfgMicWarmth = v; saveSettings(); }}
+          />
         </div>
 
         <!-- Cancel shortcuts -->

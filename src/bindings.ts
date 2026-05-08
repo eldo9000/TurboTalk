@@ -114,6 +114,14 @@ export const commands = {
 /* Types */
 export type AudioConfig = {
 	device: string,
+	/**
+	 *  Mic warmth: how long the cpal input stream stays open after a recording
+	 *  ends, in seconds. Trade-off: warm = no CoreAudio cold-start on the next
+	 *  press (≈200 ms saved + pre-roll ring intact); cold = macOS restores
+	 *  normal system audio routing immediately (YouTube/music stops sounding
+	 *  like a phone call). 0 = OFF (close immediately on stop).
+	 */
+	idle_timeout_secs?: number,
 };
 
 export type CleanupConfig = {

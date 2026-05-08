@@ -144,6 +144,17 @@ pub fn default_classifier_prompt() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct AudioConfig {
     pub device: String,
+    /// Mic warmth: how long the cpal input stream stays open after a recording
+    /// ends, in seconds. Trade-off: warm = no CoreAudio cold-start on the next
+    /// press (≈200 ms saved + pre-roll ring intact); cold = macOS restores
+    /// normal system audio routing immediately (YouTube/music stops sounding
+    /// like a phone call). 0 = OFF (close immediately on stop).
+    #[serde(default = "default_idle_timeout_secs")]
+    pub idle_timeout_secs: u32,
+}
+
+fn default_idle_timeout_secs() -> u32 {
+    5
 }
 
 impl Default for WhisperConfig {
@@ -176,6 +187,7 @@ impl Default for AudioConfig {
     fn default() -> Self {
         Self {
             device: "default".into(),
+            idle_timeout_secs: default_idle_timeout_secs(),
         }
     }
 }

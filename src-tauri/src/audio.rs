@@ -50,15 +50,20 @@ const TARGET_BITS_PER_SAMPLE: u16 = 16;
 /// accidental key-taps. 100 ms ≈ 1600 samples at 16 kHz.
 const MIN_RECORDING_MS: u32 = 100;
 
-/// How long a warm cpal stream stays open after a recording ends before
-/// the watchdog closes it. Long enough to absorb back-to-back dictation
-/// (think: two-sentence corrections), short enough that the macOS mic
-/// indicator clears when the user steps away.
+/// Mic warmth — how long the cpal input stream stays open after a recording
+/// ends. Trade-off:
+///   - warm  → next press skips CoreAudio cold-start (~200 ms) and pre-roll
+///             ring stays primed for leading-word capture (TASK-37);
+///   - cold  → macOS immediately restores normal system audio routing
+///             (YouTube/music stops sounding like a phone call).
 ///
-/// Hardcoded for now — there is no user-facing setting. If feedback
-/// shows the value is wrong for real workflows, expose it via
-/// `settings.audio.idle_timeout_secs`.
-const IDLE_TIMEOUT: Duration = Duration::from_secs(45);
+/// User-controllable via `settings.audio.idle_timeout_secs`. Read on every
+/// `stop()` / `cancel()` so changes take effect on the next press without a
+/// restart. `0` means "close stream immediately" — handled inline in
+/// `stop()`/`cancel()`, not via the watchdog.
+fn idle_timeout_from_settings() -> Duration {
+    Duration::from_secs(crate::settings::load().audio.idle_timeout_secs as u64)
+}
 
 /// How often the idle watchdog wakes up to check whether the warm stream
 /// should be closed. 1 s is plenty — IDLE_TIMEOUT is in tens of seconds
@@ -828,12 +833,36 @@ impl AudioCapture {
             .expect("spawn capture-feeder thread")
     }
 
+    /// Arm the warm-stream close path according to the user's mic-warmth
+    /// setting. `0` (OFF) closes the stream synchronously here; any non-zero
+    /// value defers to the idle watchdog by setting `idle_close_at` to
+    /// `now + N seconds`. Pulled out so `stop()` and `cancel()` agree
+    /// bit-for-bit on the warm-vs-cold decision.
+    fn arm_or_close_warm_stream(&self) {
+        let timeout = idle_timeout_from_settings();
+        if timeout.is_zero() {
+            // OFF: drop the cpal stream immediately so macOS releases the
+            // input session and system audio routing returns to normal.
+            // This also clears the pre-roll ring; the next press pays
+            // the cold-start latency on purpose.
+            *self.warm_stream.lock() = None;
+            *self.warm_device_name.lock() = None;
+            self.preroll.lock().clear();
+            self.preroll_capacity.store(0, Ordering::SeqCst);
+            *self.idle_close_at.lock() = None;
+            tracing::info!("[audio] stream closed (mic warmth OFF)");
+        } else {
+            *self.idle_close_at.lock() = Some(Instant::now() + timeout);
+        }
+    }
+
     /// Cancel the in-flight recording. Tears down the per-recording
     /// streaming worker + feeder and clears the sample buffer, but
     /// leaves the cpal stream warm for the next press — unless the
     /// cancellation is itself the response to a device-lost event, in
     /// which case the stream is broken and we drop it. The idle
-    /// watchdog will close the warm stream after `IDLE_TIMEOUT`.
+    /// watchdog will close the warm stream after the configured mic
+    /// warmth (`settings.audio.idle_timeout_secs`).
     pub fn cancel(&self) {
         self.cancel_inner(false);
     }
@@ -876,9 +905,9 @@ impl AudioCapture {
         self.samples.lock().clear();
         self.level.store(0_f32.to_bits(), Ordering::Relaxed);
 
-        // Arm the idle watchdog so the warm stream (if any) closes
-        // after IDLE_TIMEOUT.
-        *self.idle_close_at.lock() = Some(Instant::now() + IDLE_TIMEOUT);
+        // Honour the mic-warmth setting: either arm the watchdog or close
+        // the warm stream right now (if `idle_timeout_secs == 0`).
+        self.arm_or_close_warm_stream();
 
         tracing::info!("[audio] recording cancelled");
     }
@@ -898,10 +927,9 @@ impl AudioCapture {
         std::thread::sleep(Duration::from_millis(25));
 
         let t_capture_clone_start = Instant::now();
-        // Read sample-rate / channels from the warm stream — but DO NOT
-        // drop it. Leaving it warm is the entire point of TASK-36; the
-        // idle watchdog is responsible for closing it after
-        // IDLE_TIMEOUT.
+        // Read sample-rate / channels from the warm stream. The mic-warmth
+        // block below decides whether to leave the stream warm (watchdog
+        // closes it after `idle_timeout_secs`) or drop it right now (OFF).
         let (src_sample_rate, src_channels) = {
             let warm = self.warm_stream.lock();
             match warm.as_ref() {
@@ -910,9 +938,22 @@ impl AudioCapture {
             }
         };
 
-        // Arm the idle watchdog so the warm stream closes after
-        // IDLE_TIMEOUT regardless of which return path we take below.
-        *self.idle_close_at.lock() = Some(Instant::now() + IDLE_TIMEOUT);
+        // Honour the mic-warmth setting. We've already snapshotted the
+        // stream's sample-rate / channels above, so it's safe to drop the
+        // warm stream right now if the user chose OFF — macOS will release
+        // the input session and system audio routing returns to normal
+        // before transcription even runs.
+        let warmth = idle_timeout_from_settings();
+        if warmth.is_zero() {
+            *self.warm_stream.lock() = None;
+            *self.warm_device_name.lock() = None;
+            self.preroll.lock().clear();
+            self.preroll_capacity.store(0, Ordering::SeqCst);
+            *self.idle_close_at.lock() = None;
+            tracing::info!("[audio] stream closed (mic warmth OFF)");
+        } else {
+            *self.idle_close_at.lock() = Some(Instant::now() + warmth);
+        }
 
         // Signal the capture-feeder to drain remaining samples and
         // exit, then join it. After this the streaming worker has
