@@ -261,7 +261,7 @@
               <div class="flex flex-col gap-1.5">
                 <div class="flex items-center justify-between text-[11px]">
                   <span class="font-mono truncate">{downloadingModel}</span>
-                  <span class="text-[var(--muted,#9a9a9a)]">{downloadPct}%</span>
+                  <span class="text-[var(--text-primary)]">{downloadPct}%</span>
                 </div>
                 <div class="h-1.5 rounded-full bg-[var(--border,#2a2a2a)] overflow-hidden">
                   <div class="h-full bg-[var(--accent)] transition-all" style="width: {downloadPct}%"></div>
