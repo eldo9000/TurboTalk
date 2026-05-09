@@ -374,6 +374,25 @@ impl TranscriptionWorker {
 
         let t_whisper_start = Instant::now();
 
+        // Pick audio_ctx based on actual WAV duration. 512 frames covers
+        // ~10 s; anything longer must use the full context (0 = all) or
+        // whisper silently truncates past the cap. TASK-44 benched 512 as
+        // 63% faster on ≤8 s utterances — keep that win for short dictation,
+        // fall back to full context for long sentences.
+        let effective_audio_ctx = match hound::WavReader::open(wav) {
+            Ok(r) => {
+                let spec = r.spec();
+                let secs = r.duration() as f32 / spec.sample_rate as f32;
+                if secs <= 8.0 {
+                    self.audio_ctx
+                } else {
+                    0
+                }
+            }
+            // Header read failed — be safe, use full context.
+            Err(_) => 0,
+        };
+
         let mut form = reqwest::blocking::multipart::Form::new()
             .file("file", wav)?
             // Anti-hallucination: temperature_inc=0 disables the temperature
@@ -385,8 +404,8 @@ impl TranscriptionWorker {
             .text("suppress_nst", "true")
             .text("no_context", "true")
             .text("beam_size", "5");
-        if self.audio_ctx > 0 {
-            form = form.text("audio_ctx", self.audio_ctx.to_string());
+        if effective_audio_ctx > 0 {
+            form = form.text("audio_ctx", effective_audio_ctx.to_string());
         }
         if !self.vocabulary.is_empty() {
             form = form.text("prompt", self.vocabulary.join(", "));
