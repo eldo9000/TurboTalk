@@ -125,10 +125,29 @@ fn find_whisper(configured_bin: &str) -> anyhow::Result<PathBuf> {
 }
 
 /// Locate the whisper-server binary.
-/// Priority: bundled sidecar (next to exe) → dev binaries dir → configured path.
-/// Mirrors `find_whisper` but uses server-binary name candidates.
+/// Priority: dev binaries dir → bundled sidecar (next to exe) → configured path.
+///
+/// IMPORTANT: `binaries/` is checked BEFORE `current_exe().parent()` because
+/// Tauri's dev build copies `whisper-server` (and stale `libggml`/`libwhisper`
+/// dylibs with `@rpath` install names) into `target/debug/`. When the Homebrew
+/// whisper-server binary loads, its rpath-relative libwhisper pulls in those
+/// stale dylibs alongside the Homebrew ones → two libggml instances → two
+/// `get_reg()` statics → `ggml_backend_dev_count()` returns 0 → GGML_ASSERT.
+/// Using the `binaries/` symlink → Homebrew binary sidesteps this entirely.
 fn find_whisper_server(configured_bin: &str) -> anyhow::Result<PathBuf> {
     let sidecars = server_sidecar_candidates();
+
+    // Dev mode: binaries/ symlink → Homebrew binary. Checked FIRST to avoid
+    // target/debug/ stale-dylib registry split (see comment above).
+    for sidecar in &sidecars {
+        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries")
+            .join(sidecar);
+        if dev.exists() {
+            tracing::debug!("[transcribe] using dev whisper-server sidecar: {:?}", dev);
+            return Ok(dev);
+        }
+    }
 
     // Release bundle: sidecar is placed next to the main executable in Contents/MacOS/
     if let Ok(exe) = std::env::current_exe() {
@@ -139,17 +158,6 @@ fn find_whisper_server(configured_bin: &str) -> anyhow::Result<PathBuf> {
                 tracing::debug!("[transcribe] using bundled whisper-server sidecar: {:?}", p);
                 return Ok(p);
             }
-        }
-    }
-
-    // Dev mode: sidecar lives in src-tauri/binaries/ at compile time
-    for sidecar in &sidecars {
-        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("binaries")
-            .join(sidecar);
-        if dev.exists() {
-            tracing::debug!("[transcribe] using dev whisper-server sidecar: {:?}", dev);
-            return Ok(dev);
         }
     }
 
@@ -251,34 +259,62 @@ impl TranscriptionWorker {
         let port = listener.local_addr()?.port();
         drop(listener); // free the port so whisper-server can bind it
 
-        // Compute GGML_BACKEND_PATH — same logic as the old per-call spawn.
-        let backend_dir: PathBuf = {
-            let bin_parent = bin.parent().unwrap_or_else(|| std::path::Path::new("."));
-            let resources_candidate = bin_parent.join("../Resources");
-            if resources_candidate.exists() {
-                resources_candidate
-            } else {
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries")
-            }
-        };
-        tracing::debug!("[transcribe] GGML_BACKEND_PATH = {:?}", backend_dir);
-
         // Spawn whisper-server. It will load the model and start listening.
-        let child = std::process::Command::new(&bin)
-            .args([
-                "-m",
-                &model_str,
-                "--host",
-                "127.0.0.1",
-                "--port",
-                &port.to_string(),
-                "--inference-path",
-                "/inference",
-            ])
-            .env("GGML_BACKEND_PATH", &backend_dir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()?;
+        // Stderr goes to a temp file so we can diagnose crashes without a
+        // pipe-deadlock (Stdio::piped + never reading = blocked server).
+        let stderr_stdio = std::fs::File::create("/tmp/whisper-server-stderr.log")
+            .map(std::process::Stdio::from)
+            .unwrap_or_else(|_| std::process::Stdio::null());
+        // Canonicalize so `_NSGetExecutablePath` in the child returns the real
+        // Homebrew path, not the binaries/ symlink. Combined with the
+        // `find_whisper_server` search order (binaries/ before target/debug/),
+        // this ensures only one libggml instance loads — the Homebrew one.
+        let real_bin = std::fs::canonicalize(&bin).unwrap_or_else(|_| bin.clone());
+        let mut cmd = std::process::Command::new(&real_bin);
+        cmd.args([
+            "-m",
+            &model_str,
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+            "--inference-path",
+            "/inference",
+        ])
+        .env_clear()
+        .stdout(std::process::Stdio::null())
+        .stderr(stderr_stdio);
+        for var in &["HOME", "PATH", "TMPDIR", "USER", "LOGNAME"] {
+            if let Ok(val) = std::env::var(var) {
+                cmd.env(var, val);
+            }
+        }
+        // SAFETY: setsid() is async-signal-safe and has no Rust invariants.
+        // It must be called after fork but before exec, which is exactly what
+        // pre_exec guarantees. Failure is intentionally ignored: setsid()
+        // returns EPERM if the process is already a group leader (harmless).
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            cmd.pre_exec(|| {
+                extern "C" {
+                    fn setsid() -> i32;
+                }
+                setsid();
+                Ok(())
+            });
+        }
+        let mut child = cmd.spawn()?;
+
+        // Quick early-exit check: if the process dies in the first 500 ms it's
+        // a binary/signature/ABI problem. Report the exit code immediately so
+        // we don't burn 30 s polling a dead process.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if let Ok(Some(status)) = child.try_wait() {
+            anyhow::bail!(
+                "whisper-server exited immediately (code {:?}) — check /tmp/whisper-server-stderr.log",
+                status.code()
+            );
+        }
 
         // Poll until the server is ready (up to 30 s, 150 × 200 ms).
         // large-v3-turbo (1.5 GB) can take 5-10 s to load on first cold start.
@@ -452,6 +488,19 @@ fn worker_for(
         fresh.model_path()
     );
     Ok(fresh)
+}
+
+/// Eagerly spawn the whisper-server worker at app startup so the model is warm
+/// before the first dictation and the diagnostic log exists immediately.
+/// Runs on a background thread; errors are logged, not surfaced.
+pub fn prewarm(cfg: crate::settings::Config) {
+    std::thread::spawn(move || {
+        tracing::info!("[transcribe] prewarming whisper-server worker");
+        match worker_for(&cfg) {
+            Ok(_) => tracing::info!("[transcribe] prewarm complete — worker ready"),
+            Err(e) => tracing::warn!("[transcribe] prewarm failed: {:#}", e),
+        }
+    });
 }
 
 /// Run whisper transcription on `wav` and return the **raw** trimmed transcript.

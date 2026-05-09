@@ -37,7 +37,7 @@ Dev port: **1428**. For a packaged DMG: `npm run package` (produces `dist-artifa
 
 ## Architecture
 
-See `ARCHITECTURE.md` for the full module plan. Key modules in `src-tauri/src/`:
+See `docs/ARCHITECTURE.md` for the full module plan. Key modules in `src-tauri/src/`:
 
 - `audio.rs` — mic capture via `cpal`; keeps stream warm between recordings (45s idle-close watchdog)
 - `recorder.rs` — 3-state machine (Ready / Recording / Transcribing)
