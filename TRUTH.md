@@ -8,16 +8,17 @@ What this project can honestly claim today. Updated when a claim changes.
 
 ## What works end-to-end
 
-**Full dictation loop** — confirmed 2026-05-01 on macOS 26.4.1 (Apple M4);
-confirmed again by user during v0.8 beta prep on 2026-05-03:
+**Full dictation loop with persistent whisper-server** — confirmed 2026-05-08 (TASK-47):
 
 1. Hold Right Alt → mic opens (<200ms), red dot pulses
 2. Speak → audio captured 24 kHz mono F32 via cpal
-3. Release Right Alt → whisper-cli runs the configured model via Metal (default: ggml-large-v3-turbo)
+3. Release Right Alt → WAV posted to persistent whisper-server (model stays loaded between dictations)
 4. Transcript appears in TurboTalk window AND is pasted into the focused app via Cmd+V
 5. Prior clipboard contents are restored after paste
 
-Proof: `[audio] wrote 42240 samples` (1.76s voice), transcript landed in Notes.app.
+Model warms at app startup via `prewarm()`. Second+ dictations skip the multi-second model reload.
+
+Previously confirmed 2026-05-01 / 2026-05-03 with per-call `whisper-cli` spawn (M0–M5).
 
 ## v0.8 beta packaging status — updated 2026-05-06
 

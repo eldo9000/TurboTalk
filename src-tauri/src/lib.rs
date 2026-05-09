@@ -971,6 +971,11 @@ pub fn run() {
 
             hotkey::spawn(recorder, tray_icon, app.handle().clone(), hotkey_state);
 
+            // Eagerly warm whisper-server so the model is loaded before the
+            // first dictation and /tmp/whisper-server-stderr.log exists at
+            // startup for diagnostics.
+            transcribe::prewarm(cfg.clone());
+
             Ok(())
         })
         // Close button hides to tray instead of quitting

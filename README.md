@@ -5,8 +5,8 @@ Free voice dictation for getting work done.
 ---
 
 <p align="center">
-  <img src="ss1.jpg" alt="TurboTalk screenshot 1" width="49%" />
-  <img src="ss2.jpg" alt="TurboTalk screenshot 2" width="49%" />
+  <img src="docs/assets/ss1.jpg" alt="TurboTalk screenshot 1" width="49%" />
+  <img src="docs/assets/ss2.jpg" alt="TurboTalk screenshot 2" width="49%" />
 </p>
 
 ---
