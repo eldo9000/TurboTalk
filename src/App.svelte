@@ -419,8 +419,10 @@ Reply with only the single word, lowercase, no punctuation.
     const { [m.name]: _removed, ...rest } = downloadProgress;
     downloadProgress = rest;
     if (res.status === 'error') {
-      modelsSaveMsg = 'Download failed: ' + res.error;
-      setTimeout(() => { modelsSaveMsg = ''; }, 5000);
+      if (res.error !== 'cancelled') {
+        modelsSaveMsg = 'Download failed: ' + res.error;
+        setTimeout(() => { modelsSaveMsg = ''; }, 5000);
+      }
       return;
     }
     const path = res.data;
@@ -1034,11 +1036,12 @@ Reply with only the single word, lowercase, no punctuation.
         <p class="text-[10px] mt-0.5 {m.warn ? 'text-orange-500 dark:text-yellow-400' : 'text-[var(--text-tertiary,#666)]'}">{m.description}</p>
       </div>
       {#if isDownloading}
-        <span class="shrink-0 text-[10px] text-[var(--accent)] tabular-nums w-7 text-right">{pct}%</span>
-        <button disabled
-          class="shrink-0 px-3 py-1 rounded text-[11px] font-medium border border-[var(--border)]
-                 text-[var(--text-secondary)] opacity-50 cursor-default whitespace-nowrap"
-        >↓ …</button>
+        <span class="shrink-0 text-[10px] text-[var(--text-primary)] tabular-nums w-7 text-right">{pct}%</span>
+        <button
+          onclick={() => commands.cancelDownload(m.name)}
+          class="shrink-0 px-3 py-1 rounded text-[11px] font-medium bg-red-500/15 border border-red-500/40
+                 text-red-400 hover:bg-red-500/25 transition-colors whitespace-nowrap"
+        >Cancel</button>
       {:else if !isInstalled}
         <button
           onclick={() => startDownload(m)}
@@ -1105,11 +1108,12 @@ Reply with only the single word, lowercase, no punctuation.
               <p class="text-[11px] text-[var(--text-secondary)] mt-1 leading-snug">{RECOMMENDED_MODEL.description}</p>
             </div>
             {#if rmIsDownloading}
-              <span class="shrink-0 text-[12px] text-[var(--accent)] tabular-nums w-9 text-right">{rmPct}%</span>
-              <button disabled
-                class="shrink-0 px-4 py-1.5 rounded-md text-[13px] font-medium border border-[var(--border)]
-                       text-[var(--text-secondary)] opacity-50 cursor-default whitespace-nowrap"
-              >↓ …</button>
+              <span class="shrink-0 text-[12px] text-[var(--text-primary)] tabular-nums w-9 text-right">{rmPct}%</span>
+              <button
+                onclick={() => commands.cancelDownload(RECOMMENDED_MODEL.name)}
+                class="shrink-0 px-4 py-1.5 rounded-md text-[13px] font-medium bg-red-500/15 border border-red-500/40
+                       text-red-400 hover:bg-red-500/25 transition-colors whitespace-nowrap"
+              >Cancel</button>
             {:else if !rmIsInstalled}
               <button
                 onclick={() => startDownload(RECOMMENDED_MODEL)}

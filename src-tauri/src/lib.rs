@@ -418,7 +418,11 @@ fn open_data_folder() -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
-async fn download_model(model_id: String, app: tauri::AppHandle) -> Result<String, String> {
+async fn download_model(
+    model_id: String,
+    app: tauri::AppHandle,
+    cancel_set: tauri::State<'_, DownloadCancelSet>,
+) -> Result<String, String> {
     use tokio::io::AsyncWriteExt;
 
     const MAX_MODEL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
@@ -512,6 +516,11 @@ async fn download_model(model_id: String, app: tauri::AppHandle) -> Result<Strin
     );
 
     loop {
+        if cancel_set.lock().remove(&model_id) {
+            drop(file);
+            let _ = tokio::fs::remove_file(&temp_file_path).await;
+            return Err("cancelled".into());
+        }
         match resp.chunk().await {
             Ok(Some(chunk)) => {
                 downloaded += chunk.len() as u64;
@@ -556,6 +565,12 @@ async fn download_model(model_id: String, app: tauri::AppHandle) -> Result<Strin
         return Err("download destination escaped models directory".into());
     }
     Ok(canonical.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+#[specta::specta]
+fn cancel_download(model_id: String, cancel_set: tauri::State<'_, DownloadCancelSet>) {
+    cancel_set.lock().insert(model_id);
 }
 
 #[tauri::command]
@@ -630,6 +645,7 @@ use std::sync::Arc;
 type HotkeyState = Arc<RwLock<settings::HotkeyConfig>>;
 type RecorderState = Arc<recorder::Recorder>;
 type TrayIconState = tauri::tray::TrayIcon;
+type DownloadCancelSet = parking_lot::Mutex<std::collections::HashSet<String>>;
 
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
@@ -709,6 +725,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         set_launch_at_login,
         list_audio_devices,
         download_model,
+        cancel_download,
         delete_model_file,
         load_history,
         save_history,
@@ -777,6 +794,7 @@ pub fn run() {
             set_launch_at_login,
             list_audio_devices,
             download_model,
+            cancel_download,
             delete_model_file,
             load_history,
             save_history,
@@ -968,6 +986,9 @@ pub fn run() {
             // `cancel_recording` command can reach them from the invoke handler.
             app.manage(recorder.clone());
             app.manage(tray_icon.clone());
+            app.manage(parking_lot::Mutex::new(
+                std::collections::HashSet::<String>::new(),
+            ) as DownloadCancelSet);
 
             hotkey::spawn(recorder, tray_icon, app.handle().clone(), hotkey_state);
 
