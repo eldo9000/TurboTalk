@@ -217,6 +217,13 @@ mod common {
             rec.cancel();
             let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
             emit_critical(&app, "recording-cancelled", ());
+            // If cancel killed the whisper-server (Transcribing → Ready path),
+            // the worker is now invalidated and READY is false. Re-warm so the
+            // next PTT press doesn't sit on the yellow tile waiting for a server
+            // that nobody restarted.
+            if !crate::transcribe::is_ready() {
+                crate::transcribe::prewarm(crate::settings::load(), app.clone());
+            }
         });
     }
 
