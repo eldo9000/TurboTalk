@@ -923,8 +923,9 @@ impl AudioCapture {
         let t_total_start = Instant::now();
 
         self.is_recording.store(false, Ordering::SeqCst);
-        // Let the last in-flight callback finish (CoreAudio buffer ≈ 10ms)
-        std::thread::sleep(Duration::from_millis(25));
+        // Let the last in-flight callback finish (CoreAudio buffer ≈ 10ms).
+        // Reduced from 25 ms — one full CoreAudio buffer cycle is sufficient margin.
+        std::thread::sleep(Duration::from_millis(10));
 
         let t_capture_clone_start = Instant::now();
         // Read sample-rate / channels from the warm stream. The mic-warmth
