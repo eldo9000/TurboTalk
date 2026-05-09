@@ -4,7 +4,11 @@
   import { getCurrentWindow, cursorPosition } from '@tauri-apps/api/window';
   import { commands } from './bindings.ts';
 
-  let mode      = $state('idle'); // 'idle' | 'recording' | 'transcribing'
+  // 'arming' = backend received the press but whisper-server hasn't finished
+  // loading yet. Pill chrome shows with a yellow border but the internals
+  // (canvas, label, word pills) are hidden — the user can see their press
+  // registered without being misled into speaking before capture starts.
+  let mode      = $state('idle'); // 'idle' | 'arming' | 'recording' | 'transcribing' | 'error'
   let canvasEl  = $state(null);
   let wordCount = $state(0);
 
@@ -112,6 +116,26 @@
     }, 100);
 
     const uns = [];
+
+    // Backend emits ptt-armed BEFORE ptt-down only when whisper-server is
+    // still loading (cold start). On the warm path ptt-down fires directly
+    // and the arming state is skipped entirely — no yellow flash.
+    listen('ptt-armed', () => {
+      levels = Array(HISTORY).fill(0);
+      speechFrames = 0;
+      wordCount = 0;
+      wordPills = [];
+      mode = 'arming';
+      draw();
+      setTimeout(() => { refreshHoverZone(); }, 200);
+    }).then(u => uns.push(u));
+
+    listen('ptt-arm-failed', () => {
+      clearInterval(transcribeTimer);
+      mode = 'error';
+      draw();
+      setTimeout(() => { mode = 'idle'; }, 2500);
+    }).then(u => uns.push(u));
 
     listen('ptt-down', () => {
       levels = Array(HISTORY).fill(0);
@@ -259,6 +283,20 @@
   .pill.transcribing {
     animation: pulse-yellow 10s ease-in-out infinite;
   }
+  /* Arming = press registered, whisper-server still loading. Steady yellow
+     border (no pulse) so it visually distinguishes from the transcribing
+     pulse. Internals (canvas, label, word pills) are hidden via the
+     .pill-inner.hidden rule below — only the chrome is visible. */
+  .pill.arming {
+    border-color: rgba(251, 191, 36, 0.85);
+  }
+  .pill-inner {
+    display: contents;
+    transition: opacity 120ms ease-out;
+  }
+  .pill-inner.hidden > * {
+    visibility: hidden;
+  }
 
   canvas { display: block; }
 
@@ -322,6 +360,7 @@
   <div
     class="pill flex items-center gap-3.5 px-5 py-3.5 rounded-2xl"
     class:show={mode !== 'idle'}
+    class:arming={mode === 'arming'}
     class:recording={mode === 'recording'}
     class:transcribing={mode === 'transcribing'}
     class:peek={isPeeking}
@@ -330,6 +369,7 @@
     style:-webkit-backdrop-filter={isPeeking ? 'blur(1px) saturate(100%)' : 'blur(18px) saturate(160%)'}
     style:opacity={mode === 'idle' ? 0 : isPeeking ? 0.24 : 1}
   >
+    <div class="pill-inner" class:hidden={mode === 'arming'}>
     <canvas
       bind:this={canvasEl}
       style="width: {CANVAS_W}px; height: {CANVAS_H}px;"
@@ -348,6 +388,7 @@
           ~{wordCount}w
         </span>
       {/if}
+    </div>
     </div>
 
   </div>

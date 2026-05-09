@@ -7,8 +7,11 @@
 // worker is cached in the process-wide WORKER slot and rebuilt only when the
 // model changes or after an abort.
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
+
+use tauri::Emitter;
 
 /// Allowed roots for the whisper binary:
 /// - the directory containing the running executable (release bundle sidecar)
@@ -488,12 +491,18 @@ pub fn abort_active() {
 /// Drop the cached worker. Called by `settings::save` (via `lib.rs`) when the
 /// user changes the model — the next `run_raw` will rebuild against the new
 /// config. Idempotent.
+///
+/// Also clears `READY` so the next PTT press shows the yellow arming tile
+/// while the new model loads, instead of lying that the (just-deleted) cache
+/// is still warm.
 pub fn invalidate_worker() {
     let mut slot = WORKER.lock().unwrap_or_else(|e| e.into_inner());
     if slot.is_some() {
         tracing::info!("[transcribe] worker invalidated");
     }
     *slot = None;
+    READY.store(false, Ordering::Release);
+    PREWARM_FAILED.store(false, Ordering::Release);
 }
 
 /// Get-or-build the worker against the current settings snapshot. If the
@@ -522,6 +531,8 @@ fn worker_for(
 
     let fresh = std::sync::Arc::new(TranscriptionWorker::from_config(cfg)?);
     *slot = Some(fresh.clone());
+    READY.store(true, Ordering::Release);
+    PREWARM_FAILED.store(false, Ordering::Release);
     tracing::info!(
         "[transcribe] worker built for model {:?}",
         fresh.model_path()
@@ -529,15 +540,62 @@ fn worker_for(
     Ok(fresh)
 }
 
+/// Process-wide whisper-server readiness flag. Flipped true exactly once when
+/// `prewarm` (or a lazy `worker_for` call) successfully loads the model. The
+/// hotkey arm-wait reads this to decide whether the first PTT press goes
+/// straight to the red recording UI or has to show the yellow "armed" tile
+/// while the model finishes loading.
+///
+/// Cleared by `invalidate_worker()` so a model swap (settings change) makes
+/// the next press wait again until the new model is loaded.
+static READY: AtomicBool = AtomicBool::new(false);
+
+/// True if the most recent prewarm attempt failed permanently (e.g. invalid
+/// model path, missing binary, port-bind failure). The hotkey arm-wait reads
+/// this to short-circuit instead of polling for 30 s on every press. Cleared
+/// when a successful build completes (e.g. after the user fixes the config).
+static PREWARM_FAILED: AtomicBool = AtomicBool::new(false);
+
+/// True if dictation is ready (whisper-server loaded). Cheap atomic load.
+pub fn is_ready() -> bool {
+    READY.load(Ordering::Acquire)
+}
+
+/// True if the last prewarm attempt failed and the worker is not loadable
+/// against the current settings. Cleared by a successful rebuild.
+pub fn prewarm_failed() -> bool {
+    PREWARM_FAILED.load(Ordering::Acquire)
+}
+
 /// Eagerly spawn the whisper-server worker at app startup so the model is warm
 /// before the first dictation and the diagnostic log exists immediately.
-/// Runs on a background thread; errors are logged, not surfaced.
-pub fn prewarm(cfg: crate::settings::Config) {
+/// Runs on a background thread; on success flips `READY` and emits the
+/// `dictation-ready` event so the overlay can drop the yellow arming tile if
+/// a press is currently waiting. On failure: emits `dictation-ready-failed`
+/// with the error message so the frontend can surface it.
+pub fn prewarm(cfg: crate::settings::Config, app: tauri::AppHandle) {
     std::thread::spawn(move || {
         tracing::info!("[transcribe] prewarming whisper-server worker");
         match worker_for(&cfg) {
-            Ok(_) => tracing::info!("[transcribe] prewarm complete — worker ready"),
-            Err(e) => tracing::warn!("[transcribe] prewarm failed: {:#}", e),
+            Ok(_) => {
+                READY.store(true, Ordering::Release);
+                PREWARM_FAILED.store(false, Ordering::Release);
+                tracing::info!("[transcribe] prewarm complete — worker ready");
+                if let Err(e) = app.emit("dictation-ready", ()) {
+                    tracing::warn!("[transcribe] failed to emit dictation-ready: {:?}", e);
+                }
+            }
+            Err(e) => {
+                PREWARM_FAILED.store(true, Ordering::Release);
+                let msg = format!("{:#}", e);
+                tracing::warn!("[transcribe] prewarm failed: {}", msg);
+                if let Err(emit_err) = app.emit("dictation-ready-failed", msg) {
+                    tracing::warn!(
+                        "[transcribe] failed to emit dictation-ready-failed: {:?}",
+                        emit_err
+                    );
+                }
+            }
         }
     });
 }
