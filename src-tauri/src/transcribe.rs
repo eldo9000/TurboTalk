@@ -231,6 +231,9 @@ pub struct TranscriptionWorker {
     server_port: u16,
     /// Reusable HTTP client for POST /inference requests.
     http_client: reqwest::blocking::Client,
+    /// audio_ctx sent per-request. 512 = ~10 s encoder window; benched at 63%
+    /// faster than default (1500) across short/medium/long utterances (TASK-44).
+    audio_ctx: u32,
 }
 
 impl TranscriptionWorker {
@@ -354,6 +357,7 @@ impl TranscriptionWorker {
             server_child: parking_lot::Mutex::new(Some(child)),
             server_port: port,
             http_client,
+            audio_ctx: 512,
         })
     }
 
@@ -371,10 +375,14 @@ impl TranscriptionWorker {
 
         let t_whisper_start = Instant::now();
 
+        let mut form = reqwest::blocking::multipart::Form::new().file("file", wav)?;
+        if self.audio_ctx > 0 {
+            form = form.text("audio_ctx", self.audio_ctx.to_string());
+        }
         let response = self
             .http_client
             .post(format!("http://127.0.0.1:{}/inference", self.server_port))
-            .multipart(reqwest::blocking::multipart::Form::new().file("file", wav)?)
+            .multipart(form)
             .send()?;
 
         if !response.status().is_success() {
@@ -683,6 +691,7 @@ mod tests {
             server_child: parking_lot::Mutex::new(None),
             server_port: 0,
             http_client: reqwest::blocking::Client::new(),
+            audio_ctx: 0,
         };
         // Must return cleanly, no panic.
         worker.abort();
