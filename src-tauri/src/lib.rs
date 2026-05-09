@@ -994,8 +994,9 @@ pub fn run() {
 
             // Eagerly warm whisper-server so the model is loaded before the
             // first dictation and /tmp/whisper-server-stderr.log exists at
-            // startup for diagnostics.
-            transcribe::prewarm(cfg.clone());
+            // startup for diagnostics. Emits `dictation-ready` on success so
+            // the overlay's arming-tile gate can release.
+            transcribe::prewarm(cfg.clone(), app.handle().clone());
 
             Ok(())
         })

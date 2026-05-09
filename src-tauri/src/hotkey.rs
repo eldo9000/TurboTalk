@@ -301,6 +301,78 @@ mod common {
                 emit_critical(&app, "dictation-busy", snapshot.to_string());
                 return;
             }
+
+            // Permanent prewarm failure — short-circuit instead of polling
+            // for 30 s. Surface the pre-existing failure so the overlay
+            // doesn't sit on the yellow tile waiting for a model that will
+            // never load this session.
+            if crate::transcribe::prewarm_failed() {
+                tracing::warn!("[hotkey] start ignored — whisper prewarm failed earlier");
+                emit_critical(
+                    &app,
+                    "ptt-arm-failed",
+                    "Dictation model failed to load. Check Settings.".to_string(),
+                );
+                return;
+            }
+
+            // Two-stage arm: when whisper-server is still loading, show the
+            // yellow "armed" tile (border only, no internals) until the model
+            // is ready. The audio stream is opened only after readiness so a
+            // user looking at the empty tile knows not to speak yet — the
+            // tile only fills (red border, canvas, word pills) once we're
+            // actually capturing.
+            if !crate::transcribe::is_ready() {
+                // Pin the overlay to the cursor's monitor up front so the
+                // arming tile never flashes on the wrong display.
+                crate::reposition_overlay_to_cursor_monitor(&app);
+                emit_critical(&app, "ptt-armed", ());
+                tracing::info!("[hotkey] arming — waiting for whisper-server readiness");
+
+                // Poll up to 30 s (matches whisper-server readiness budget
+                // in TranscriptionWorker::from_config). 50 ms tick gives
+                // sub-frame latency once READY flips. Bail early on:
+                //   - CANCEL_PENDING (user released key during the wait)
+                //   - PREWARM_FAILED (background thread reported failure)
+                //   - device_lost (mic disappeared mid-wait)
+                let deadline = std::time::Instant::now()
+                    + std::time::Duration::from_secs(30);
+                let mut ready = false;
+                let mut cancelled = false;
+                loop {
+                    if crate::transcribe::is_ready() {
+                        ready = true;
+                        break;
+                    }
+                    if crate::transcribe::prewarm_failed() {
+                        break;
+                    }
+                    if CANCEL_PENDING.swap(false, Ordering::AcqRel) {
+                        cancelled = true;
+                        break;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+
+                if cancelled {
+                    tracing::info!("[hotkey] arm cancelled — user released key during wait");
+                    emit_critical(&app, "recording-cancelled", ());
+                    return;
+                }
+                if !ready {
+                    tracing::warn!("[hotkey] arm timed out waiting for whisper-server");
+                    emit_critical(
+                        &app,
+                        "ptt-arm-failed",
+                        "Dictation model didn't load in time.".to_string(),
+                    );
+                    return;
+                }
+            }
+
             if let Err(e) = rec.start() {
                 // Race: state moved out of Ready between our snapshot and the
                 // start() call (e.g. another press won the lock first), or audio
@@ -315,6 +387,7 @@ mod common {
             if CANCEL_PENDING.swap(false, Ordering::AcqRel) {
                 rec.cancel();
                 let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                emit_critical(&app, "recording-cancelled", ());
                 return;
             }
 
@@ -337,6 +410,8 @@ mod common {
             let _ = tray.set_icon(Some(tray::make_icon(TrayState::Recording)));
             // Pin the overlay window to the cursor's monitor *before* emitting
             // ptt-down so the recording UI never flashes on the wrong display.
+            // The arming branch above already repositioned, but a second call
+            // is harmless (window position is set unconditionally).
             crate::reposition_overlay_to_cursor_monitor(&app);
             emit_critical(&app, "ptt-down", ());
             emit_stage(&app, job_id, "recording");

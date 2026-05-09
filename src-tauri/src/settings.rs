@@ -154,7 +154,13 @@ pub struct AudioConfig {
 }
 
 fn default_idle_timeout_secs() -> u32 {
-    5
+    // Default OFF: close the cpal input stream as soon as a recording ends so
+    // macOS restores normal system audio routing (Bluetooth A2DP, no orange
+    // mic dot). The UI control was removed in favour of always-cold; the
+    // field stays in `Config` for power users who want to re-enable warmth
+    // by editing config.toml directly. See `audio.rs::idle_timeout_from_settings`
+    // for the read site.
+    0
 }
 
 impl Default for WhisperConfig {
