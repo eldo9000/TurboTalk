@@ -650,7 +650,7 @@ type DownloadCancelSet = parking_lot::Mutex<std::collections::HashSet<String>>;
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager, WindowEvent,
+    Emitter, Manager, RunEvent, WindowEvent,
 };
 
 /// Position `win` directly below the mouse cursor, centered on it horizontally.
@@ -1006,8 +1006,17 @@ pub fn run() {
                 api.prevent_close();
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running TurboTalk");
+        .build(tauri::generate_context!())
+        .expect("error while building TurboTalk")
+        .run(|_app, event| {
+            // Kill the persistent whisper-server child on app exit. Statics
+            // do not run Drop on process termination, so without this the
+            // setsid'd child survives every quit and accumulates ~1.6 GB
+            // resident per leak.
+            if let RunEvent::Exit = event {
+                transcribe::abort_active();
+            }
+        });
 }
 
 #[cfg(test)]

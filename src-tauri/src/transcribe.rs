@@ -217,9 +217,8 @@ pub struct TranscriptionWorker {
     /// Canonicalized model path. Validated at construction; lives inside
     /// `~/.config/librewin/turbotalk/models/`.
     model: PathBuf,
-    /// Vocabulary phrases passed to whisper as `--prompt`. Empty = no prompt.
-    /// Stored for future use when the server API supports per-request prompts.
-    #[allow(dead_code)]
+    /// Vocabulary phrases joined and passed to whisper-server as the `prompt`
+    /// form field. Empty = no prompt.
     vocabulary: Vec<String>,
     /// Spawn serialization. Held across the whole `transcribe` call so there
     /// is never more than one in-flight HTTP POST to the server at once.
@@ -375,9 +374,22 @@ impl TranscriptionWorker {
 
         let t_whisper_start = Instant::now();
 
-        let mut form = reqwest::blocking::multipart::Form::new().file("file", wav)?;
+        let mut form = reqwest::blocking::multipart::Form::new()
+            .file("file", wav)?
+            // Anti-hallucination: temperature_inc=0 disables the temperature
+            // fallback retry that produces "same phrase 3x" repetition output
+            // on short or silent audio. Mirrors the old whisper-cli config
+            // (commit 55cfa21) lost during the TASK-47 server transition.
+            .text("temperature", "0.0")
+            .text("temperature_inc", "0.0")
+            .text("suppress_nst", "true")
+            .text("no_context", "true")
+            .text("beam_size", "5");
         if self.audio_ctx > 0 {
             form = form.text("audio_ctx", self.audio_ctx.to_string());
+        }
+        if !self.vocabulary.is_empty() {
+            form = form.text("prompt", self.vocabulary.join(", "));
         }
         let response = self
             .http_client
