@@ -73,6 +73,11 @@ fn save_config(
     // rebuild is cheap (path validation only — no model load) so we do not
     // try to detect "did anything actually change".
     transcribe::invalidate_worker();
+    // Eagerly rebuild against the new config in the background so the next
+    // PTT press doesn't have to sit on the yellow arming tile while the
+    // model loads. Mirrors the startup prewarm — same readiness semantics,
+    // same `dictation-ready` / `dictation-ready-failed` events.
+    transcribe::prewarm(cfg.clone(), app.clone());
     // Notify other windows (overlay) of UI-relevant config changes. The
     // overlay reads transcript_size_indicator and show_overlay on mount and
     // refreshes when this fires.
