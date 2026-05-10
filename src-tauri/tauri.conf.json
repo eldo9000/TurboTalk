@@ -22,7 +22,22 @@
         "resizable": false,
         "center": true,
         "transparent": false,
-        "skipTaskbar": true
+        "skipTaskbar": true,
+        "visible": false
+      },
+      {
+        "label": "splash",
+        "title": "",
+        "width": 360,
+        "height": 220,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "visible": false,
+        "resizable": false,
+        "skipTaskbar": true,
+        "center": true
       },
       {
         "label": "overlay",

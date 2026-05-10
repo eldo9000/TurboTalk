@@ -848,6 +848,7 @@ pub fn run() {
             )?;
             let show_item = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;
             let restart_item = MenuItem::with_id(app, "restart", "Restart", true, None::<&str>)?;
+            let rebuild_item = MenuItem::with_id(app, "rebuild", "Rebuild", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let sep1 = PredefinedMenuItem::separator(app)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
@@ -859,6 +860,7 @@ pub fn run() {
                     &show_item,
                     &sep2,
                     &restart_item,
+                    &rebuild_item,
                     &quit_item,
                 ],
             )?;
@@ -919,6 +921,23 @@ pub fn run() {
                         }
                     }
                     "restart" => app.restart(),
+                    "rebuild" => {
+                        let project_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .parent()
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| ".".to_string());
+                        std::process::Command::new("osascript")
+                            .args([
+                                "-e",
+                                &format!(
+                                    "tell application \"Terminal\"\n  activate\n  do script \"cd '{}' && npm run tauri dev\"\nend tell",
+                                    project_dir
+                                ),
+                            ])
+                            .spawn()
+                            .ok();
+                        app.exit(0);
+                    }
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -941,6 +960,79 @@ pub fn run() {
             // ── Shared hotkey state — updated live when settings are saved ──
             let hotkey_state: HotkeyState = Arc::new(RwLock::new(cfg.hotkey.clone()));
             app.manage(hotkey_state.clone());
+
+            // ── First-launch splash — shown once, then hidden forever ─────
+            // Window is pre-declared in tauri.conf.json (visible:false). On first
+            // launch we position it on the cursor's monitor and show it; on
+            // subsequent launches we close it immediately so it never accumulates.
+            if let Some(splash_win) = app.get_webview_window("splash") {
+                if !settings::has_shown_splash() {
+                    tracing::info!("[splash] first launch — positioning and showing");
+                    const SPLASH_W: f64 = 360.0;
+                    const SPLASH_H: f64 = 220.0;
+                    // Center on the cursor's monitor (same normalization as the
+                    // overlay). NSPanel quirk: demote alwaysOnTop before move,
+                    // restore after — identical to the overlay's workaround.
+                    #[cfg(target_os = "macos")]
+                    {
+                        use tauri::LogicalPosition;
+                        if let Ok(cursor) = app.handle().cursor_position() {
+                            let primary_scale = splash_win
+                                .primary_monitor()
+                                .ok()
+                                .flatten()
+                                .map(|m| m.scale_factor())
+                                .unwrap_or(1.0);
+                            let cx = cursor.x / primary_scale;
+                            let cy = cursor.y / primary_scale;
+                            if let Ok(monitors) = splash_win.available_monitors() {
+                                let monitor = monitors
+                                    .iter()
+                                    .find(|m| {
+                                        let p = m.position();
+                                        let s = m.size();
+                                        let lw = s.width as f64 / m.scale_factor();
+                                        let lh = s.height as f64 / m.scale_factor();
+                                        cx >= p.x as f64
+                                            && cx < p.x as f64 + lw
+                                            && cy >= p.y as f64
+                                            && cy < p.y as f64 + lh
+                                    })
+                                    .cloned()
+                                    .or_else(|| splash_win.primary_monitor().ok().flatten());
+                                if let Some(m) = monitor {
+                                    let mp = m.position();
+                                    let ms = m.size();
+                                    let scale = m.scale_factor();
+                                    let mw = ms.width as f64 / scale;
+                                    let mh = ms.height as f64 / scale;
+                                    let x = mp.x as f64 + (mw - SPLASH_W) / 2.0;
+                                    let y = mp.y as f64 + (mh - SPLASH_H) / 2.0;
+                                    tracing::info!(
+                                        "[splash] centering at logical=({:.0},{:.0}) monitor pos=({},{})",
+                                        x, y, mp.x, mp.y
+                                    );
+                                    let _ = splash_win.set_always_on_top(false);
+                                    let _ = splash_win.set_position(LogicalPosition::new(x, y));
+                                    let _ = splash_win.set_always_on_top(true);
+                                }
+                            }
+                        }
+                    }
+                    let _ = splash_win.show();
+                    let app_h = app.handle().clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        if let Some(w) = app_h.get_webview_window("splash") {
+                            let _ = w.close();
+                        }
+                        settings::mark_splash_shown();
+                    });
+                } else {
+                    tracing::info!("[splash] not first launch — closing pre-loaded window");
+                    let _ = splash_win.close();
+                }
+            }
 
             // ── Main window — position below cursor at launch ─────────────
             if let Some(win) = app.get_webview_window("main") {
