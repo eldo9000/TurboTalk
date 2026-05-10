@@ -71,6 +71,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender   = "0.2"
 tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 tempfile        = "3"
 
 # Typed Rust↔TS config contract. `specta::Type` is derived on every type

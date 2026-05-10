@@ -1,104 +1,367 @@
-# =============================================================================
-# TurboTalk — Unsigned Beta Release Pipeline
-# =============================================================================
+# TurboTalk — Release pipeline (macOS arm64 only)
 #
-# Builds unsigned beta artifacts for macOS (arm64) and Windows (x64) on
-# tag push (v*), uploads them as workflow artifacts, and attaches them to
-# a draft GitHub release.
+# Builds, ad-hoc signs, repacks, and re-signs the updater tarball so the
+# embedded pubkey in tauri.conf.json can verify it. Generates latest.json
+# and creates a GitHub release on tag push.
 #
-# UNSIGNED. This is a personal-use beta — no Apple, Windows, or Linux
-# trust-chain credentials are referenced anywhere below.
-#
-# Linux is intentionally excluded from this release. Add it back to the
-# matrix when the Linux runtime path (rdev under X11, AppImage system
-# deps) has been validated on real hardware.
-#
-# Whisper sidecar:
-#   - macOS arm64 binary is committed under src-tauri/binaries/.
-#   - Windows binary + companion DLLs are downloaded from the upstream
-#     whisper.cpp release zip via `npm run fetch-sidecars`. Pinned and
-#     sha256-verified inside the script. See scripts/fetch-sidecars.mjs.
-#
-# Manual `workflow_dispatch` runs build but do NOT publish a release.
-# =============================================================================
+# BEFORE FIRST USE:
+#   1. Run: npx tauri signer generate -w ~/.tauri/turbotalk.key
+#   2. Add TAURI_SIGNING_PRIVATE_KEY to GitHub repo secrets:
+#        base64 -i ~/.tauri/turbotalk.key | tr -d '\n'
+#   3. Add TAURI_SIGNING_PRIVATE_KEY_PASSWORD (empty string if no passphrase)
+#   4. Copy the public key output and replace PLACEHOLDER_REPLACE_WITH_TAURI_PUBKEY_AFTER_npx_tauri_signer_generate
+#      in src-tauri/tauri.conf.json
+#   5. Add LIBRE_APPS_TOKEN (fine-grained PAT, Contents:Read on eldo9000/Libre-Apps)
 
-name: release
+name: Release
 
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.8.7). Must already exist.'
+        required: true
+        type: string
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   build:
-    name: build (${{ matrix.target_label }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            target_label: macos-arm64
-          - os: windows-latest
-            target_label: windows-x64
+    name: Build (darwin-aarch64)
+    runs-on: macos-14
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      _RAW_TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      _RAW_TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      tag: ${{ steps.tag.outputs.tag }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decode signing key from armored secret
+        # TAURI_SIGNING_PRIVATE_KEY must be: base64 -i ~/.tauri/turbotalk.key | tr -d '\n'
+        run: |
+          set -euo pipefail
+          if [ -z "${_RAW_TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is not set."
+            exit 1
+          fi
+          KEY_FILE="$RUNNER_TEMP/turbotalk-signing.key"
+          if ! printf '%s' "$_RAW_TAURI_SIGNING_PRIVATE_KEY" | base64 --decode > "$KEY_FILE" 2>/tmp/b64err; then
+            echo "::error::Could not base64-decode TAURI_SIGNING_PRIVATE_KEY."
+            cat /tmp/b64err
+            exit 1
+          fi
+          chmod 600 "$KEY_FILE"
+          KEY_LEN=$(wc -c < "$KEY_FILE" | tr -d ' ')
+          echo "decoded key length: $KEY_LEN bytes (expected 348)"
+          CLEAN_PW=$(printf '%s' "${_RAW_TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" | tr -d '\r\n')
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY=$KEY_FILE"
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$CLEAN_PW"
+            echo "TT_SIGNING_KEY_FILE=$KEY_FILE"
+          } >> "$GITHUB_ENV"
+
+      - name: Resolve tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::could not determine tag"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          VERSION_BASE="${VERSION%%-*}"
+          echo "tag=$TAG"                   >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION"           >> "$GITHUB_OUTPUT"
+          echo "version_base=$VERSION_BASE" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag=$TAG version=$VERSION version_base=$VERSION_BASE"
+
+      - name: Verify tag matches tauri.conf.json version
+        run: |
+          CONF_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          TAG_VERSION_BASE="${{ steps.tag.outputs.version_base }}"
+          echo "tauri.conf.json version: $CONF_VERSION"
+          echo "tag base version:        $TAG_VERSION_BASE"
+          if [ "$CONF_VERSION" != "$TAG_VERSION_BASE" ]; then
+            echo "::error::tag base version ($TAG_VERSION_BASE) does not match src-tauri/tauri.conf.json version ($CONF_VERSION). Bump the config before tagging."
+            exit 1
+          fi
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: 22
+          cache: npm
 
-      - name: Install Rust toolchain
+      - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          targets: aarch64-apple-darwin
 
-      - name: Install npm dependencies
-        run: npm install
+      - name: Configure git auth for private cargo deps
+        env:
+          LIBRE_APPS_TOKEN: ${{ secrets.LIBRE_APPS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LIBRE_APPS_TOKEN:-}" ]; then
+            echo "::error::LIBRE_APPS_TOKEN secret is not set."
+            exit 1
+          fi
+          code=$(curl -sS -o /tmp/probe.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${LIBRE_APPS_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/eldo9000/Libre-Apps)
+          if [ "$code" != "200" ]; then
+            echo "::error::LIBRE_APPS_TOKEN cannot read eldo9000/Libre-Apps (HTTP $code)."
+            cat /tmp/probe.json
+            exit 1
+          fi
+          git config --global \
+            "url.https://oauth2:${LIBRE_APPS_TOKEN}@github.com/.insteadOf" \
+            "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
 
-      - name: Fetch Whisper sidecar
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: macos-cargo-aarch64-apple-darwin-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            macos-cargo-aarch64-apple-darwin-
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Fetch Whisper sidecars
         run: npm run fetch-sidecars
 
-      - name: Package
-        run: npm run package
+      - name: Build Tauri app
+        run: npm run tauri build -- --target aarch64-apple-darwin
 
-      - name: Upload artifact
+      - name: Locate macOS build output
+        id: mac_artifacts
+        run: |
+          set -euo pipefail
+          V='${{ steps.tag.outputs.version_base }}'
+          BUNDLE_DIR="src-tauri/target/aarch64-apple-darwin/release/bundle"
+          APP_PATH="$BUNDLE_DIR/macos/TurboTalk.app"
+          # Tauri uses productName (with space) for the app bundle but strips
+          # spaces for the filename in some versions — probe both.
+          if [ ! -d "$APP_PATH" ]; then
+            APP_PATH="$BUNDLE_DIR/macos/Turbo Talk.app"
+          fi
+          TARBALL="$BUNDLE_DIR/macos/TurboTalk.app.tar.gz"
+          if [ ! -f "$TARBALL" ]; then
+            TARBALL=$(ls "$BUNDLE_DIR"/macos/*.app.tar.gz | head -n1)
+          fi
+          SIG="${TARBALL}.sig"
+          DMG=$(ls "$BUNDLE_DIR"/dmg/*.dmg | head -n1)
+          for f in "$APP_PATH" "$TARBALL" "$SIG" "$DMG"; do
+            if [ ! -e "$f" ]; then
+              echo "::error::missing expected artifact: $f"
+              exit 1
+            fi
+          done
+          echo "app_path=$APP_PATH"     >> "$GITHUB_OUTPUT"
+          echo "tarball=$TARBALL"       >> "$GITHUB_OUTPUT"
+          echo "sig=$SIG"               >> "$GITHUB_OUTPUT"
+          echo "dmg=$DMG"               >> "$GITHUB_OUTPUT"
+          echo "bundle_dir=$BUNDLE_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Ad-hoc codesign and strip quarantine
+        run: |
+          set -euo pipefail
+          APP='${{ steps.mac_artifacts.outputs.app_path }}'
+          xattr -cr "$APP"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP" || true
+
+      - name: Re-pack updater tarball from signed .app
+        run: |
+          set -euo pipefail
+          APP='${{ steps.mac_artifacts.outputs.app_path }}'
+          TARBALL='${{ steps.mac_artifacts.outputs.tarball }}'
+          APP_DIR=$(dirname "$APP")
+          APP_NAME=$(basename "$APP")
+          rm -f "$TARBALL"
+          tar -czf "$TARBALL" -C "$APP_DIR" "$APP_NAME"
+          ls -la "$TARBALL"
+
+      - name: Re-sign updater tarball with Tauri minisign key
+        run: |
+          set -euo pipefail
+          TARBALL='${{ steps.mac_artifacts.outputs.tarball }}'
+          SIG='${{ steps.mac_artifacts.outputs.sig }}'
+          rm -f "$SIG"
+          unset TAURI_SIGNING_PRIVATE_KEY
+          npx --yes @tauri-apps/cli signer sign \
+            -f "$TT_SIGNING_KEY_FILE" \
+            -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" \
+            "$TARBALL"
+          if [ ! -s "$SIG" ]; then
+            echo "::error::signer did not produce $SIG"
+            exit 1
+          fi
+          echo "re-signed tarball:"
+          ls -la "$TARBALL" "$SIG"
+
+      - name: Stage artifacts
+        id: stage
+        run: |
+          set -euo pipefail
+          STAGE="$RUNNER_TEMP/turbotalk-stage"
+          mkdir -p "$STAGE"
+          cp '${{ steps.mac_artifacts.outputs.dmg }}'     "$STAGE/"
+          cp '${{ steps.mac_artifacts.outputs.tarball }}' "$STAGE/"
+          cp '${{ steps.mac_artifacts.outputs.sig }}'     "$STAGE/"
+          echo "--- staged files ---"
+          ls -la "$STAGE"
+          echo "stage=$STAGE"                                       >> "$GITHUB_OUTPUT"
+          echo "sig_file=$STAGE/$(basename '${{ steps.mac_artifacts.outputs.sig }}')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload bundle artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: turbotalk-${{ matrix.target_label }}
-          path: dist-artifacts/*
+          name: turbotalk-darwin-aarch64
+          path: ${{ steps.stage.outputs.stage }}/*
           if-no-files-found: error
+          retention-days: 3
 
-  release:
-    name: draft release
+      - name: Upload signature (for finalize job)
+        uses: actions/upload-artifact@v4
+        with:
+          name: turbotalk-sig-darwin-aarch64
+          path: ${{ steps.stage.outputs.sig_file }}
+          if-no-files-found: error
+          retention-days: 3
+
+  finalize:
+    name: Assemble latest.json and publish release
     needs: build
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#v}"
+          VERSION_BASE="${VERSION%%-*}"
+          echo "tag=$TAG"                   >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION"           >> "$GITHUB_OUTPUT"
+          echo "version_base=$VERSION_BASE" >> "$GITHUB_OUTPUT"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: dist-artifacts
+          path: dist
+          pattern: turbotalk-*
+          merge-multiple: false
 
-      - name: Create draft GitHub release
+      - name: Generate latest.json
+        id: manifest
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
         run: |
-          gh release create "${{ github.ref_name }}" \
-            dist-artifacts/**/* \
-            --draft \
-            --title "${{ github.ref_name }}" \
-            --notes-from-tag
+          set -euo pipefail
+          PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          NOTES=$(git tag -l --format='%(contents:body)' "$TAG" 2>/dev/null || true)
+          if [ -z "$NOTES" ]; then
+            NOTES="See GitHub release notes."
+          fi
+
+          DARWIN_SIG_FILE="dist/turbotalk-sig-darwin-aarch64/$(ls dist/turbotalk-sig-darwin-aarch64/ | head -n1)"
+          if [ ! -s "$DARWIN_SIG_FILE" ]; then
+            echo "::error::missing signature file: $DARWIN_SIG_FILE"
+            exit 1
+          fi
+
+          TARBALL_NAME=$(ls dist/turbotalk-darwin-aarch64/*.app.tar.gz | head -n1 | xargs basename)
+
+          export NOTES PUB_DATE DARWIN_SIG_FILE TARBALL_NAME
+          node - <<'NODE_EOF' > latest.json
+          const fs = require('fs');
+          const base = 'https://github.com/eldo9000/TurboTalk-App/releases/download/' + process.env.TAG + '/';
+          const manifest = {
+            version: process.env.VERSION,
+            notes: process.env.NOTES,
+            pub_date: process.env.PUB_DATE,
+            platforms: {
+              'darwin-aarch64': {
+                signature: fs.readFileSync(process.env.DARWIN_SIG_FILE, 'utf8'),
+                url: base + process.env.TARBALL_NAME,
+              },
+            },
+          };
+          process.stdout.write(JSON.stringify(manifest, null, 2) + '\n');
+          NODE_EOF
+
+          echo "--- latest.json ---"
+          cat latest.json
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: TurboTalk ${{ steps.tag.outputs.tag }}
+          draft: false
+          prerelease: ${{ contains(steps.tag.outputs.version, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/turbotalk-darwin-aarch64/*
+            latest.json
+          body: |
+            ## TurboTalk ${{ steps.tag.outputs.tag }}
+
+            macOS (Apple Silicon) only.
+            Distribution is ad-hoc signed (no Apple Developer ID).
+
+            **Install:** open the DMG and drag `TurboTalk.app` to `/Applications`.
+            If Gatekeeper blocks launch, run:
+
+            ```
+            xattr -cr /Applications/TurboTalk.app
+            ```
+
+            **Existing users:** the in-app updater will pick this release up
+            automatically within a week of last check.
