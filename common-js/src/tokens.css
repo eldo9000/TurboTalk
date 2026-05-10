@@ -6,8 +6,8 @@
 
 /* ── Colors: light + Typography ─────────────────────────────────────────────── */
 :root {
-  --accent:          #003f7d;
-  --accent-hover:    #00366d;
+  --accent:          #2884c9;
+  --accent-hover:    #2373b0;
   --titlebar-bg:     #f5f5f5;
   --surface:         #fff;
   --surface-raised:  #f8f8f8;
@@ -31,42 +31,92 @@
 
 /* ── Colors: dark ──────────────────────────────────────────────────────────── */
 html.dark {
-  --accent:          #003f7d;
-  --accent-hover:    #00366d;
+  --accent:          #2884c9;
+  --accent-hover:    #2373b0;
   --titlebar-bg:     #1a1a1a;
   --surface:         #111;
   --surface-raised:  #1a1a1a;
   --surface-panel:   #1e1e1e;
   --border:          #2a2a2a;
   --border-subtle:   #222;
-  --text-primary:    #f0f0f0;
-  --text-secondary:  #888;
+  --text-primary:    #e6e6e6;
+  --text-secondary:  #a6a6a6;
   --text-muted:      #555;
   --tab-active-bg:   #111;
   --tab-bar-bg:      #0d0d0d;
   --surface-hint:    color-mix(in srgb, var(--surface-raised) 90%, #000 10%);
 }
 
+/* ── Settings subsection header ─────────────────────────────────────────────
+   Non-collapsible section header bar used in app settings panels.
+   Darker than --surface-raised to visually anchor the group label. */
+.subsection-hd {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  background: color-mix(in srgb, var(--surface-raised) 50%, #000);
+}
+.subsection-hd-title {
+  flex: 1;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+/* ── Settings section right-rule ────────────────────────────────────────────
+   Draws a 1px vertical line on the right edge of a settings subsection,
+   spanning the content height only (excluding bottom padding gap). */
+.section-ruled {
+  position: relative;
+}
+.section-ruled::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 16px;
+  width: 1px;
+  background: color-mix(in srgb, var(--border) 50%, #000);
+}
+
+/* ── Zebra striping ──────────────────────────────────────────────────────────
+   Apply to the direct parent of row items.
+   Uses *:nth-of-type so a single header element (different tag) doesn't
+   offset the row count.
+
+   zebra-fill      — subtle 2% white fill on even rows, no border
+   zebra-fill-line — same fill + 1px top border on even rows
+   zebra-line      — 1px top border only, no fill                            */
+.zebra-fill > *:nth-of-type(even) {
+  background: rgb(255 255 255 / 2%);
+}
+
+/* Fill alternates; separator appears between every row via adjacent sibling. */
+.zebra-fill-line > *:nth-of-type(even) {
+  background: rgb(255 255 255 / 2%);
+}
+.zebra-fill-line > * + * {
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* No fill — just a line between every row. */
+.row-separator > * + * {
+  border-top: 1px solid var(--border-subtle);
+}
+
 /* ── Segmented controls (active / inactive) ─────────────────────────────────
    Shared across SegmentedControl, custom Select trigger, and any control that
    wants Fade's "subtle bevel" look. Source: Fade-App/src/app.css. */
 .seg-active {
-  position: relative;
   background: color-mix(in srgb, var(--accent) 37.5%, #000);
   color: #fff;
   border-color: var(--border);
 }
-.seg-active::after {
-  content: "";
-  position: absolute;
-  left: 10px;
-  right: 10px;
-  bottom: 0;
-  height: 2px;
-  background: var(--accent);
-  border-radius: 1px;
-  pointer-events: none;
-}
+
+
 .seg-inactive {
   background: linear-gradient(
     to top,
@@ -75,6 +125,7 @@ html.dark {
     color-mix(in srgb, #fff 3.5%, var(--surface-raised)) 100%
   );
 }
+
 .seg-inactive:hover {
   background: color-mix(in srgb, #fff 10%, var(--surface-raised));
 }
@@ -86,14 +137,35 @@ html.dark {
   background: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 60%, #000);
 }
-:root:not(.dark) .seg-active::after {
-  background: rgba(255, 255, 255, 0.45);
-}
+
+
 :root:not(.dark) .seg-inactive {
   background: linear-gradient(to bottom, #fff 0%, #ebebeb 100%);
 }
+
 :root:not(.dark) .seg-inactive:hover {
   background: color-mix(in srgb, var(--accent) 6%, #fff);
+}
+
+/* ── Select trigger (default variant) ───────────────────────────────────────
+   Same bevel gradient as seg-inactive but one step darker — uses
+   --surface-hint as the base instead of --surface-raised. */
+.sel-trigger {
+  background: linear-gradient(
+    to top,
+    var(--surface-hint) 0%,
+    color-mix(in srgb, #fff 3.5%, var(--surface-hint)) 50%,
+    color-mix(in srgb, #fff 3.5%, var(--surface-hint)) 100%
+  );
+}
+.sel-trigger:hover {
+  background: color-mix(in srgb, #fff 10%, var(--surface-hint));
+}
+:root:not(.dark) .sel-trigger {
+  background: linear-gradient(to bottom, #f5f5f5 0%, #e2e2e2 100%);
+}
+:root:not(.dark) .sel-trigger:hover {
+  background: color-mix(in srgb, var(--accent) 6%, #f5f5f5);
 }
 
 /* ── Custom checkbox ───────────────────────────────────────────────────────
@@ -101,7 +173,6 @@ html.dark {
    raw <input type="checkbox" class="fade-check"> instance. */
 .fade-check {
   appearance: none;
-  -webkit-appearance: none;
   width: 14px;
   height: 14px;
   border-radius: 4px;
@@ -115,13 +186,16 @@ html.dark {
   position: relative;
   flex-shrink: 0;
 }
+
 .fade-check:hover {
   border-color: color-mix(in srgb, #fff 24%, transparent);
 }
+
 .fade-check:checked {
   background: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 70%, #000);
 }
+
 .fade-check:checked::after {
   content: "";
   width: 6px;
@@ -130,20 +204,69 @@ html.dark {
     linear-gradient(45deg, transparent 42%, #fff 42%, #fff 58%, transparent 58%),
     linear-gradient(-45deg, transparent 42%, #fff 42%, #fff 58%, transparent 58%);
 }
+
 .fade-check:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
 :root:not(.dark) .fade-check {
   background: #e2e2e2;
   border-color: #b8b8b8;
 }
+
 :root:not(.dark) .fade-check:hover {
   border-color: #909090;
 }
-:root:not(.dark) .fade-check:checked {
+
+/* Prevent WebKit from desaturating custom checkboxes when the window loses focus */
+:-webkit-window-inactive .fade-check:checked {
   background: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 70%, #000);
+}
+
+/* ── Native-style checkbox (CHK-5 / CHK-6 / CHK-7) ───────────────────────────
+   Shared by gallery FormSection and any panel that links to these cards.
+   Edit here to update all linked instances at once. */
+.cb-native {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 2px;
+  cursor: pointer;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* CHK-5 — unchecked */
+.cb-native:not(:checked):not(:disabled) {
+  background: #b0b0b0;
+  border: 1px solid #999;
+}
+
+/* CHK-6 — checked */
+.cb-native:checked:not(:disabled) {
+  background: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 70%, #000);
+}
+.cb-native:checked:not(:disabled)::after {
+  content: "";
+  width: 7px;
+  height: 4px;
+  border-left: 1.5px solid #fff;
+  border-bottom: 1.5px solid #fff;
+  transform: rotate(-45deg) translate(0px, -1px);
+}
+
+/* CHK-7 — disabled */
+.cb-native:disabled {
+  cursor: not-allowed;
+  background: #555;
+  border: 1px solid #888;
 }
 
 /* ── Base reset ────────────────────────────────────────────────────────────── */

@@ -34,7 +34,7 @@
 <label
   class="inline-flex items-center gap-2.5 cursor-pointer text-[13px]
          bg-[var(--surface-hint)] border border-[var(--border)] rounded-md px-3 py-2
-         {checked ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}
+         {checked ? 'text-[var(--text-primary)]' : 'text-white/75'}
          {disabled ? 'opacity-40 cursor-not-allowed pointer-events-none' : ''}
          {extraClass}"
 >

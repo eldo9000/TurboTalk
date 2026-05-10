@@ -24,9 +24,18 @@
     value = $bindable(),
     placeholder = 'Select…',
     disabled = false,
+    variant = 'default',
+    size = 'md',
     onchange,
     class: extraClass = '',
   } = $props();
+
+  const sizeClass = $derived(
+    size === 'sm'
+      ? 'px-2 py-[2px] text-[11px]'
+      : 'px-3 py-[5px] text-[13px]'
+  );
+  const labelSize = $derived(size === 'sm' ? 'text-[10px]' : 'text-[12px]');
 
   let open = $state(false);
 
@@ -53,12 +62,14 @@
     {disabled}
     aria-haspopup="listbox"
     aria-expanded={open}
-    class="w-full flex items-center justify-between px-3 py-[5px] rounded-md border
-           border-[var(--border)] seg-inactive text-[var(--text-primary)] text-[13px]
+    class="w-full flex items-center justify-between rounded-md border
+           border-[var(--border)] text-[var(--text-primary)]
            transition-colors disabled:opacity-40 disabled:cursor-not-allowed
+           {sizeClass}
+           {variant === 'flat' ? 'bg-[var(--surface-hint)] hover:bg-[var(--surface-panel)]' : 'sel-trigger'}
            {extraClass}"
   >
-    <span class="text-[12px] truncate text-left">{selectedLabel}</span>
+    <span class="{labelSize} truncate text-left">{selectedLabel}</span>
     <svg
       class="w-3.5 h-3.5 text-[var(--text-secondary)] shrink-0 transition-transform {open ? 'rotate-180' : ''}"
       viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"

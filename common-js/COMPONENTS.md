@@ -449,8 +449,8 @@ Import in every app's `app.css`:
 
 | Token | Light | Dark |
 |---|---|---|
-| `--accent` | `#0066cc` | `#0066cc` |
-| `--accent-hover` | `#1e5fa6` | `#1e5fa6` |
+| `--accent` | `#2884c9` | `#2884c9` |
+| `--accent-hover` | `#2373b0` | `#2373b0` |
 | `--surface` | `#ffffff` | `#111827` |
 | `--surface-raised` | `#f5f5f5` | `#1f2937` |
 | `--titlebar-bg` | `#f7f7f7` | `#1f2937` |

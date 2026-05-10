@@ -49,9 +49,6 @@ pub struct Config {
     /// Play a sound cue when recording starts.
     #[serde(default)]
     pub sound_on_start: bool,
-    /// Play a sound cue when transcription begins.
-    #[serde(default)]
-    pub sound_on_transcribe: bool,
     /// Play a sound cue when transcription finishes and text is pasted.
     #[serde(default)]
     pub sound_on_finish: bool,
@@ -239,7 +236,6 @@ impl Default for Config {
             show_overlay: true,
             transcript_size_indicator: true,
             sound_on_start: true,
-            sound_on_transcribe: false,
             sound_on_finish: false,
             sound_on_cancel: true,
             sound_volume: 0.5,

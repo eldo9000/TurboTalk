@@ -5,7 +5,7 @@
    * Props:
    *   suffix   — Optional text shown after an em-dash (e.g. "BITRATE — KBPS").
    *   for      — If set, renders as <label for=...> instead of <p>.
-   *   size     — 'xs' (12px) | 'sm' (13px). Default: 'sm'.
+   *   size     — 'xs' (10px) | 'sm' (11px). Default: 'sm'.
    *   class    — Extra classes.
    *   children — Label content (the main word).
    */
@@ -18,8 +18,9 @@
     children,
   } = $props();
 
-  const sizeClass = size === 'xs' ? 'text-[12px]' : 'text-[13px]';
-  const baseClass = `${sizeClass} font-semibold uppercase tracking-widest text-[var(--text-primary)] ${extraClass}`;
+  const baseClass = $derived(
+    `${size === 'xs' ? 'text-[10px]' : 'text-[11px]'} font-semibold uppercase tracking-widest text-[var(--text-muted)] ${extraClass}`
+  );
 </script>
 
 {#if htmlFor}

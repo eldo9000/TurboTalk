@@ -6,10 +6,7 @@
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { open as openFilePicker } from '@tauri-apps/plugin-dialog';
   import { initTheme } from '@libre/ui/src/theme.js';
-  import SegmentedControl from '@libre/ui/src/components/SegmentedControl.svelte';
-  import SectionLabel from '@libre/ui/src/components/SectionLabel.svelte';
   import Select from '@libre/ui/src/components/Select.svelte';
-  import Checkbox from '@libre/ui/src/components/Checkbox.svelte';
   import UpdateManager from './UpdateManager.svelte';
 
   const HOTKEY_KEY_ITEMS = [
@@ -217,12 +214,21 @@ Reply with only the single word, lowercase, no punctuation.
     saveSettings();
   }
 
+  // Compact segmented-button class composer — used by Settings panel rows
+  // (Hotkey side, Recording mode, Theme). Mirrors the Libre-Apps gallery mock.
+  function seg(active, i, total) {
+    const base  = 'tt-seg-btn';
+    const first = i === 0           ? ' tt-seg-first' : '';
+    const last  = i === total - 1   ? ' tt-seg-last'  : '';
+    const on    = active            ? ' tt-seg-on'    : '';
+    return base + first + last + on;
+  }
+
   let cfgHistoryAutoDelete = $state('10d');
   let cfgSaveHistory       = $state(true);
   let cfgShowOverlay       = $state(true);
   let cfgTranscriptIndicator = $state(true);
   let cfgSoundOnStart      = $state(false);
-  let cfgSoundOnTranscribe = $state(false);
   let cfgSoundOnFinish     = $state(false);
   let cfgSoundOnCancel     = $state(false);
   let cfgSoundVolume       = $state(0.7);
@@ -558,7 +564,6 @@ Reply with only the single word, lowercase, no punctuation.
     cfgShowOverlay       = cfg.show_overlay                    ?? true;
     cfgTranscriptIndicator = cfg.transcript_size_indicator     ?? true;
     cfgSoundOnStart      = cfg.sound_on_start                  ?? false;
-    cfgSoundOnTranscribe = cfg.sound_on_transcribe              ?? false;
     cfgSoundOnFinish     = cfg.sound_on_finish                  ?? false;
     cfgSoundOnCancel     = cfg.sound_on_cancel                  ?? false;
     cfgSoundVolume       = cfg.sound_volume                     ?? 0.7;
@@ -584,7 +589,6 @@ Reply with only the single word, lowercase, no punctuation.
     cfg.show_overlay                  = cfgShowOverlay;
     cfg.transcript_size_indicator     = cfgTranscriptIndicator;
     cfg.sound_on_start                = cfgSoundOnStart;
-    cfg.sound_on_transcribe           = cfgSoundOnTranscribe;
     cfg.sound_on_finish               = cfgSoundOnFinish;
     cfg.sound_on_cancel               = cfgSoundOnCancel;
     cfg.sound_volume                  = cfgSoundVolume;
@@ -1202,55 +1206,51 @@ Reply with only the single word, lowercase, no punctuation.
   <!-- Modes tab -->
   {#if activeTab === 'modes'}
     {@const isAdv = cfgCleanupMode === 'chaperone'}
-    <div class="flex-1 min-h-0 flex text-[12px] {isAdv ? '' : 'flex-col overflow-y-auto'}">
+    <div class="flex-1 min-h-0 flex {isAdv ? '' : 'flex-col overflow-y-auto'}">
 
       <!-- Left column: always visible -->
-      <div class="flex flex-col {isAdv ? 'overflow-y-auto shrink-0' : ''}"
+      <div class="tt-set {isAdv ? 'overflow-y-auto shrink-0' : ''}"
            style="{isAdv ? `width:${WINDOW_W}px` : ''}">
 
         <!-- Post-processing -->
-        <div class="px-4 py-3 space-y-3">
-          <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-secondary)]">Post-processing</p>
-          <SegmentedControl
-            variant="filled"
-            options={[
-              { value: 'off',       label: 'Off'      },
-              { value: 'regex',     label: 'Simple'   },
-              { value: 'chaperone', label: 'Advanced' },
-            ]}
-            value={cfgCleanupMode}
-            onchange={(v) => { cfgCleanupMode = v; saveModes(); }}
-          />
-          <p class="text-[var(--text-muted)] text-[11px] leading-relaxed">
-            {#if cfgCleanupMode === 'off'}
-              Paste raw Whisper output — no formatting, no changes.
-            {:else if cfgCleanupMode === 'regex'}
-              Capitalizes the first letter. Fast, deterministic, works offline.
-            {:else}
-              Routes transcript through a local Ollama model for intent-aware formatting.
-            {/if}
-          </p>
-          {#if cfgCleanupMode === 'chaperone'}
-            <p class="text-[var(--text-muted)] text-[11px]">Sends transcript to your local Ollama server (localhost only — no internet).</p>
-          {/if}
+        <div class="tt-section">
+          <div class="subsection-hd"><span class="subsection-hd-title">Post-processing</span></div>
+          <div class="tt-row tt-row-field">
+            <div class="tt-seg tt-seg-wide">
+              {#each [['off','Off'],['regex','Simple'],['chaperone','Advanced']] as [v, lbl], i}
+                <button onclick={() => { cfgCleanupMode = v; saveModes(); }} class={seg(cfgCleanupMode === v, i, 3)}>{lbl}</button>
+              {/each}
+            </div>
+          </div>
+          <div class="tt-row tt-row-col">
+            <p class="tt-desc">
+              {#if cfgCleanupMode === 'off'}
+                Paste raw Whisper output — no formatting, no changes.
+              {:else if cfgCleanupMode === 'regex'}
+                Capitalizes the first letter. Fast, deterministic, works offline.
+              {:else}
+                Routes transcript through a local Ollama model for intent-aware formatting. Sends transcript to your local Ollama server (localhost only — no internet).
+              {/if}
+            </p>
+          </div>
 
           {#if cfgCleanupMode !== 'off'}
-            <div class="space-y-2 pt-1">
+            <div class="tt-row tt-row-col tt-check-stack-list">
               {#each [
                 ['strip_fillers',   cfgStripFillers,   (v) => { cfgStripFillers   = v; saveModes(); }, 'Strip filler words',      'Removes um, uh, er, hmm.'],
                 ['append_period',   cfgAppendPeriod,   (v) => { cfgAppendPeriod   = v; saveModes(); }, 'Append period',           'Adds a period if no punctuation present.'],
                 ['strip_artifacts', cfgStripArtifacts, (v) => { cfgStripArtifacts = v; saveModes(); }, 'Strip Whisper artifacts', 'Removes trailing " ." and "..." on silence.'],
               ] as [key, val, setter, label, desc]}
-                <label class="flex items-start gap-2 cursor-pointer">
+                <label class="tt-check-row tt-check-row-stacked">
                   <input
                     type="checkbox"
+                    class="cb-native"
                     checked={val}
                     onchange={() => setter(!val)}
-                    class="fade-check mt-[3px]"
                   />
-                  <div>
-                    <span class="text-[var(--text-primary)]">{label}</span>
-                    <p class="text-[var(--text-muted)] text-[11px] mt-0.5">{desc}</p>
+                  <div class="tt-check-stack">
+                    <span class="tt-check-lbl tt-check-lbl-strong">{label}</span>
+                    <p class="tt-check-desc">{desc}</p>
                   </div>
                 </label>
               {/each}
@@ -1258,23 +1258,21 @@ Reply with only the single word, lowercase, no punctuation.
           {/if}
         </div>
 
-        <!-- Whisper bias prompt (always available, independent of cleanup mode) -->
-        <div class="px-4 py-3 space-y-3">
-          <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-secondary)]">Whisper</p>
-          <div class="space-y-1">
-            <label for="custom-vocabulary" class="text-[var(--text-secondary)]">Custom vocabulary</label>
+        <!-- Whisper bias prompt -->
+        <div class="tt-section tt-section-last">
+          <div class="subsection-hd"><span class="subsection-hd-title">Whisper</span></div>
+          <div class="tt-row tt-row-col">
+            <label for="custom-vocabulary" class="tt-lbl tt-lbl-fixed">Custom vocabulary</label>
             <textarea
               id="custom-vocabulary"
               bind:value={cfgVocabulary}
               onchange={() => saveModes()}
               rows="4"
               placeholder={"One word or phrase per line…\nTurbo Talk\nOllama\nggml-base"}
-              class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
-                     text-[13px] text-[var(--text-primary)] font-mono placeholder:text-[var(--text-muted)]
-                     outline-none resize-none hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
+              class="tt-input tt-mono"
               spellcheck="false"
             ></textarea>
-            <p class="text-[var(--text-muted)] text-[11px]">Domain terms Whisper tends to mishear. Applied as <code class="font-mono">--prompt</code> bias every transcription.</p>
+            <p class="tt-desc">Domain terms Whisper tends to mishear. Applied as <code class="tt-code">--prompt</code> bias every transcription.</p>
           </div>
         </div>
 
@@ -1282,124 +1280,104 @@ Reply with only the single word, lowercase, no punctuation.
 
       <!-- Right column: Chaperone connection + classifier prompt, slides in when Advanced -->
       {#if isAdv}
-        <div class="flex-1 overflow-y-auto px-4 py-3 space-y-3 adv-panel-in">
+        <div class="tt-set flex-1 overflow-y-auto adv-panel-in">
 
-          <!-- Ollama guided setup section -->
-          <div class="space-y-1 mb-3">
-            <div class="flex items-center justify-between">
-              <SectionLabel>Setup</SectionLabel>
+          <!-- Setup -->
+          <div class="tt-section">
+            <div class="subsection-hd">
+              <span class="subsection-hd-title">Setup</span>
               {#if ollamaReachable && ollamaModelPresent}
-                <span class="text-[10px] uppercase tracking-wider font-semibold text-green-400">Ready</span>
+                <span class="tt-status-ready">Ready</span>
               {/if}
             </div>
+
             {#if ollamaReachable === false}
-              <div class="flex items-center gap-2 py-1.5">
-                <div class="flex-1 min-w-0">
-                  <span class="text-xs text-[var(--text-primary)]">ollama not detected</span>
-                  <p class="text-[10px] mt-0.5 text-[var(--text-tertiary,#666)]">install ollama to enable advanced cleanup</p>
+              <div class="tt-row tt-row-action">
+                <div class="tt-row-info">
+                  <span class="tt-check-lbl tt-check-lbl-strong">ollama not detected</span>
+                  <p class="tt-check-desc">Install Ollama to enable advanced cleanup.</p>
                 </div>
-                <button
-                  onclick={installOllama}
-                  class="shrink-0 px-3 py-1 rounded text-[11px] font-medium bg-[var(--surface)] border border-[var(--border)]
-                         text-[var(--text-primary)] hover:border-[var(--accent)] transition-colors whitespace-nowrap"
-                >Install Ollama</button>
+                <button onclick={installOllama} class="tt-btn">Install Ollama</button>
               </div>
             {:else if ollamaReachable === true && !ollamaModelPresent}
-              <div class="flex items-center gap-2 py-1.5">
-                <div class="flex-1 min-w-0">
-                  <span class="text-xs text-[var(--text-primary)]">ollama reachable · classifier model missing</span>
-                  <p class="text-[10px] mt-0.5 text-[var(--text-tertiary,#666)]">{cfgLlmModel || 'llama3.2:3b'} — not yet pulled</p>
+              <div class="tt-row tt-row-action">
+                <div class="tt-row-info">
+                  <span class="tt-check-lbl tt-check-lbl-strong">ollama reachable · classifier model missing</span>
+                  <p class="tt-check-desc">{cfgLlmModel || 'llama3.2:3b'} — not yet pulled</p>
                   {#if ollamaPullState.inFlight}
-                    <div class="mt-1.5 flex items-center gap-2">
-                      <div class="flex-1 h-1 rounded-full bg-[var(--border)] overflow-hidden">
-                        <div
-                          class="h-full rounded-full bg-[var(--accent)] transition-all duration-300"
-                          style="width:{ollamaPullState.pct}%"
-                        ></div>
+                    <div class="tt-progress-row">
+                      <div class="tt-progress-track">
+                        <div class="tt-progress-fill" style="width:{ollamaPullState.pct}%"></div>
                       </div>
-                      <span class="shrink-0 text-[10px] text-[var(--accent)] tabular-nums w-7 text-right">{ollamaPullState.pct}%</span>
+                      <span class="tt-progress-pct">{ollamaPullState.pct}%</span>
                     </div>
                     {#if ollamaPullState.status}
-                      <p class="text-[10px] mt-0.5 text-[var(--text-muted)] truncate">{ollamaPullState.status}</p>
+                      <p class="tt-check-desc tt-truncate">{ollamaPullState.status}</p>
                     {/if}
                   {/if}
                 </div>
-                <button
-                  onclick={startOllamaPull}
-                  disabled={ollamaPullState.inFlight}
-                  class="shrink-0 px-3 py-1 rounded text-[11px] font-medium bg-[var(--surface)] border border-[var(--border)]
-                         text-[var(--text-primary)] hover:border-[var(--accent)] transition-colors whitespace-nowrap
-                         disabled:opacity-50 disabled:cursor-default"
-                >{ollamaPullState.inFlight ? '↓ …' : 'Download classifier model (~2GB)'}</button>
+                <button onclick={startOllamaPull} disabled={ollamaPullState.inFlight} class="tt-btn">
+                  {ollamaPullState.inFlight ? '↓ …' : 'Download (~2GB)'}
+                </button>
               </div>
             {/if}
           </div>
 
-          <div class="space-y-1">
-            <label for="ollama-url" class="text-[var(--text-secondary)]">Ollama URL</label>
-            <input
-              id="ollama-url"
-              bind:value={cfgOllamaUrl}
-              onchange={() => saveModes()}
-              class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
-                     text-[13px] text-[var(--text-primary)] outline-none
-                     hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
-              spellcheck="false"
-            />
-          </div>
-
-          <div class="space-y-1">
-            <label for="classifier-model" class="text-[var(--text-secondary)]">Classifier model</label>
-            <input
-              id="classifier-model"
-              bind:value={cfgLlmModel}
-              onchange={() => saveModes()}
-              placeholder="llama3.2:3b"
-              class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
-                     text-[13px] text-[var(--text-primary)] placeholder:text-[var(--text-muted)]
-                     outline-none hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
-              spellcheck="false"
-            />
-            <p class="text-[var(--text-muted)] text-[11px]">
-              Run <code class="font-mono">ollama pull llama3.2:3b</code> to fetch.
-            </p>
-          </div>
-
-          <div class="space-y-1">
-            <label for="classifier-prompt" class="text-[var(--text-secondary)]">Classifier prompt</label>
-
-            <!-- Preset chips. Active when the textarea content equals the
-                 preset prompt verbatim; any edit drops back to "none active". -->
-            <div class="flex gap-1 flex-wrap">
-              {#each PROMPT_PRESETS as p (p.id)}
-                <button
-                  onclick={() => applyPreset(p)}
-                  class="text-[11px] px-2 py-0.5 rounded border transition-colors
-                    {activePresetId === p.id
-                      ? 'bg-[var(--accent)]/15 border-[var(--accent)]/50 text-[var(--text-primary)]'
-                      : 'bg-transparent border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--accent)]/40 hover:text-[var(--text-primary)]'}"
-                >{p.label}</button>
-              {/each}
+          <!-- Ollama -->
+          <div class="tt-section">
+            <div class="subsection-hd"><span class="subsection-hd-title">Ollama</span></div>
+            <div class="tt-row tt-row-col">
+              <label for="ollama-url" class="tt-lbl tt-lbl-fixed">URL</label>
+              <input
+                id="ollama-url"
+                bind:value={cfgOllamaUrl}
+                onchange={() => saveModes()}
+                class="tt-input"
+                spellcheck="false"
+              />
             </div>
+            <div class="tt-row tt-row-col">
+              <label for="classifier-model" class="tt-lbl tt-lbl-fixed">Classifier model</label>
+              <input
+                id="classifier-model"
+                bind:value={cfgLlmModel}
+                onchange={() => saveModes()}
+                placeholder="llama3.2:3b"
+                class="tt-input"
+                spellcheck="false"
+              />
+              <p class="tt-desc">Run <code class="tt-code">ollama pull llama3.2:3b</code> to fetch.</p>
+            </div>
+          </div>
 
-            <textarea
-              id="classifier-prompt"
-              bind:value={cfgClassifierPrompt}
-              onchange={() => saveModes()}
-              rows="10"
-              class="w-full bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
-                     text-[13px] text-[var(--text-primary)] font-mono leading-relaxed
-                     outline-none resize-none hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
-              spellcheck="false"
-            ></textarea>
-            <div class="flex items-center justify-between">
-              <p class="text-[var(--text-muted)] text-[11px]">
-                <code class="font-mono">{'{text}'}</code> replaced with transcript.
-              </p>
-              <button
-                onclick={() => { cfgClassifierPrompt = DEFAULT_CLASSIFIER_PROMPT; saveModes(); }}
-                class="text-[11px] text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
-              >Reset</button>
+          <!-- Classifier prompt -->
+          <div class="tt-section tt-section-last">
+            <div class="subsection-hd"><span class="subsection-hd-title">Classifier prompt</span></div>
+            <div class="tt-row tt-row-col">
+              <div class="tt-multi tt-multi-wrap">
+                {#each PROMPT_PRESETS as p (p.id)}
+                  <button
+                    onclick={() => applyPreset(p)}
+                    class="tt-multi-btn"
+                    class:tt-multi-on={activePresetId === p.id}
+                  >{p.label}</button>
+                {/each}
+              </div>
+              <textarea
+                id="classifier-prompt"
+                bind:value={cfgClassifierPrompt}
+                onchange={() => saveModes()}
+                rows="10"
+                class="tt-input tt-mono"
+                spellcheck="false"
+              ></textarea>
+              <div class="tt-inline-foot">
+                <p class="tt-desc"><code class="tt-code">{'{text}'}</code> replaced with transcript.</p>
+                <button
+                  onclick={() => { cfgClassifierPrompt = DEFAULT_CLASSIFIER_PROMPT; saveModes(); }}
+                  class="tt-reset-btn"
+                >Reset</button>
+              </div>
             </div>
           </div>
 
@@ -1412,42 +1390,39 @@ Reply with only the single word, lowercase, no punctuation.
   <!-- Settings tab -->
   {#if activeTab === 'settings'}
     <div class="flex-1 min-h-0 overflow-y-auto text-[12px]">
-      <div bind:this={settingsInnerEl} class="px-4 py-3 space-y-3">
+      <div bind:this={settingsInnerEl} class="tt-set">
 
-        <!-- Hotkey: side tabs + key dropdown on same row -->
-        <div class="space-y-1">
-          <SectionLabel size="xs" class="!opacity-50">Hotkey</SectionLabel>
-          <div class="flex items-center gap-2">
-            <div class:opacity-40={hotkeyKeyPart.startsWith('numpad_')}>
-              <SegmentedControl
-                variant="filled"
-                options={[{ value: 'left', label: 'Left' }, { value: 'right', label: 'Right' }]}
-                value={hotkeySide}
-                onchange={(v) => { hotkeySide = v; applyHotkeyKey(); }}
-              />
+        <!-- Hotkey -->
+        <div class="tt-section">
+          <div class="subsection-hd"><span class="subsection-hd-title">Hotkey</span></div>
+          <div class="tt-row tt-row-field">
+            <div class="tt-seg" class:tt-seg-dim={hotkeyKeyPart.startsWith('numpad_')}>
+              {#each [['left','Left'],['right','Right']] as [v, lbl], i}
+                <button onclick={() => { hotkeySide = v; applyHotkeyKey(); }} class={seg(hotkeySide === v, i, 2)}>{lbl}</button>
+              {/each}
             </div>
-            <div class="flex-1 min-w-0">
+            <div class="tt-key-sel">
               <Select
                 items={HOTKEY_KEY_ITEMS}
                 bind:value={hotkeyKeyPart}
                 onchange={applyHotkeyKey}
+                variant="flat"
+                size="sm"
               />
             </div>
           </div>
         </div>
 
-        <!-- Recording mode + microphone on same row -->
-        <div class="space-y-1">
-          <SectionLabel size="xs" class="!opacity-50">Recording</SectionLabel>
-          <div class="flex items-center gap-2">
-            <SegmentedControl
-              variant="filled"
-              class="shrink-0"
-              options={[{ value: 'hold', label: 'Hold' }, { value: 'toggle', label: 'Toggle' }]}
-              value={cfgHotkeyMode}
-              onchange={(v) => { cfgHotkeyMode = v; saveSettings(); }}
-            />
-            <div class="flex-1 min-w-0">
+        <!-- Recording -->
+        <div class="tt-section">
+          <div class="subsection-hd"><span class="subsection-hd-title">Recording</span></div>
+          <div class="tt-row tt-row-field">
+            <div class="tt-seg">
+              {#each [['hold','Hold'],['toggle','Toggle']] as [v, lbl], i}
+                <button onclick={() => { cfgHotkeyMode = v; saveSettings(); }} class={seg(cfgHotkeyMode === v, i, 2)}>{lbl}</button>
+              {/each}
+            </div>
+            <div class="tt-key-sel">
               <Select
                 items={[
                   { value: 'default', label: 'System default' },
@@ -1455,111 +1430,121 @@ Reply with only the single word, lowercase, no punctuation.
                 ]}
                 bind:value={cfgDevice}
                 onchange={() => saveSettings()}
+                variant="flat"
+                size="sm"
               />
             </div>
           </div>
         </div>
 
         <!-- Cancel shortcuts -->
-        <div class="space-y-1">
-          <SectionLabel size="xs" class="!opacity-50">Cancel</SectionLabel>
-          <div class="flex items-center gap-2 flex-wrap">
-            <Checkbox
-              bind:checked={cfgCancelOnEsc}
-              onchange={() => saveSettings()}
-            >Press Escape</Checkbox>
-            <Checkbox
-              bind:checked={cfgCancelOnHold}
-              onchange={() => saveSettings()}
-            >Hold trigger key</Checkbox>
+        <div class="tt-section">
+          <div class="subsection-hd"><span class="subsection-hd-title">Cancel shortcuts</span></div>
+          <div class="tt-row tt-row-field">
+            <label class="tt-check-row">
+              <input type="checkbox" class="cb-native" bind:checked={cfgCancelOnEsc} onchange={() => saveSettings()} />
+              <span class="tt-check-lbl">Press Escape</span>
+            </label>
+          </div>
+          <div class="tt-row tt-row-field">
+            <label class="tt-check-row">
+              <input type="checkbox" class="cb-native" bind:checked={cfgCancelOnHold} onchange={() => saveSettings()} />
+              <span class="tt-check-lbl">Hold trigger key</span>
+            </label>
           </div>
         </div>
 
         <!-- Theme -->
-        <div class="space-y-1">
-          <SectionLabel size="xs" class="!opacity-50">Theme</SectionLabel>
-          <SegmentedControl
-            variant="filled"
-            options={[
-              { value: 'auto',  label: 'Auto'  },
-              { value: 'light', label: 'Light' },
-              { value: 'dark',  label: 'Dark'  },
-            ]}
-            value={cfgTheme}
-            onchange={(v) => { cfgTheme = v; saveSettings(); }}
-          />
+        <div class="tt-section">
+          <div class="subsection-hd"><span class="subsection-hd-title">Theme</span></div>
+          <div class="tt-row tt-row-field">
+            <div class="tt-seg tt-seg-wide">
+              {#each [['auto','Auto'],['light','Light'],['dark','Dark']] as [v, lbl], i}
+                <button onclick={() => { cfgTheme = v; saveSettings(); }} class={seg(cfgTheme === v, i, 3)}>{lbl}</button>
+              {/each}
+            </div>
+          </div>
         </div>
 
         <!-- History -->
-        <div class="space-y-1">
-          <SectionLabel for="history-auto-delete" size="xs" class="!opacity-50 block">Auto-delete history</SectionLabel>
-          <div class="flex items-center gap-3">
-            <Checkbox
-              bind:checked={cfgSaveHistory}
-              onchange={() => saveSettings()}
-            >Save history</Checkbox>
-            <div class="flex-1 min-w-0">
+        <div class="tt-section">
+          <div class="subsection-hd"><span class="subsection-hd-title">History</span></div>
+          <div class="tt-row tt-row-field">
+            <label class="tt-check-row">
+              <input type="checkbox" class="cb-native" bind:checked={cfgSaveHistory} onchange={() => saveSettings()} />
+              <span class="tt-check-lbl">Save history</span>
+            </label>
+            <div class="tt-key-sel">
               <Select
                 items={HISTORY_AUTO_DELETE_ITEMS}
                 bind:value={cfgHistoryAutoDelete}
                 onchange={() => saveSettings()}
                 disabled={!cfgSaveHistory}
+                variant="flat"
+                size="sm"
               />
             </div>
           </div>
         </div>
 
-        <!-- Audio indicators -->
-        <div class="space-y-1">
-          <SectionLabel size="xs" class="!opacity-50">Audio indicators</SectionLabel>
-          <div class="flex items-center gap-2 flex-wrap">
-            <Checkbox bind:checked={cfgSoundOnStart}      onchange={() => saveSettings()}>Start</Checkbox>
-            <Checkbox bind:checked={cfgSoundOnTranscribe} onchange={() => saveSettings()}>Transcribe</Checkbox>
-            <Checkbox bind:checked={cfgSoundOnFinish}     onchange={() => saveSettings()}>Finish</Checkbox>
-            <Checkbox bind:checked={cfgSoundOnCancel}     onchange={() => saveSettings()}>Cancel</Checkbox>
+        <!-- Audio indicators (Volume embedded) -->
+        <div class="tt-section">
+          <div class="subsection-hd"><span class="subsection-hd-title">Audio indicators</span></div>
+          <div class="tt-row tt-row-field">
+            <span class="tt-lbl">Play on</span>
+            <div class="tt-multi">
+              <button
+                onclick={() => { cfgSoundOnStart = !cfgSoundOnStart; saveSettings(); }}
+                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnStart}>Start</button>
+              <button
+                onclick={() => { cfgSoundOnFinish = !cfgSoundOnFinish; saveSettings(); }}
+                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnFinish}>Finish</button>
+              <button
+                onclick={() => { cfgSoundOnCancel = !cfgSoundOnCancel; saveSettings(); }}
+                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnCancel}>Cancel</button>
+            </div>
           </div>
-        </div>
-
-        <!-- Volume -->
-        <div class="space-y-1">
-          <div class="flex items-center justify-between">
-            <SectionLabel size="xs" class="!opacity-50">Volume</SectionLabel>
-            <span class="text-[13px] text-[var(--text-primary)] tabular-nums">{Math.round(cfgSoundVolume * 100)}%</span>
+          <div class="tt-row tt-row-field tt-row-col">
+            <div class="tt-vol-hd">
+              <span class="tt-lbl tt-lbl-fixed">Volume</span>
+              <span class="tt-vol-val">{Math.round(cfgSoundVolume * 100)}%</span>
+            </div>
+            <input
+              type="range"
+              min="0" max="1" step="0.01"
+              bind:value={cfgSoundVolume}
+              oninput={() => saveSettings()}
+              class="tt-range"
+              style="--pct:{cfgSoundVolume * 100}%"
+            />
           </div>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            bind:value={cfgSoundVolume}
-            oninput={() => saveSettings()}
-            class="fade-range"
-            style="--fade-range-pct:{cfgSoundVolume * 100}%"
-          />
         </div>
 
         <!-- System -->
-        <div class="space-y-1">
-          <SectionLabel size="xs" class="!opacity-50">System</SectionLabel>
-          <div class="flex flex-col items-start gap-2">
-            <Checkbox
-              bind:checked={cfgLaunchLogin}
-              onchange={() => saveSettings()}
-            >Launch at login</Checkbox>
-            <Checkbox
-              bind:checked={cfgShowOverlay}
-              onchange={() => saveSettings()}
-            >Active recording overlay</Checkbox>
-            <Checkbox
-              bind:checked={cfgTranscriptIndicator}
-              onchange={() => saveSettings()}
-              disabled={!cfgShowOverlay}
-            >Recording length overlay</Checkbox>
+        <div class="tt-section tt-section-last">
+          <div class="subsection-hd"><span class="subsection-hd-title">System</span></div>
+          <div class="tt-row tt-row-field">
+            <label class="tt-check-row">
+              <input type="checkbox" class="cb-native" bind:checked={cfgLaunchLogin} onchange={() => saveSettings()} />
+              <span class="tt-check-lbl">Launch at login</span>
+            </label>
+          </div>
+          <div class="tt-row tt-row-field">
+            <label class="tt-check-row">
+              <input type="checkbox" class="cb-native" bind:checked={cfgShowOverlay} onchange={() => saveSettings()} />
+              <span class="tt-check-lbl">Active recording overlay</span>
+            </label>
+          </div>
+          <div class="tt-row tt-row-field">
+            <label class="tt-check-row" class:tt-check-disabled={!cfgShowOverlay}>
+              <input type="checkbox" class="cb-native" bind:checked={cfgTranscriptIndicator} disabled={!cfgShowOverlay} onchange={() => saveSettings()} />
+              <span class="tt-check-lbl">Recording length overlay</span>
+            </label>
+          </div>
+          <div class="tt-row tt-row-field tt-update-row">
+            <UpdateManager />
           </div>
         </div>
-
-        <!-- Updates -->
-        <UpdateManager />
 
       </div>
     </div>
@@ -1686,4 +1671,282 @@ Reply with only the single word, lowercase, no punctuation.
     to   { opacity: 1; transform: translateX(0); }
   }
   .adv-panel-in { animation: adv-panel-in 0.2s cubic-bezier(0.16,1,0.3,1) forwards; }
+
+  /* ── Settings panel — ported from Libre-Apps gallery TurboTalkPanel ───
+     Compact ruled sections with custom segmented and multi-toggle controls.
+     Shared classes (.subsection-hd, .cb-native) live in @libre/ui tokens. */
+  .tt-set {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+    background: var(--surface);
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+  .tt-section {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 16px;
+  }
+  .tt-section-last { border-bottom: none; }
+
+  .tt-row {
+    display: flex;
+    align-items: center;
+    padding: 4px 12px;
+    gap: 6px;
+    transition: background 0.1s;
+  }
+  .tt-row:hover :global(.tt-lbl) { color: var(--text-primary); }
+  .tt-row-field  { padding-top: 5px; padding-bottom: 5px; }
+  .tt-row-col    { flex-direction: column; align-items: flex-start; gap: 5px; }
+
+  .tt-key-sel    { flex: 1; min-width: 0; margin-left: 6px; }
+  /* Fixed-width seg slot so paired-row dropdowns left-align cleanly. */
+  .tt-row .tt-seg:not(.tt-seg-wide) { width: 88px; }
+
+  .tt-lbl        { flex: 1; font-size: 10px; color: var(--text-secondary); }
+  .tt-lbl-fixed  { flex: unset; }
+
+  .tt-check-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+  }
+  .tt-check-disabled { opacity: 0.4; cursor: not-allowed; }
+  .tt-check-lbl      { font-size: 11px; color: var(--text-secondary); }
+
+  /* Segmented buttons */
+  .tt-seg       { display: flex; flex-shrink: 0; }
+  .tt-seg-wide  { width: 100%; }
+  .tt-seg-dim   { opacity: 0.4; }
+  .tt-seg-btn {
+    flex: 1;
+    padding: 2px 6px;
+    font-size: 9px;
+    font-family: inherit;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    background: var(--surface-panel);
+    border: 1px solid var(--border);
+    border-left: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+    white-space: nowrap;
+  }
+  .tt-seg-first { border-left: 1px solid var(--border); border-radius: 4px 0 0 4px; }
+  .tt-seg-last  { border-radius: 0 4px 4px 0; }
+  .tt-seg-btn:hover {
+    color: var(--text-primary);
+    background: color-mix(in srgb, var(--surface-panel) 80%, var(--text-primary));
+  }
+  .tt-seg-on {
+    background: color-mix(in srgb, var(--accent) 18%, var(--surface-panel));
+    color: #fff;
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  }
+  .tt-seg-on + .tt-seg-btn {
+    border-left-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  }
+  :global(html:not(.dark)) .tt-seg-on { color: var(--text-primary); }
+
+  /* Multi-toggle pills (Audio indicators) */
+  .tt-multi { display: flex; gap: 4px; flex-shrink: 0; }
+  .tt-multi-btn {
+    padding: 2px 7px;
+    font-size: 9px;
+    font-family: inherit;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--surface-panel);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+  }
+  .tt-multi-btn:hover { color: var(--text-primary); }
+  .tt-multi-on {
+    background: color-mix(in srgb, var(--accent) 18%, var(--surface-panel));
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+    color: #fff;
+  }
+  :global(html:not(.dark)) .tt-multi-on { color: var(--text-primary); }
+
+  /* Volume slider */
+  .tt-vol-hd {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .tt-vol-val {
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+  }
+  .tt-range {
+    width: 100%;
+    height: 4px;
+    appearance: none;
+    -webkit-appearance: none;
+    background: linear-gradient(to right, var(--accent) var(--pct, 70%), var(--border) var(--pct, 70%));
+    border-radius: 2px;
+    cursor: pointer;
+    outline: none;
+  }
+  .tt-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid var(--surface);
+    box-shadow: 0 0 0 1px var(--accent);
+    cursor: pointer;
+  }
+
+  .tt-update-row { padding-top: 10px; }
+
+  /* ── Modes panel extensions ──────────────────────────────────────────── */
+
+  /* Descriptive paragraph under section headers / form fields */
+  .tt-desc {
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-muted);
+  }
+  .tt-code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--surface-panel) 60%, var(--border));
+    color: var(--text-secondary);
+  }
+
+  /* Stacked check row: checkbox + (label, description) two-line content */
+  .tt-check-stack-list { gap: 8px; }
+  .tt-check-row-stacked { align-items: flex-start; }
+  .tt-check-row-stacked .cb-native { margin-top: 2px; }
+  .tt-check-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+  .tt-check-lbl-strong {
+    color: var(--text-primary);
+    font-size: 12px;
+  }
+  .tt-check-desc {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  /* Inputs & textarea (Modes-only patterns) */
+  .tt-input {
+    width: 100%;
+    padding: 6px 8px;
+    font-size: 12.5px;
+    font-family: inherit;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    outline: none;
+    transition: border-color 0.1s;
+  }
+  textarea.tt-input { resize: none; line-height: 1.5; }
+  .tt-input:hover, .tt-input:focus { border-color: var(--accent); }
+  .tt-input::placeholder { color: var(--text-muted); }
+  .tt-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+  /* Row with info on the left, action button on the right */
+  .tt-row-action { align-items: flex-start; gap: 8px; }
+  .tt-row-info   { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+
+  /* Inline-foot row: text on left, small action on right */
+  .tt-inline-foot {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .tt-reset-btn {
+    font-size: 11px;
+    color: var(--text-muted);
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    transition: color 0.1s;
+  }
+  .tt-reset-btn:hover { color: var(--accent); }
+
+  /* General-purpose button used inside ruled sections (e.g. Setup actions).
+     Mirrors UpdateManager's .tt-update-btn but inline-sized, not block. */
+  .tt-btn {
+    flex-shrink: 0;
+    padding: 5px 10px;
+    font-size: 10px;
+    font-family: inherit;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--surface-panel);
+    color: var(--text-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.1s, color 0.1s, border-color 0.1s;
+  }
+  .tt-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--surface-panel) 80%, var(--text-primary));
+    color: var(--text-primary);
+  }
+  .tt-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Ollama pull progress */
+  .tt-progress-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .tt-progress-track {
+    flex: 1;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .tt-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.3s;
+  }
+  .tt-progress-pct {
+    width: 32px;
+    text-align: right;
+    font-size: 10px;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .tt-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* "Ready" badge in subsection-hd */
+  .tt-status-ready {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: color-mix(in srgb, var(--accent) 60%, #4ade80);
+  }
+
+  /* Preset chip container — uses .tt-multi-btn underneath but wraps */
+  .tt-multi-wrap { flex-wrap: wrap; gap: 4px; }
 </style>

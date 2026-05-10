@@ -99,7 +99,8 @@
     <div
       role="tablist"
       aria-orientation="vertical"
-      class="flex flex-col shrink-0 border-r border-[var(--border)] bg-[var(--surface-raised)] w-36"
+      class="flex flex-col shrink-0 border-r border-[var(--border)] w-36"
+      style="background: color-mix(in srgb, black 10%, var(--surface-raised));"
     >
       {#each tabs as tab, index}
         <button
@@ -111,8 +112,11 @@
           class="px-4 py-2 text-[13px] text-left font-medium border-l-2 transition-colors
                  outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-inset
                  {activeTab === tab.id
-                   ? 'border-[var(--accent)] text-[var(--accent)] bg-[var(--surface)]'
+                   ? 'border-[var(--accent)] text-[var(--text-primary)]'
                    : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+          style={activeTab === tab.id
+            ? 'background: color-mix(in srgb, white 18%, var(--surface-raised));'
+            : ''}
         >{tab.label}</button>
       {/each}
     </div>
