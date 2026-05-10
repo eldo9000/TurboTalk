@@ -36,7 +36,8 @@
 
 <div
   role="tablist"
-  class="flex border-b border-[var(--border)] bg-[var(--surface-raised)] shrink-0 {extraClass}"
+  class="flex border-b border-[var(--border)] shrink-0 {extraClass}"
+  style="background: color-mix(in srgb, black 10%, var(--surface-raised));"
 >
   {#each tabs as tab, index}
     <button
@@ -48,8 +49,11 @@
       class="px-5 py-2 text-[13px] font-medium border-b-2 transition-colors outline-none
              focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-inset
              {active === tab.id
-               ? 'border-[var(--accent)] text-[var(--accent)]'
+               ? 'border-[var(--accent)] text-[var(--text-primary)]'
                : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+      style={active === tab.id
+        ? 'background: color-mix(in srgb, white 18%, var(--surface-raised));'
+        : ''}
     >{tab.label}</button>
   {/each}
 </div>

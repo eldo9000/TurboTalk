@@ -182,8 +182,6 @@ export type Config = {
 	transcript_size_indicator?: boolean,
 	// Play a sound cue when recording starts.
 	sound_on_start?: boolean,
-	// Play a sound cue when transcription begins.
-	sound_on_transcribe?: boolean,
 	// Play a sound cue when transcription finishes and text is pasted.
 	sound_on_finish?: boolean,
 	/**

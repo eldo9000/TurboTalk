@@ -1,7 +1,6 @@
 <script>
   import { invoke } from '@tauri-apps/api/core';
   import { check as checkUpdate } from '@tauri-apps/plugin-updater';
-  import SectionLabel from '@libre/ui/src/components/SectionLabel.svelte';
 
   const RELEASES_URL = 'https://github.com/eldo9000/TurboTalk-App/releases/latest';
   const LS_KEY = 'turbotalk.lastUpdateCheck';
@@ -46,42 +45,48 @@
   });
 </script>
 
-<div class="space-y-1">
-  <SectionLabel size="xs" class="!opacity-50">Updates</SectionLabel>
-  <div class="flex items-center gap-3">
-    {#if updateState === 'available'}
-      <span class="text-[11px] text-[var(--text-secondary)]">
-        v{updateVersion} available
-      </span>
-      <button
-        onclick={openReleasesPage}
-        class="px-2.5 py-1 rounded text-[11px] font-semibold
-               bg-[var(--accent)] text-white border border-[color-mix(in_srgb,var(--accent)_70%,#000)]
-               hover:opacity-90 transition-opacity"
-      >
-        Download update
-      </button>
-    {:else if updateState === 'checking'}
-      <span class="text-[11px] text-[var(--text-secondary)]">Checking…</span>
-    {:else if updateState === 'up-to-date'}
-      <span class="text-[11px] text-[var(--text-secondary)]">Up to date</span>
-      <button
-        onclick={checkForUpdate}
-        class="px-2.5 py-1 rounded text-[11px] border border-[var(--border)]
-               text-[var(--text-secondary)] hover:text-[var(--text-primary)]
-               hover:border-[var(--accent)] transition-colors"
-      >
-        Check again
-      </button>
-    {:else}
-      <button
-        onclick={checkForUpdate}
-        class="px-2.5 py-1 rounded text-[11px] border border-[var(--border)]
-               text-[var(--text-secondary)] hover:text-[var(--text-primary)]
-               hover:border-[var(--accent)] transition-colors"
-      >
-        Check for updates
-      </button>
-    {/if}
-  </div>
-</div>
+{#if updateState === 'available'}
+  <button onclick={openReleasesPage} class="tt-update-btn tt-update-btn-accent">
+    Download update{updateVersion ? ` v${updateVersion}` : ''}
+  </button>
+{:else if updateState === 'checking'}
+  <button class="tt-update-btn" disabled>Checking…</button>
+{:else if updateState === 'up-to-date'}
+  <button onclick={checkForUpdate} class="tt-update-btn">Up to date — check again</button>
+{:else}
+  <button onclick={checkForUpdate} class="tt-update-btn">Check for updates</button>
+{/if}
+
+<style>
+  .tt-update-btn {
+    width: 100%;
+    padding: 5px 10px;
+    font-size: 10px;
+    font-family: inherit;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--surface-panel);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s, border-color 0.1s;
+  }
+  .tt-update-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--surface-panel) 80%, var(--text-primary));
+    color: var(--text-primary);
+  }
+  .tt-update-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  .tt-update-btn-accent {
+    background: var(--accent);
+    color: #fff;
+    border-color: color-mix(in srgb, var(--accent) 70%, #000);
+  }
+  .tt-update-btn-accent:hover:not(:disabled) {
+    background: var(--accent-hover);
+    color: #fff;
+  }
+</style>

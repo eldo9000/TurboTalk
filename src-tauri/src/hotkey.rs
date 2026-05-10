@@ -233,7 +233,6 @@ mod common {
     #[derive(Clone, Copy)]
     pub(super) enum ChimeEvent {
         Start,
-        Transcribe,
         Finish,
         Cancel,
     }
@@ -254,9 +253,6 @@ mod common {
             //   Bottle — gentle glass clink at paste time
             //   Tink   — softest of the system sounds, paired with cancel
             ChimeEvent::Start => (cfg.sound_on_start, "/System/Library/Sounds/Pop.aiff"),
-            ChimeEvent::Transcribe => {
-                (cfg.sound_on_transcribe, "/System/Library/Sounds/Morse.aiff")
-            }
             ChimeEvent::Finish => (cfg.sound_on_finish, "/System/Library/Sounds/Bottle.aiff"),
             ChimeEvent::Cancel => (cfg.sound_on_cancel, "/System/Library/Sounds/Tink.aiff"),
         };
@@ -486,7 +482,6 @@ mod common {
                     if let Some(job_id) = job_id_opt {
                         emit_stage(&app, job_id, "transcribing");
                     }
-                    play_chime(ChimeEvent::Transcribe);
 
                     // Stage 1: raw whisper transcription (no cleanup).
                     let transcribe_result = crate::transcribe::run_raw(&path);

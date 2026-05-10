@@ -13,6 +13,9 @@
    *               variant would feel heavy.
    *   sliding   — Raised tile that animates between options (Fade CompTab
    *               zoom-mode pattern).
+   *   tinted    — Connected bordered segments; active option gets an
+   *               accent-tinted background + border (TurboTalk theme-selector
+   *               pattern). Good for compact settings UIs.
    */
 
   let {
@@ -28,9 +31,24 @@
     sm: { h: 22, px: 'px-2.5', py: 'py-[3px]', text: 'text-[11px]' },
     md: { h: 28, px: 'px-3',   py: 'py-[5px]', text: 'text-[12px]' },
   };
-  const s = sizes[size] ?? sizes.md;
+  const s = $derived(sizes[size] ?? sizes.md);
 
   const activeIndex = $derived(options.findIndex(o => o.value === value));
+
+  // Sliding-variant pill geometry is driven by measured DOM offsets so
+  // labels of different lengths align exactly (calc-based equal-slot
+  // positioning falls apart when `flex: 1` doesn't actually equalize
+  // widths inside an `inline-flex` container).
+  let slidingTabRefs = $state([]);
+  let slidingPillStyle = $state('');
+
+  $effect(() => {
+    if (variant !== 'sliding') { slidingPillStyle = ''; return; }
+    const i = activeIndex;
+    const el = slidingTabRefs[i];
+    if (i < 0 || !el) { slidingPillStyle = ''; return; }
+    slidingPillStyle = `width: ${el.offsetWidth}px; left: ${el.offsetLeft}px;`;
+  });
 
   function pick(v) {
     value = v;
@@ -38,30 +56,60 @@
   }
 </script>
 
-{#if variant === 'sliding'}
-  <div
-    class="relative inline-flex rounded shrink-0 {extraClass}"
-    style="background:var(--surface-deep, var(--surface-raised)); padding:2px; height:{s.h}px;"
-  >
-    {#if activeIndex >= 0 && options.length > 0}
-      <div
-        class="absolute inset-y-[2px] rounded pointer-events-none transition-all duration-150 ease-out"
-        style="width:calc((100% - 4px) / {options.length});
-               left:calc(2px + {activeIndex} * (100% - 4px) / {options.length});
-               background:var(--surface-raised);
-               box-shadow:0 1px 3px rgba(0,0,0,0.35);"
-      ></div>
-    {/if}
-    {#each options as opt}
+{#if variant === 'tinted'}
+  <div class="inline-flex {extraClass}">
+    {#each options as opt, i}
+      {@const active = opt.value === value}
+      {@const first = i === 0}
+      {@const last = i === options.length - 1}
       <button
         type="button"
         onclick={() => pick(opt.value)}
-        class="relative z-10 flex-1 flex items-center justify-center gap-1 {s.px}
+        class="relative flex-1 flex items-center justify-center
+               font-semibold tracking-[0.04em] whitespace-nowrap cursor-pointer
+               transition-[background,color,border-color] duration-100
+               {i > 0 ? '-ml-px' : ''}
+               {active
+                 ? 'z-10 text-[var(--text-primary)]'
+                 : 'z-[1] text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:z-[2]'}"
+        style="height:{s.h}px;
+               padding:0 {size === 'sm' ? '6px' : '10px'};
+               font-size:{size === 'sm' ? '9px' : '11px'};
+               background:{active ? 'color-mix(in srgb,var(--accent) 18%,var(--surface-raised))' : 'var(--surface-raised)'};
+               border:1px solid {active ? 'color-mix(in srgb,var(--accent) 40%,var(--border))' : 'var(--border)'};
+               border-radius:{first ? '4px 0 0 4px' : last ? '0 4px 4px 0' : '0'};"
+      >
+        <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+        {#if opt.icon}{@html opt.icon}{/if}
+        {opt.label}
+      </button>
+    {/each}
+  </div>
+{:else if variant === 'sliding'}
+  <div
+    class="relative inline-flex rounded shrink-0 {extraClass}"
+    style="background:rgb(0 0 0 / 0.22); padding:2px; height:{s.h}px;"
+  >
+    {#if slidingPillStyle}
+      <div
+        class="absolute inset-y-[2px] rounded pointer-events-none transition-all duration-150 ease-out"
+        style="{slidingPillStyle}
+               background:color-mix(in srgb, white 18%, var(--surface-raised));
+               box-shadow:0 1px 3px rgb(0 0 0 / 35%);"
+      ></div>
+    {/if}
+    {#each options as opt, i}
+      <button
+        bind:this={slidingTabRefs[i]}
+        type="button"
+        onclick={() => pick(opt.value)}
+        class="relative z-10 flex items-center justify-center gap-1 {s.px}
                {s.text} font-medium transition-colors duration-100
                {opt.value === value
                  ? 'text-[var(--text-primary)]'
                  : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
       >
+        <!-- eslint-disable-next-line svelte/no-at-html-tags -->
         {#if opt.icon}{@html opt.icon}{/if}
         {opt.label}
       </button>
@@ -83,6 +131,7 @@
                  ? 'seg-active z-10'
                  : 'seg-inactive border-[var(--border)] text-[color-mix(in_srgb,var(--text-primary)_70%,transparent)] hover:z-10'}"
       >
+        <!-- eslint-disable-next-line svelte/no-at-html-tags -->
         {#if opt.icon}{@html opt.icon}{/if}
         {opt.label}
       </button>

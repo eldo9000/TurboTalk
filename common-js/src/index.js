@@ -14,6 +14,7 @@ export { default as Titlebar }    from './components/Titlebar.svelte';
 // Components
 export { default as Button }            from './components/Button.svelte';
 export { default as Checkbox }          from './components/Checkbox.svelte';
+export { default as GlobalTabs }        from './components/GlobalTabs.svelte';
 export { default as IconButton }        from './components/IconButton.svelte';
 export { default as ProgressBar }       from './components/ProgressBar.svelte';
 export { default as ScrollArea }        from './components/ScrollArea.svelte';
@@ -21,12 +22,16 @@ export { default as SectionLabel }      from './components/SectionLabel.svelte';
 export { default as SegmentedControl }  from './components/SegmentedControl.svelte';
 export { default as Select }            from './components/Select.svelte';
 export { default as TabBar }            from './components/TabBar.svelte';
+export { default as Timecode }          from './components/Timecode.svelte';
 export { default as Toast }             from './components/Toast.svelte';
 export { default as Toaster }           from './components/Toaster.svelte';
+export { default as TrafficLight }      from './components/TrafficLight.svelte';
+export { default as Transport }         from './components/Transport.svelte';
 
 // Overlays & interaction
 export { default as Dialog }      from './components/Dialog.svelte';
 export { default as Menu }        from './components/Menu.svelte';
+export { default as PanelTabs }   from './components/PanelTabs.svelte';
 export { default as Tabs }        from './components/Tabs.svelte';
 export { default as Tooltip }     from './components/Tooltip.svelte';
 export { default as Input }       from './components/Input.svelte';
