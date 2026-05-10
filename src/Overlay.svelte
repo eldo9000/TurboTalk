@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
-  import { getCurrentWindow, cursorPosition } from '@tauri-apps/api/window';
+  import { getCurrentWindow, cursorPosition, primaryMonitor } from '@tauri-apps/api/window';
   import { commands } from './bindings.ts';
 
   // 'arming' = backend received the press but whisper-server hasn't finished
@@ -90,19 +90,27 @@
       indicatorEnabled = cfg.transcript_size_indicator ?? true;
     } catch (_) { /* keep indicator off */ }
 
-    // Window placement (which monitor + position on that monitor) is owned
-    // entirely by the Rust side — see `reposition_overlay_to_cursor_monitor`
-    // in src-tauri/src/lib.rs. The frontend only mirrors the resulting frame
-    // to compute the cursor-peek-through hoverZone; it never moves the
-    // window itself, since the JS `monitorFromPoint` API misclassifies the
-    // active monitor on macOS multi-scale setups (retina + 1× external).
-    let hoverZone = { x: 0, y: 0, w: 0, h: 0 };
+    // Window placement is owned entirely by the Rust side — see
+    // `reposition_overlay_to_cursor_monitor` in src-tauri/src/lib.rs.
+    // The frontend only mirrors the resulting frame to compute the
+    // cursor-peek-through hoverZone.
+    //
+    // Coordinate-space note (macOS multi-monitor):
+    //   cursorPosition() → NSPoint × primarySf  (primary-monitor-scaled physical px)
+    //   outerPosition()  → NSPoint × windowSf   (window-monitor-scaled physical px)
+    // On a single Retina display these are the same; on Retina + 1× external
+    // they differ. Normalise both to NSPoints before comparing.
+    const primary = await primaryMonitor();
+    const primarySf = primary?.scaleFactor ?? dpr;
+
+    let hoverZone = { x: 0, y: 0, w: 0, h: 0 }; // NSPoints
 
     async function refreshHoverZone() {
       try {
-        const pos  = await win.outerPosition(); // physical px
-        const size = await win.outerSize();     // physical px
-        hoverZone = { x: pos.x, y: pos.y, w: size.width, h: size.height };
+        const pos  = await win.outerPosition();
+        const size = await win.outerSize();
+        const wsf  = window.devicePixelRatio || 1;
+        hoverZone = { x: pos.x / wsf, y: pos.y / wsf, w: size.width / wsf, h: size.height / wsf };
       } catch (_) { /* leave previous zone in place */ }
     }
     await refreshHoverZone();
@@ -110,8 +118,10 @@
     const cursorTimer = setInterval(async () => {
       try {
         const cur = await cursorPosition();
-        cursorInZone = cur.x >= hoverZone.x && cur.x <= hoverZone.x + hoverZone.w
-                    && cur.y >= hoverZone.y && cur.y <= hoverZone.y + hoverZone.h;
+        const nsX = cur.x / primarySf;
+        const nsY = cur.y / primarySf;
+        cursorInZone = nsX >= hoverZone.x && nsX <= hoverZone.x + hoverZone.w
+                    && nsY >= hoverZone.y && nsY <= hoverZone.y + hoverZone.h;
       } catch (_) {}
     }, 100);
 
