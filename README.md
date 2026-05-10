@@ -1,13 +1,45 @@
-# Turbo Talk
+<p align="center">
+  <img src="src-tauri/icons/icon.png" width="128" height="128" alt="Turbo Talk" />
+</p>
 
-Free voice dictation for getting work done.
+<h1 align="center">Turbo Talk</h1>
+
+<p align="center"><strong>Free voice dictation for getting work done.</strong></p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/version-0.8.7-blue" alt="version" />
+  <img src="https://img.shields.io/badge/license-GPL--3.0-green" alt="license" />
+  <img src="https://img.shields.io/badge/platform-macOS%20arm64-lightgrey" alt="platform" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/eldo9000/TurboTalk-App/releases">
+    <img src="https://img.shields.io/badge/Download-Latest%20Release-blue?style=for-the-badge&logo=apple&logoColor=white" alt="Download" />
+  </a>
+</p>
 
 ---
 
-<p align="center">
-  <img src="docs/assets/ss1.jpg" alt="TurboTalk screenshot 1" width="49%" />
-  <img src="docs/assets/ss2.jpg" alt="TurboTalk screenshot 2" width="49%" />
-</p>
+<table>
+  <tr>
+    <td align="center">
+      <p><img src="docs/assets/ss1.jpg" alt="Models tab" /></p>
+      <p><sub>Whisper model selection</sub></p>
+    </td>
+    <td align="center">
+      <p><img src="docs/assets/ss2.jpg" alt="Settings tab" /></p>
+      <p><sub>Hotkey, recording, and system settings</sub></p>
+    </td>
+  </tr>
+  <!-- Drop docs/assets/ss3.jpg in and uncomment for the full triple matrix:
+  <tr>
+    <td colspan="2" align="center">
+      <p><img src="docs/assets/ss3.jpg" alt="TurboTalk in action" /></p>
+      <p><sub>Caption here</sub></p>
+    </td>
+  </tr>
+  -->
+</table>
 
 ---
 
