@@ -25,7 +25,7 @@ is applied by `tokens.css` to `#app > div:first-child`.
 
 **Props:** none (accepts extra HTML attributes and forwards them to the div — useful for `ondragover` etc.)
 
-**Reference:** [ghost/src/App.svelte](../ghost/src/App.svelte), [prism/src/App.svelte](../prism/src/App.svelte), [fade/src/App.svelte](../fade/src/App.svelte)
+**Reference:** [avalanche/src/App.svelte](../avalanche/src/App.svelte), [prism/src/App.svelte](../prism/src/App.svelte), [fade/src/App.svelte](../fade/src/App.svelte)
 
 ---
 
@@ -42,7 +42,7 @@ Windows-style min/max/close controls.
   </div>
 </Titlebar>
 
-<!-- Taller bar for apps with nav controls (e.g. Ghost) -->
+<!-- Taller bar for apps with nav controls (e.g. Avalanche) -->
 <Titlebar height="h-11">
   ...
 </Titlebar>
@@ -51,7 +51,7 @@ Windows-style min/max/close controls.
 **Props:**
 - `height` — Tailwind height class. Default: `'h-8'`
 
-**Reference:** [ghost/src/App.svelte](../ghost/src/App.svelte), [prism/src/App.svelte](../prism/src/App.svelte)
+**Reference:** [avalanche/src/App.svelte](../avalanche/src/App.svelte), [prism/src/App.svelte](../prism/src/App.svelte)
 
 ---
 

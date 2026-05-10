@@ -203,6 +203,31 @@ fn validate_model_path(raw_model: &str, canon_models_dir: &Path) -> anyhow::Resu
     Ok(canon_model)
 }
 
+/// Strip common Whisper trailing hallucinations ("okay", "yeah", etc.) that
+/// appear when the model decodes trailing silence rather than real speech.
+/// Only the very end of the transcript is trimmed; the body is untouched.
+fn strip_trailing_filler(text: &str) -> String {
+    // Each entry is matched case-insensitively against the trimmed tail.
+    // Punctuation after the filler word is consumed along with it.
+    const FILLERS: &[&str] = &[
+        "okay", "ok", "yeah", "yep", "yup", "alright", "all right",
+        "thank you", "thanks", "uh", "um", "uh huh",
+    ];
+    let mut s = text.to_string();
+    loop {
+        let trimmed = s.trim_end_matches(|c: char| c.is_whitespace() || c == '.' || c == ',');
+        let lower = trimmed.to_lowercase();
+        let matched = FILLERS.iter().find_map(|&f| {
+            lower.strip_suffix(f).map(|rest| rest.len())
+        });
+        match matched {
+            Some(keep) => s = trimmed[..keep].trim_end_matches(|c: char| c.is_whitespace() || c == ',' || c == '.').to_string(),
+            None => break,
+        }
+    }
+    s
+}
+
 /// Lifecycle owner for whisper transcription. TASK-47: this struct spawns a
 /// long-lived `whisper-server` process at construction time and reuses it for
 /// all subsequent `transcribe` calls — keeping the model warm across
@@ -424,11 +449,12 @@ impl TranscriptionWorker {
         }
 
         let json: serde_json::Value = response.json()?;
-        let text = json["text"]
+        let raw = json["text"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("whisper-server response missing 'text' field"))?
             .trim()
             .to_string();
+        let text = strip_trailing_filler(&raw);
 
         let whisper_ms = t_whisper_start.elapsed().as_millis();
         tracing::info!("[transcribe] whisper took {} ms", whisper_ms);
