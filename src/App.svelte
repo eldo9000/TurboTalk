@@ -10,6 +10,7 @@
   import SectionLabel from '@libre/ui/src/components/SectionLabel.svelte';
   import Select from '@libre/ui/src/components/Select.svelte';
   import Checkbox from '@libre/ui/src/components/Checkbox.svelte';
+  import UpdateManager from './UpdateManager.svelte';
 
   const HOTKEY_KEY_ITEMS = [
     { value: 'option',          label: 'Option ⌥' },
@@ -1556,6 +1557,9 @@ Reply with only the single word, lowercase, no punctuation.
             >Recording length overlay</Checkbox>
           </div>
         </div>
+
+        <!-- Updates -->
+        <UpdateManager />
 
       </div>
     </div>
