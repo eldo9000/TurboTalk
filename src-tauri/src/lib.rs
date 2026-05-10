@@ -999,6 +999,9 @@ pub fn run() {
 
             hotkey::spawn(recorder, tray_icon, app.handle().clone(), hotkey_state);
 
+            // Kill any whisper-server orphans left by a previous SIGKILL or
+            // rapid dev-mode restart before prewarming a fresh one.
+            transcribe::kill_orphans();
             // Eagerly warm whisper-server so the model is loaded before the
             // first dictation and /tmp/whisper-server-stderr.log exists at
             // startup for diagnostics. Emits `dictation-ready` on success so

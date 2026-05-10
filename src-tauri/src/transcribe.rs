@@ -567,6 +567,23 @@ pub fn prewarm_failed() -> bool {
     PREWARM_FAILED.load(Ordering::Acquire)
 }
 
+/// Kill any whisper-server processes left over from a previous run that was
+/// terminated before its `RunEvent::Exit` cleanup fired (e.g. SIGKILL from
+/// Tauri's dev runner during rapid file-change rebuilds). Best-effort: logs
+/// at warn on failure but never blocks startup.
+pub fn kill_orphans() {
+    let result = std::process::Command::new("pkill")
+        .args(["-f", "whisper-server"])
+        .output();
+    match result {
+        Ok(out) if out.status.success() => {
+            tracing::info!("[transcribe] kill_orphans: terminated leftover whisper-server(s)");
+        }
+        Ok(_) => {} // exit 1 = no matching process, normal case
+        Err(e) => tracing::warn!("[transcribe] kill_orphans: pkill failed: {}", e),
+    }
+}
+
 /// Eagerly spawn the whisper-server worker at app startup so the model is warm
 /// before the first dictation and the diagnostic log exists immediately.
 /// Runs on a background thread; on success flips `READY` and emits the
