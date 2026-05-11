@@ -7,6 +7,9 @@
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "core:window:allow-outer-position",
+    "core:window:allow-current-monitor",
     "core:window:allow-start-dragging",
     "dialog:allow-open",
     "updater:default"
