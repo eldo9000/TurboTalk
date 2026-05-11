@@ -26,6 +26,8 @@
   let downloadPct        = $state(0);
   let downloadError      = $state('');
   let restartArmed       = $state(false);
+  let cfgModel           = $state('');
+  let cfgModels          = $state([]);
 
   const RECOMMENDED = {
     id: 'ggml-large-v3-turbo',
@@ -41,14 +43,41 @@
       size: '3.1 GB', description: 'Maximum accuracy · slowest' },
   ];
 
+  const ALL_MODELS = [RECOMMENDED, ...ALTERNATES];
+
+  function uniqueModels(paths) {
+    return [...new Set(paths.filter(Boolean))];
+  }
+
+  function installedPath(modelId) {
+    return cfgModels.find(path => path.endsWith(`${modelId}.bin`)) ?? '';
+  }
+
+  let selectedModelReady = $derived(
+    !!cfgModel && cfgModels.includes(cfgModel)
+  );
+
   async function refresh() {
-    const [nextReadiness, nextLaunchAtLogin] = await Promise.all([
+    const [nextReadiness, nextLaunchAtLogin, cfg, scannedModels] = await Promise.all([
       commands.checkReadiness(),
       commands.getLaunchAtLogin(),
+      commands.getConfig(),
+      commands.scanModelsDir(),
     ]);
+    const nextCfgModel = cfg.whisper?.model ?? '';
+    const nextCfgModels = uniqueModels(scannedModels ?? []);
+    const nextSelectedModelReady = !!nextCfgModel && nextCfgModels.includes(nextCfgModel);
     readiness = nextReadiness;
     launchAtLogin = nextLaunchAtLogin;
-    if (readiness.ready && launchAtLogin) {
+    cfgModel = nextCfgModel;
+    cfgModels = nextCfgModels;
+    if (
+      nextReadiness.accessibility === 'granted'
+      && nextReadiness.input_monitoring === 'granted'
+      && nextReadiness.microphone === 'granted'
+      && nextSelectedModelReady
+      && nextLaunchAtLogin
+    ) {
       stopPolling();
       onComplete?.();
     }
@@ -144,29 +173,35 @@
     }
   }
 
-  async function downloadModel(modelId) {
-    downloadingModel = modelId;
+  async function saveSelectedModel(path) {
+    const cfg = await commands.getConfig();
+    if (!cfg.whisper) cfg.whisper = { bin: 'auto', model: '', models: [] };
+    cfg.whisper.model = path;
+    cfg.whisper.models = uniqueModels([...(cfg.whisper.models ?? []), path]);
+    await commands.saveConfig(cfg);
+    await refresh();
+  }
+
+  async function selectModel(path) {
+    await saveSelectedModel(path);
+  }
+
+  async function downloadModel(model) {
+    downloadingModel = model.id;
     downloadPct      = 0;
     downloadError    = '';
     const unlisten = await listen('download-progress', (e) => {
-      if (e.payload?.name === modelId) {
+      if (e.payload?.name === model.id) {
         downloadPct = e.payload.pct ?? 0;
       }
     });
     try {
-      const res = await commands.downloadModel(modelId);
+      const res = await commands.downloadModel(model.id);
       if (res.status === 'error') {
         downloadError = res.error || 'Download failed.';
         return;
       }
-      const cfg = await commands.getConfig();
-      if (!cfg.whisper) cfg.whisper = { bin: 'auto', model: '', models: [] };
-      cfg.whisper.model = res.data;
-      if (!cfg.whisper.models.includes(res.data)) {
-        cfg.whisper.models = [...cfg.whisper.models, res.data];
-      }
-      await commands.saveConfig(cfg);
-      await refresh();
+      await saveSelectedModel(res.data);
     } finally {
       unlisten();
       downloadingModel = null;
@@ -178,7 +213,7 @@
     const a = readiness.accessibility === 'granted';
     const i = readiness.input_monitoring === 'granted';
     const m = readiness.microphone    === 'granted';
-    const p = readiness.model_present;
+    const p = selectedModelReady;
     return {
       accessibility: a ? 'done' : 'active',
       input_monitoring: i ? 'done' : (a ? 'active' : 'pending'),
@@ -214,7 +249,7 @@
       <p class="text-[12px] text-[var(--text-secondary)] leading-relaxed">
         {unsupportedPlatform
           ? 'This beta is macOS-only for recording, global hotkeys, and paste.'
-          : 'Three quick setup steps before you can start dictating.'}
+          : 'Finish setup before you can start dictating.'}
       </p>
     </div>
 
@@ -347,7 +382,7 @@
               Whisper runs locally on your Mac. Pick a model — the recommended one fits most users.
             </p>
           </div>
-          {#if stepStates.model === 'active'}
+          {#if stepStates.model === 'active' || stepStates.model === 'done'}
             {#if downloadingModel}
               <div class="flex flex-col gap-1.5">
                 <div class="flex items-center justify-between text-[11px]">
@@ -359,26 +394,35 @@
                 </div>
               </div>
             {:else}
-              <button onclick={() => downloadModel(RECOMMENDED.id)}
-                class="flex items-start justify-between gap-3 p-2.5 rounded-md border border-[var(--border,#2a2a2a)] hover:border-[var(--accent)]/60 text-left transition-colors">
-                <div class="flex flex-col gap-0.5 min-w-0">
-                  <div class="flex items-center gap-2">
-                    <span class="text-[12px] font-medium text-[var(--text-primary)]">{RECOMMENDED.label}</span>
-                    <span class="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-[var(--accent)]/15 text-[var(--accent)]">Recommended</span>
-                  </div>
-                  <span class="text-[11px] text-[var(--text-secondary)] leading-snug">{RECOMMENDED.description}</span>
-                </div>
-                <span class="shrink-0 text-[11px] font-mono text-[var(--text-secondary)]">{RECOMMENDED.size}</span>
-              </button>
-              {#each ALTERNATES as m (m.id)}
-                <button onclick={() => downloadModel(m.id)}
-                  class="flex items-start justify-between gap-3 p-2.5 rounded-md border border-[var(--border,#2a2a2a)] hover:border-[var(--accent)]/60 text-left transition-colors">
+              {#each ALL_MODELS as model, idx (model.id)}
+                {@const path = installedPath(model.id)}
+                {@const isSelected = path && path === cfgModel}
+                <div class="flex items-start justify-between gap-3 p-2.5 rounded-md border border-[var(--border,#2a2a2a)]">
                   <div class="flex flex-col gap-0.5 min-w-0">
-                    <span class="text-[12px] font-medium text-[var(--text-primary)]">{m.label}</span>
-                    <span class="text-[11px] text-[var(--text-secondary)] leading-snug">{m.description}</span>
+                    <div class="flex items-center gap-2 min-w-0">
+                      <span class="text-[12px] font-medium text-[var(--text-primary)] truncate">{model.label}</span>
+                      {#if idx === 0}
+                        <span class="shrink-0 text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-[var(--accent)]/15 text-[var(--accent)]">Recommended</span>
+                      {/if}
+                    </div>
+                    <span class="text-[11px] text-[var(--text-secondary)] leading-snug">{model.description}</span>
                   </div>
-                  <span class="shrink-0 text-[11px] font-mono text-[var(--text-secondary)]">{m.size}</span>
-                </button>
+                  <div class="shrink-0 flex items-center gap-2">
+                    <span class="text-[11px] font-mono text-[var(--text-secondary)]">{model.size}</span>
+                    {#if path}
+                      <button onclick={() => selectModel(path)}
+                        disabled={isSelected}
+                        class="px-2 py-1 rounded-md border border-[var(--border,#3a3a3a)] text-[11px] font-medium text-[var(--text-primary)] hover:bg-white/5 disabled:opacity-60 disabled:hover:bg-transparent transition-colors">
+                        {isSelected ? 'Selected' : 'Select'}
+                      </button>
+                    {:else}
+                      <button onclick={() => downloadModel(model)}
+                        class="px-2 py-1 rounded-md bg-[var(--accent)] text-white text-[11px] font-medium hover:opacity-90 transition-opacity">
+                        Download
+                      </button>
+                    {/if}
+                  </div>
+                </div>
               {/each}
               {#if downloadError}
                 <p class="text-[11px] text-red-400 leading-snug">{downloadError}</p>
