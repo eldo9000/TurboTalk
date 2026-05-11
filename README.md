@@ -7,7 +7,7 @@
 <p align="center"><strong>Free voice dictation for getting work done.</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.8.7-blue" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.8.8-blue" alt="version" />
   <img src="https://img.shields.io/badge/license-GPL--3.0-green" alt="license" />
   <img src="https://img.shields.io/badge/platform-macOS%20arm64-lightgrey" alt="platform" />
 </p>
@@ -171,7 +171,7 @@ No other macOS system permissions are requested. There is no Automation prompt p
 - **macOS:** Apple Silicon only. Ad-hoc signed only — not Apple-notarized. Expect a Gatekeeper warning on first launch (right-click → Open the first time).
 - **Windows:** Installer packaging exists, but end-to-end dictation is not supported yet. Hotkey + paste are still unsupported off macOS. The `.exe` is unsigned, so SmartScreen warns on first run. WebView2 runtime is required (preinstalled on Windows 11; Windows 10 users may need <https://developer.microsoft.com/microsoft-edge/webview2/>).
 - **Linux:** X11 only — **Wayland is not supported.** AppImage requires FUSE (`libfuse2` on Debian/Ubuntu). Tray-icon support depends on your desktop's AppIndicator support (GNOME may need an extension).
-- **All platforms:** No auto-updater. Re-download to update.
+- **macOS:** Auto-updater built in — the app checks for updates on launch and prompts when one is available. Windows/Linux: re-download to update.
 - History is saved to disk by default, retained for 10 days. Configurable in Settings — choose `restart` (clear on launch), `1d`, `5d`, `10d`, or `30d`. Capped at 50 entries either way.
 - The Advanced cleanup mode requires a local Ollama install. If you don't run Ollama, leave cleanup on `Off` or `Simple`.
 
