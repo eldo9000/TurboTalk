@@ -228,6 +228,13 @@ fn strip_trailing_filler(text: &str) -> String {
     s
 }
 
+/// whisper-server may return segment-bounded text containing literal newlines
+/// every few words. Those are decoder artifacts, not user intent; explicit
+/// voice commands such as "new paragraph" are handled later in cleanup.rs.
+fn normalize_whisper_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Lifecycle owner for whisper transcription. TASK-47: this struct spawns a
 /// long-lived `whisper-server` process at construction time and reuses it for
 /// all subsequent `transcribe` calls — keeping the model warm across
@@ -454,7 +461,8 @@ impl TranscriptionWorker {
             .ok_or_else(|| anyhow::anyhow!("whisper-server response missing 'text' field"))?
             .trim()
             .to_string();
-        let text = strip_trailing_filler(&raw);
+        let normalized = normalize_whisper_text(&raw);
+        let text = strip_trailing_filler(&normalized);
 
         let whisper_ms = t_whisper_start.elapsed().as_millis();
         tracing::info!("[transcribe] whisper took {} ms", whisper_ms);
@@ -707,6 +715,18 @@ mod tests {
             is_allowed_whisper_path(&exe),
             "the running test binary at {:?} should be inside an allowed root",
             exe
+        );
+    }
+
+    #[test]
+    fn normalize_whisper_text_collapses_segment_newlines() {
+        assert_eq!(
+            normalize_whisper_text("one two\n three four\nfive"),
+            "one two three four five"
+        );
+        assert_eq!(
+            normalize_whisper_text(" one   two\tthree\n four "),
+            "one two three four"
         );
     }
 
