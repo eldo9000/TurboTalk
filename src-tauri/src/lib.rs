@@ -848,7 +848,6 @@ pub fn run() {
             )?;
             let show_item = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;
             let restart_item = MenuItem::with_id(app, "restart", "Restart", true, None::<&str>)?;
-            let rebuild_item = MenuItem::with_id(app, "rebuild", "Rebuild", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let sep1 = PredefinedMenuItem::separator(app)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
@@ -860,7 +859,6 @@ pub fn run() {
                     &show_item,
                     &sep2,
                     &restart_item,
-                    &rebuild_item,
                     &quit_item,
                 ],
             )?;
@@ -921,23 +919,6 @@ pub fn run() {
                         }
                     }
                     "restart" => app.restart(),
-                    "rebuild" => {
-                        let project_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                            .parent()
-                            .map(|p| p.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| ".".to_string());
-                        std::process::Command::new("osascript")
-                            .args([
-                                "-e",
-                                &format!(
-                                    "tell application \"Terminal\"\n  activate\n  do script \"cd '{}' && npm run tauri dev\"\nend tell",
-                                    project_dir
-                                ),
-                            ])
-                            .spawn()
-                            .ok();
-                        app.exit(0);
-                    }
                     "quit" => app.exit(0),
                     _ => {}
                 })
