@@ -266,14 +266,14 @@ pub fn filter_history_by_policy(entries: Vec<HistoryEntry>, policy: &str) -> Vec
     entries.into_iter().filter(|e| e.ts >= cutoff).collect()
 }
 
-fn config_path() -> PathBuf {
+pub(crate) fn config_path() -> PathBuf {
     let mut p = dirs::home_dir().unwrap_or_default();
     p.push(".config/librewin/turbotalk/config.toml");
     p
 }
 
 
-fn history_path() -> PathBuf {
+pub(crate) fn history_path() -> PathBuf {
     let mut p = dirs::home_dir().unwrap_or_default();
     p.push(".config/librewin/turbotalk/history.json");
     p

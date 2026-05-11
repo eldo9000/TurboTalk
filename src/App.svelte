@@ -75,10 +75,38 @@
 
   let aboutOpen    = $state(false);
   let aboutClosing = $state(false);
+  let resetOpen    = $state(false);
+  let resetClosing = $state(false);
+  let resetBusy    = $state(false);
+  let resetError   = $state('');
 
   function closeAbout() {
     aboutClosing = true;
     setTimeout(() => { aboutOpen = false; aboutClosing = false; }, 500);
+  }
+
+  function closeReset() {
+    if (resetBusy) return;
+    resetClosing = true;
+    setTimeout(() => { resetOpen = false; resetClosing = false; resetError = ''; }, 500);
+  }
+
+  async function resetTurboTalk(deleteModels) {
+    resetBusy = true;
+    resetError = '';
+    const res = await commands.resetTurbotalk(deleteModels);
+    resetBusy = false;
+    if (res.status === 'error') {
+      resetError = res.error;
+      return;
+    }
+    history = [];
+    cfgLaunchLogin = false;
+    resetOpen = false;
+    resetClosing = false;
+    showOnboarding = true;
+    unsupportedPlatformDismissed = false;
+    await recheckReadiness();
   }
 
   // History
@@ -1488,6 +1516,14 @@ Reply with only the single word, lowercase, no punctuation.
               <span class="tt-check-lbl">Recording length overlay</span>
             </label>
           </div>
+          <div class="tt-row tt-row-field">
+            <button
+              onclick={() => { resetOpen = true; resetClosing = false; resetError = ''; }}
+              class="tt-btn tt-btn-danger-hover w-full justify-center"
+            >
+              Reset TurboTalk
+            </button>
+          </div>
           <div class="tt-row tt-row-field tt-update-row">
             <UpdateManager />
           </div>
@@ -1534,6 +1570,70 @@ Reply with only the single word, lowercase, no punctuation.
             <span class="text-[10px] text-[var(--text-muted)]">Powered by</span>
             <span class="text-[10px] text-[var(--text-secondary)]">whisper.cpp · Ollama</span>
           </div>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Reset modal -->
+  {#if resetOpen}
+    <div
+      class="about-backdrop {resetClosing ? 'about-backdrop-out' : 'about-backdrop-in'}"
+      onclick={(event) => {
+        if (event.target === event.currentTarget) {
+          closeReset();
+        }
+      }}
+      onkeydown={(event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          closeReset();
+        }
+      }}
+      role="button"
+      tabindex="0"
+      aria-label="Close reset"
+    >
+      <div
+        class="about-card reset-card {resetClosing ? 'about-card-out' : 'about-card-in'}"
+        role="dialog"
+        aria-modal="true"
+        tabindex="-1"
+      >
+        <div class="flex flex-col items-center gap-1 pb-3">
+          <span class="text-[18px] font-semibold tracking-tight text-[var(--text-primary)]">Reset TurboTalk</span>
+          <p class="text-[var(--text-secondary)] text-[11px] leading-snug mt-1.5 text-center">
+            Clear local settings and transcript history, disable Launch at Login, and return to setup.
+          </p>
+        </div>
+        <div class="flex flex-col gap-2 pt-2.5">
+          <button
+            onclick={() => resetTurboTalk(false)}
+            disabled={resetBusy}
+            class="tt-btn w-full justify-center"
+          >
+            Reset, Keep Models
+          </button>
+          <button
+            onclick={() => resetTurboTalk(true)}
+            disabled={resetBusy}
+            class="tt-btn tt-btn-danger-hover w-full justify-center"
+          >
+            Reset Everything
+          </button>
+          <button
+            onclick={closeReset}
+            disabled={resetBusy}
+            class="tt-btn w-full justify-center opacity-70"
+          >
+            Cancel
+          </button>
+          <p class="text-[10px] text-[var(--text-muted)] leading-snug text-center">
+            macOS privacy permissions stay in System Settings.
+          </p>
+          {#if resetError}
+            <p class="text-[10px] text-red-400 leading-snug text-center">{resetError}</p>
+          {/if}
         </div>
       </div>
     </div>
@@ -1610,6 +1710,7 @@ Reply with only the single word, lowercase, no punctuation.
     padding: 16px 16px 12px;
     box-shadow: 0 24px 48px rgba(0,0,0,0.6), 0 4px 12px rgba(0,0,0,0.4);
   }
+  .reset-card { width: 280px; }
   .about-card-in  { animation: about-card-in  0.4s cubic-bezier(0.16,1,0.3,1) forwards; }
   .about-card-out { animation: about-card-out 0.35s ease-in              forwards; }
 

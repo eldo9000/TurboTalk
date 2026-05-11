@@ -13,6 +13,7 @@ export const commands = {
 	scanModelsDir: () => __TAURI_INVOKE<string[]>("scan_models_dir"),
 	getLaunchAtLogin: () => __TAURI_INVOKE<boolean>("get_launch_at_login"),
 	setLaunchAtLogin: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_launch_at_login", { enabled })),
+	resetTurbotalk: (deleteModels: boolean) => typedError<null, string>(__TAURI_INVOKE("reset_turbotalk", { deleteModels })),
 	listAudioDevices: () => __TAURI_INVOKE<string[]>("list_audio_devices"),
 	downloadModel: (modelId: string) => typedError<string, string>(__TAURI_INVOKE("download_model", { modelId })),
 	cancelDownload: (modelId: string) => __TAURI_INVOKE<void>("cancel_download", { modelId }),
