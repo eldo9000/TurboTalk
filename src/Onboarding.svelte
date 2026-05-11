@@ -206,8 +206,8 @@
   }
 </script>
 
-<div class="fixed inset-0 z-[100] bg-[var(--surface)] text-[var(--text-primary)] flex flex-col overflow-hidden">
-  <div class="max-w-[420px] w-full mx-auto px-6 py-8 flex flex-col gap-5">
+<div class="fixed inset-0 z-[100] bg-[var(--surface)] text-[var(--text-primary)] flex flex-col overflow-y-auto">
+  <div class="max-w-[420px] w-full mx-auto px-6 py-8 pb-10 flex flex-col gap-5">
 
     <div class="flex flex-col gap-1.5">
       <h1 class="text-[18px] font-semibold leading-tight text-[var(--text-primary)]">Welcome to Turbo Talk</h1>
