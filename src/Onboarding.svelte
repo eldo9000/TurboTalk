@@ -17,6 +17,7 @@
   let readiness          = $state(null);
   let pollHandle         = null;
   let micPromptInFlight  = $state(false);
+  let inputPromptInFlight = $state(false);
   let downloadingModel   = $state(null);
   let downloadPct        = $state(0);
   let downloadError      = $state('');
@@ -74,10 +75,27 @@
     await commands.restartApp();
   }
 
+  function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
   async function openInputMonitoring() {
-    const status = await commands.requestInputMonitoringPermission();
-    if (status !== 'granted') {
-      await commands.openSystemSettings('input_monitoring');
+    inputPromptInFlight = true;
+    try {
+      const status = await commands.requestInputMonitoringPermission();
+      // macOS may need a moment to add the current bundle to the Input
+      // Monitoring list after IOHIDRequestAccess. Opening Settings too soon
+      // can land on a pane where Turbo Talk is not listed yet, forcing the
+      // user through the manual file-picker path.
+      if (status !== 'granted') {
+        await delay(1200);
+        await refresh();
+        if (readiness?.input_monitoring !== 'granted') {
+          await commands.openSystemSettings('input_monitoring');
+        }
+      }
+    } finally {
+      inputPromptInFlight = false;
     }
     restartArmed = true;
     await refresh();
@@ -241,8 +259,9 @@
           {#if stepStates.input_monitoring === 'active'}
             <div class="flex gap-2 flex-wrap">
               <button onclick={openInputMonitoring}
+                disabled={inputPromptInFlight}
                 class="px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 transition-opacity">
-                Open System Settings
+                {inputPromptInFlight ? 'Waiting for macOS…' : 'Open System Settings'}
               </button>
               {#if restartArmed}
                 <button onclick={restart}
