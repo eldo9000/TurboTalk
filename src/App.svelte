@@ -3,7 +3,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { LogicalSize } from '@tauri-apps/api/dpi';
+  import { LogicalSize, LogicalPosition } from '@tauri-apps/api/dpi';
   import { open as openFilePicker } from '@tauri-apps/plugin-dialog';
   import { initTheme } from '@libre/ui/src/theme.js';
   import Select from '@libre/ui/src/components/Select.svelte';
@@ -480,6 +480,30 @@ Reply with only the single word, lowercase, no punctuation.
     cfg.cleanup.classifier_prompt       = cfgClassifierPrompt;
     const res = await commands.saveConfig(cfg);
     modesSaveMsg = res.status === 'ok' ? 'Saved.' : 'Error: ' + res.error;
+  }
+
+  async function handleModeClick(v) {
+    if (v === 'chaperone' && cfgCleanupMode !== 'chaperone') {
+      try {
+        const win = getCurrentWindow();
+        const [physPos, monitor] = await Promise.all([win.outerPosition(), win.currentMonitor()]);
+        if (monitor) {
+          const sf = monitor.scaleFactor;
+          const logX = physPos.x / sf;
+          const logY = physPos.y / sf;
+          const logMonLeft = monitor.position.x / sf;
+          const logMonRight = (monitor.position.x + monitor.size.width) / sf;
+          const zoom = ZOOM_LEVELS[zoomIdx] / 100;
+          const advW = Math.ceil(WINDOW_W * 2 * zoom);
+          if (logX + advW > logMonRight) {
+            const newX = Math.max(logMonLeft, logMonRight - advW);
+            await win.setPosition(new LogicalPosition(newX, logY));
+          }
+        }
+      } catch {}
+    }
+    cfgCleanupMode = v;
+    saveModes();
   }
 
   // ── Ollama setup helpers ───────────────────────────────────────────────────
@@ -1137,7 +1161,7 @@ Reply with only the single word, lowercase, no punctuation.
           <div class="tt-row tt-row-field">
             <div class="tt-seg tt-seg-wide">
               {#each [['off','Off'],['regex','Simple'],['chaperone','Advanced']] as [v, lbl], i}
-                <button onclick={() => { cfgCleanupMode = v; saveModes(); }} class={seg(cfgCleanupMode === v, i, 3)}>{lbl}</button>
+                <button onclick={() => handleModeClick(v)} class={seg(cfgCleanupMode === v, i, 3)}>{lbl}</button>
               {/each}
             </div>
           </div>
@@ -1805,29 +1829,6 @@ Reply with only the single word, lowercase, no punctuation.
   }
   .tt-reset-btn:hover { color: var(--accent); }
 
-  /* General-purpose button used inside ruled sections (e.g. Setup actions).
-     Mirrors UpdateManager's .tt-update-btn but inline-sized, not block. */
-  .tt-btn {
-    flex-shrink: 0;
-    padding: 5px 10px;
-    font-size: 10px;
-    font-family: inherit;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    border-radius: 4px;
-    border: 1px solid var(--border);
-    background: var(--surface-panel);
-    color: var(--text-secondary);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.1s, color 0.1s, border-color 0.1s;
-  }
-  .tt-btn:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--surface-panel) 80%, var(--text-primary));
-    color: var(--text-primary);
-  }
-  .tt-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
   /* Ollama pull progress */
   .tt-progress-row {
     display: flex;
@@ -1869,45 +1870,9 @@ Reply with only the single word, lowercase, no punctuation.
   /* Preset chip container — uses .tt-multi-btn underneath but wraps */
   .tt-multi-wrap { flex-wrap: wrap; gap: 4px; }
 
-  /* ── Button variants (Models + History) ──────────────────────────────── */
-  .tt-btn-md {
-    padding: 6px 14px;
-    font-size: 12px;
-    border-radius: 6px;
-  }
-  .tt-btn-accent {
-    background: var(--accent);
-    color: #fff;
-    border-color: color-mix(in srgb, var(--accent) 70%, #000);
-  }
-  .tt-btn-accent:hover:not(:disabled) {
-    background: var(--accent-hover);
-    color: #fff;
-  }
-  .tt-btn-success {
-    background: color-mix(in srgb, #22c55e 20%, var(--surface-panel));
-    color: var(--text-primary);
-    border-color: #22c55e;
-  }
-  .tt-btn-danger {
-    background: color-mix(in srgb, #ef4444 15%, var(--surface-panel));
-    color: #f87171;
-    border-color: color-mix(in srgb, #ef4444 40%, var(--border));
-  }
-  .tt-btn-danger:hover:not(:disabled) {
-    background: color-mix(in srgb, #ef4444 25%, var(--surface-panel));
-    color: #fca5a5;
-  }
-  .tt-btn-icon {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .tt-btn-danger-hover:hover:not(:disabled) {
-    color: #f87171;
-    border-color: color-mix(in srgb, #ef4444 50%, var(--border));
-    background: var(--surface-panel);
-  }
+  /* Note: .tt-btn family (base + size/variant/state modifiers) lives in
+     src/app.css — global because UpdateManager (separate component) needs
+     the same look. The .tt-btn-recording state for History also lives there. */
 
   /* ── Models tab ──────────────────────────────────────────────────────── */
   .tt-model-card {
@@ -2170,13 +2135,5 @@ Reply with only the single word, lowercase, no punctuation.
     background: #f87171;
     flex-shrink: 0;
   }
-  .tt-btn-recording {
-    color: #f87171;
-    border-color: color-mix(in srgb, #f87171 50%, var(--border));
-  }
-  .tt-btn-recording:hover {
-    color: #f87171;
-    border-color: #f87171;
-    background: color-mix(in srgb, #ef4444 8%, var(--surface-panel));
-  }
+  /* .tt-btn-recording lives in src/app.css alongside the rest of the .tt-btn family. */
 </style>

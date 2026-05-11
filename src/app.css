@@ -28,70 +28,84 @@ html, body, #app {
   border-radius: 2px;
 }
 
-.fade-range {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: 2px;
-  background: linear-gradient(
-    to right,
-    var(--accent) 0 var(--fade-range-pct, 0%),
-    color-mix(in srgb, #fff 18%, var(--surface-raised)) var(--fade-range-pct, 0%) 100%
-  );
-  border-radius: 1px;
-  outline: none;
+/* ── TurboTalk button family ──────────────────────────────────────────────
+   Global because UpdateManager (separate component) needs the same look.
+   Other tt-* design-language classes stay panel-scoped in App.svelte until
+   another component needs them. */
+.tt-btn {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  font-size: 10px;
+  font-family: inherit;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface-panel);
+  color: var(--text-secondary);
   cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
 }
-.fade-range::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: color-mix(in srgb, #fff 52%, var(--surface-raised));
-  cursor: pointer;
-  transition: background 120ms;
+.tt-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--surface-panel) 80%, var(--text-primary));
+  color: var(--text-primary);
 }
-.fade-range::-webkit-slider-thumb:hover {
-  background: color-mix(in srgb, #fff 72%, var(--surface-raised));
+.tt-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Sizing */
+.tt-btn-md {
+  padding: 6px 14px;
+  font-size: 12px;
+  border-radius: 6px;
 }
-.fade-range::-moz-range-thumb {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  border: none;
-  background: color-mix(in srgb, #fff 52%, var(--surface-raised));
-  cursor: pointer;
+.tt-btn-block { width: 100%; }
+
+/* Semantic variants */
+.tt-btn-accent {
+  background: var(--accent);
+  color: #fff;
+  border-color: color-mix(in srgb, var(--accent) 70%, #000);
 }
-.fade-range::-moz-range-track {
-  height: 2px;
-  background: linear-gradient(
-    to right,
-    var(--accent) 0 var(--fade-range-pct, 0%),
-    color-mix(in srgb, #fff 18%, var(--surface-raised)) var(--fade-range-pct, 0%) 100%
-  );
-  border-radius: 1px;
+.tt-btn-accent:hover:not(:disabled) {
+  background: var(--accent-hover);
+  color: #fff;
+}
+.tt-btn-success {
+  background: color-mix(in srgb, #22c55e 20%, var(--surface-panel));
+  color: var(--text-primary);
+  border-color: #22c55e;
+}
+.tt-btn-danger {
+  background: color-mix(in srgb, #ef4444 15%, var(--surface-panel));
+  color: #f87171;
+  border-color: color-mix(in srgb, #ef4444 40%, var(--border));
+}
+.tt-btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, #ef4444 25%, var(--surface-panel));
+  color: #fca5a5;
+}
+.tt-btn-danger-hover:hover:not(:disabled) {
+  color: #f87171;
+  border-color: color-mix(in srgb, #ef4444 50%, var(--border));
+  background: var(--surface-panel);
 }
 
-:root:not(.dark) .fade-range {
-  background: linear-gradient(
-    to right,
-    var(--accent) 0 var(--fade-range-pct, 0%),
-    #d0d0d0 var(--fade-range-pct, 0%) 100%
-  );
+/* Layout */
+.tt-btn-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
-:root:not(.dark) .fade-range::-webkit-slider-thumb {
-  background: var(--accent);
+
+/* History-specific recording state — lives here because it shares the
+   .tt-btn base. Move back to App.svelte if buttons-only stay panel-local. */
+.tt-btn-recording {
+  color: #f87171;
+  border-color: color-mix(in srgb, #f87171 50%, var(--border));
 }
-:root:not(.dark) .fade-range::-webkit-slider-thumb:hover {
-  background: var(--accent-hover);
-}
-:root:not(.dark) .fade-range::-moz-range-thumb {
-  background: var(--accent);
-}
-:root:not(.dark) .fade-range::-moz-range-track {
-  background: linear-gradient(
-    to right,
-    var(--accent) 0 var(--fade-range-pct, 0%),
-    #d0d0d0 var(--fade-range-pct, 0%) 100%
-  );
+.tt-btn-recording:hover {
+  color: #f87171;
+  border-color: #f87171;
+  background: color-mix(in srgb, #ef4444 8%, var(--surface-panel));
 }
