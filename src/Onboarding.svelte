@@ -196,22 +196,22 @@
 
   function stepClass(state) {
     if (state === 'active') return 'border-[var(--accent)]/40 bg-[var(--accent)]/5';
-    if (state === 'done')   return 'border-[var(--border,#2a2a2a)] opacity-60';
-    return 'border-[var(--border,#2a2a2a)] opacity-40';
+    if (state === 'done')   return 'border-[var(--border,#2a2a2a)] opacity-70';
+    return 'border-[var(--border,#2a2a2a)] opacity-50';
   }
   function badgeClass(state) {
     if (state === 'done')   return 'bg-emerald-500/20 text-emerald-400';
     if (state === 'active') return 'bg-[var(--accent)] text-white';
-    return 'bg-[var(--border,#2a2a2a)] text-[var(--muted,#9a9a9a)]';
+    return 'bg-[var(--border,#2a2a2a)] text-[var(--text-secondary)]';
   }
 </script>
 
-<div class="fixed inset-0 z-[100] bg-[var(--surface)] flex flex-col overflow-hidden">
+<div class="fixed inset-0 z-[100] bg-[var(--surface)] text-[var(--text-primary)] flex flex-col overflow-hidden">
   <div class="max-w-[420px] w-full mx-auto px-6 py-8 flex flex-col gap-5">
 
     <div class="flex flex-col gap-1.5">
-      <h1 class="text-[18px] font-semibold leading-tight">Welcome to Turbo Talk</h1>
-      <p class="text-[12px] text-[var(--muted,#9a9a9a)] leading-relaxed">
+      <h1 class="text-[18px] font-semibold leading-tight text-[var(--text-primary)]">Welcome to Turbo Talk</h1>
+      <p class="text-[12px] text-[var(--text-secondary)] leading-relaxed">
         {unsupportedPlatform
           ? 'This beta is macOS-only for recording, global hotkeys, and paste.'
           : 'Three quick setup steps before you can start dictating.'}
@@ -223,7 +223,7 @@
         <div class="flex flex-col gap-3 p-3.5 rounded-lg border border-yellow-500/30 bg-yellow-500/10">
           <div class="flex flex-col gap-1">
             <h2 class="text-[13px] font-medium leading-tight text-yellow-200">Unsupported platform</h2>
-            <p class="text-[11px] text-[var(--muted,#9a9a9a)] leading-snug">
+            <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
               Turbo Talk's beta dictation loop currently depends on macOS Accessibility,
               Input Monitoring, microphone permission, and paste APIs. Those controls are unavailable here,
               so recording and paste will not work on this platform.
@@ -242,8 +242,8 @@
         </div>
         <div class="flex flex-col gap-2 min-w-0 flex-1">
           <div class="flex flex-col gap-0.5">
-            <h2 class="text-[13px] font-medium leading-tight">Allow Accessibility</h2>
-            <p class="text-[11px] text-[var(--muted,#9a9a9a)] leading-snug">
+            <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Allow Accessibility</h2>
+            <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
               Turbo Talk needs Accessibility permission to read your push-to-talk hotkey globally.
               Granting this requires restarting the app once.
             </p>
@@ -262,7 +262,7 @@
               {/if}
             </div>
             {#if restartArmed}
-              <p class="text-[11px] text-[var(--muted,#9a9a9a)] leading-snug">
+              <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
                 Toggle Turbo Talk on under Privacy &amp; Security → Accessibility, then click Restart.
               </p>
             {/if}
@@ -277,8 +277,8 @@
         </div>
         <div class="flex flex-col gap-2 min-w-0 flex-1">
           <div class="flex flex-col gap-0.5">
-            <h2 class="text-[13px] font-medium leading-tight">Allow Input Monitoring</h2>
-            <p class="text-[11px] text-[var(--muted,#9a9a9a)] leading-snug">
+            <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Allow Input Monitoring</h2>
+            <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
               This lets Turbo Talk receive the push-to-talk key while another app is focused.
               Restart once after turning it on.
             </p>
@@ -297,7 +297,7 @@
                 </button>
               {/if}
             </div>
-            <p class="text-[11px] text-[var(--muted,#9a9a9a)] leading-snug">
+            <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
               Toggle Turbo Talk on under Privacy &amp; Security → Input Monitoring.
             </p>
           {/if}
@@ -311,8 +311,8 @@
         </div>
         <div class="flex flex-col gap-2 min-w-0 flex-1">
           <div class="flex flex-col gap-0.5">
-            <h2 class="text-[13px] font-medium leading-tight">Allow Microphone</h2>
-            <p class="text-[11px] text-[var(--muted,#9a9a9a)] leading-snug">
+            <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Allow Microphone</h2>
+            <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
               So Turbo Talk can record your voice while you hold the hotkey. Audio never leaves your machine.
             </p>
           </div>
@@ -327,7 +327,7 @@
                 class="self-start px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 transition-opacity">
                 Open System Settings
               </button>
-              <p class="text-[11px] text-[var(--muted,#9a9a9a)] leading-snug">
+              <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
                 Toggle Turbo Talk on under Privacy &amp; Security → Microphone.
               </p>
             {/if}
@@ -342,8 +342,8 @@
         </div>
         <div class="flex flex-col gap-2 min-w-0 flex-1">
           <div class="flex flex-col gap-0.5">
-            <h2 class="text-[13px] font-medium leading-tight">Download a transcription model</h2>
-            <p class="text-[11px] text-[var(--muted,#9a9a9a)] leading-snug">
+            <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Download a transcription model</h2>
+            <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
               Whisper runs locally on your Mac. Pick a model — the recommended one fits most users.
             </p>
           </div>
@@ -351,7 +351,7 @@
             {#if downloadingModel}
               <div class="flex flex-col gap-1.5">
                 <div class="flex items-center justify-between text-[11px]">
-                  <span class="truncate text-[var(--muted,#9a9a9a)]">{downloadingModel}</span>
+                  <span class="truncate text-[var(--text-secondary)]">{downloadingModel}</span>
                   <span class="text-[var(--text-primary)]">{downloadPct}%</span>
                 </div>
                 <div class="h-1.5 rounded-full bg-[var(--border,#2a2a2a)] overflow-hidden">
@@ -363,21 +363,21 @@
                 class="flex items-start justify-between gap-3 p-2.5 rounded-md border border-[var(--border,#2a2a2a)] hover:border-[var(--accent)]/60 text-left transition-colors">
                 <div class="flex flex-col gap-0.5 min-w-0">
                   <div class="flex items-center gap-2">
-                    <span class="text-[12px] font-medium">{RECOMMENDED.label}</span>
+                    <span class="text-[12px] font-medium text-[var(--text-primary)]">{RECOMMENDED.label}</span>
                     <span class="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-[var(--accent)]/15 text-[var(--accent)]">Recommended</span>
                   </div>
-                  <span class="text-[11px] text-[var(--muted,#9a9a9a)] leading-snug">{RECOMMENDED.description}</span>
+                  <span class="text-[11px] text-[var(--text-secondary)] leading-snug">{RECOMMENDED.description}</span>
                 </div>
-                <span class="shrink-0 text-[11px] font-mono text-[var(--muted,#9a9a9a)]">{RECOMMENDED.size}</span>
+                <span class="shrink-0 text-[11px] font-mono text-[var(--text-secondary)]">{RECOMMENDED.size}</span>
               </button>
               {#each ALTERNATES as m (m.id)}
                 <button onclick={() => downloadModel(m.id)}
                   class="flex items-start justify-between gap-3 p-2.5 rounded-md border border-[var(--border,#2a2a2a)] hover:border-[var(--accent)]/60 text-left transition-colors">
                   <div class="flex flex-col gap-0.5 min-w-0">
-                    <span class="text-[12px] font-medium">{m.label}</span>
-                    <span class="text-[11px] text-[var(--muted,#9a9a9a)] leading-snug">{m.description}</span>
+                    <span class="text-[12px] font-medium text-[var(--text-primary)]">{m.label}</span>
+                    <span class="text-[11px] text-[var(--text-secondary)] leading-snug">{m.description}</span>
                   </div>
-                  <span class="shrink-0 text-[11px] font-mono text-[var(--muted,#9a9a9a)]">{m.size}</span>
+                  <span class="shrink-0 text-[11px] font-mono text-[var(--text-secondary)]">{m.size}</span>
                 </button>
               {/each}
               {#if downloadError}
@@ -395,8 +395,8 @@
         </div>
         <div class="flex flex-col gap-2 min-w-0 flex-1">
           <div class="flex flex-col gap-0.5">
-            <h2 class="text-[13px] font-medium leading-tight">Launch at Login</h2>
-            <p class="text-[11px] text-[var(--muted,#9a9a9a)] leading-snug">
+            <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Launch at Login</h2>
+            <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
               Turbo Talk starts quietly when you sign in, so the menu bar trigger is ready.
             </p>
           </div>
@@ -413,7 +413,7 @@
       </div>
       {/if}
     {:else}
-      <p class="text-[12px] text-[var(--muted,#9a9a9a)]">Checking system…</p>
+      <p class="text-[12px] text-[var(--text-secondary)]">Checking system…</p>
     {/if}
 
   </div>
