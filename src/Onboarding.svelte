@@ -242,7 +242,7 @@
 </script>
 
 <div class="fixed inset-0 z-[100] bg-[var(--surface)] text-[var(--text-primary)] flex flex-col overflow-y-auto">
-  <div class="max-w-[420px] w-full mx-auto px-6 py-8 pb-10 flex flex-col gap-5">
+  <div class="max-w-[420px] w-full mx-auto px-6 py-6 pb-10 flex flex-col gap-3.5">
 
     <div class="flex flex-col gap-1.5">
       <h1 class="text-[18px] font-semibold leading-tight text-[var(--text-primary)]">Welcome to Turbo Talk</h1>
@@ -271,17 +271,19 @@
         </div>
       {:else}
       <!-- Step 1: Accessibility (restart required, surfaced first) -->
-      <div class="flex gap-3 p-3.5 rounded-lg border {stepClass(stepStates.accessibility)}">
+      <div class="flex gap-3 {stepStates.accessibility === 'done' ? 'p-3' : 'p-3.5'} rounded-lg border {stepClass(stepStates.accessibility)}">
         <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.accessibility)}">
           {stepStates.accessibility === 'done' ? '✓' : '1'}
         </div>
         <div class="flex flex-col gap-2 min-w-0 flex-1">
           <div class="flex flex-col gap-0.5">
             <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Allow Accessibility</h2>
-            <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-              Turbo Talk needs Accessibility permission to read your push-to-talk hotkey globally.
-              Granting this requires restarting the app once.
-            </p>
+            {#if stepStates.accessibility !== 'done'}
+              <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                Turbo Talk needs Accessibility permission to read your push-to-talk hotkey globally.
+                Granting this requires restarting the app once.
+              </p>
+            {/if}
           </div>
           {#if stepStates.accessibility === 'active'}
             <div class="flex gap-2 flex-wrap">
@@ -306,17 +308,19 @@
       </div>
 
       <!-- Step 2: Input Monitoring -->
-      <div class="flex gap-3 p-3.5 rounded-lg border {stepClass(stepStates.input_monitoring)}">
+      <div class="flex gap-3 {stepStates.input_monitoring === 'done' ? 'p-3' : 'p-3.5'} rounded-lg border {stepClass(stepStates.input_monitoring)}">
         <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.input_monitoring)}">
           {stepStates.input_monitoring === 'done' ? '✓' : '2'}
         </div>
         <div class="flex flex-col gap-2 min-w-0 flex-1">
           <div class="flex flex-col gap-0.5">
             <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Allow Input Monitoring</h2>
-            <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-              This lets Turbo Talk receive the push-to-talk key while another app is focused.
-              Restart once after turning it on.
-            </p>
+            {#if stepStates.input_monitoring !== 'done'}
+              <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                This lets Turbo Talk receive the push-to-talk key while another app is focused.
+                Restart once after turning it on.
+              </p>
+            {/if}
           </div>
           {#if stepStates.input_monitoring === 'active'}
             <div class="flex gap-2 flex-wrap">
@@ -340,16 +344,18 @@
       </div>
 
       <!-- Step 3: Microphone -->
-      <div class="flex gap-3 p-3.5 rounded-lg border {stepClass(stepStates.microphone)}">
+      <div class="flex gap-3 {stepStates.microphone === 'done' ? 'p-3' : 'p-3.5'} rounded-lg border {stepClass(stepStates.microphone)}">
         <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.microphone)}">
           {stepStates.microphone === 'done' ? '✓' : '3'}
         </div>
         <div class="flex flex-col gap-2 min-w-0 flex-1">
           <div class="flex flex-col gap-0.5">
             <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Allow Microphone</h2>
-            <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-              So Turbo Talk can record your voice while you hold the hotkey. Audio never leaves your machine.
-            </p>
+            {#if stepStates.microphone !== 'done'}
+              <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                So Turbo Talk can record your voice while you hold the hotkey. Audio never leaves your machine.
+              </p>
+            {/if}
           </div>
           {#if stepStates.microphone === 'active'}
             {#if readiness.microphone === 'not_determined'}
@@ -397,12 +403,12 @@
               {#each ALL_MODELS as model, idx (model.id)}
                 {@const path = installedPath(model.id)}
                 {@const isSelected = path && path === cfgModel}
-                <div class="flex items-start justify-between gap-3 p-2.5 rounded-md border border-[var(--border,#2a2a2a)]">
+                <div class="flex items-start justify-between gap-2 p-2 rounded-md border border-[var(--border,#2a2a2a)]">
                   <div class="flex flex-col gap-0.5 min-w-0">
                     <div class="flex items-center gap-2 min-w-0">
                       <span class="text-[12px] font-medium text-[var(--text-primary)] truncate">{model.label}</span>
                       {#if idx === 0}
-                        <span class="shrink-0 text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-[var(--accent)]/15 text-[var(--accent)]">Recommended</span>
+                        <span class="shrink-0 text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-400 text-black">Recommended</span>
                       {/if}
                     </div>
                     <span class="text-[11px] text-[var(--text-secondary)] leading-snug">{model.description}</span>
