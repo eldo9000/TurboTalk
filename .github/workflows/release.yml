@@ -158,6 +158,9 @@ jobs:
       - name: Install npm deps
         run: npm ci
 
+      - name: Install whisper.cpp (provides whisper-server sidecar)
+        run: brew install whisper-cpp
+
       - name: Fetch Whisper sidecars
         run: npm run fetch-sidecars
 
