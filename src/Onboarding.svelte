@@ -23,6 +23,7 @@
   let micPromptInFlight  = $state(false);
   let inputPromptInFlight = $state(false);
   let launchPromptInFlight = $state(false);
+  let launchSkipped      = $state(false);
   let launchError        = $state('');
   let downloadingModel   = $state(null);
   let downloadPct        = $state(0);
@@ -228,10 +229,13 @@
       const res = await commands.setLaunchAtLogin(true);
       if (res.status === 'error') {
         launchError = res.error || 'Could not enable launch at login.';
+      } else {
+        launchAtLogin = true;
+        stopPolling();
+        onComplete?.();
       }
     } finally {
       launchPromptInFlight = false;
-      await refresh();
     }
   }
 
@@ -281,7 +285,7 @@
       microphone:    m ? 'done' : (i ? 'active' : 'pending'),
       accessibility: a ? 'done' : (i && m ? 'active' : 'pending'),
       model:         p ? 'done' : (a && i && m ? 'active' : 'pending'),
-      launch:        launchAtLogin ? 'done' : (a && i && m && p ? 'active' : 'pending'),
+      launch:        (launchAtLogin || launchSkipped) ? 'done' : (a && i && m && p ? 'active' : 'pending'),
     };
   });
 
@@ -363,6 +367,7 @@
             </div>
             <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
               Toggle Turbo Talk on under Privacy &amp; Security → Input Monitoring.
+              If it doesn't appear in the list, click <strong>+</strong> to add it manually.
             </p>
           {/if}
         </div>
@@ -513,10 +518,16 @@
             </p>
           </div>
           {#if stepStates.launch === 'active'}
-            <button onclick={enableLaunchAtLogin} disabled={launchPromptInFlight}
-              class="self-start px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 disabled:opacity-50 transition-opacity">
-              {launchPromptInFlight ? 'Enabling…' : 'Enable Launch at Login'}
-            </button>
+            <div class="flex gap-2">
+              <button onclick={enableLaunchAtLogin} disabled={launchPromptInFlight}
+                class="px-3 py-1.5 rounded-md bg-green-600 text-white text-[12px] font-medium hover:bg-green-500 disabled:opacity-50 transition-colors">
+                {launchPromptInFlight ? 'Enabling…' : 'Enable Automatic Login'}
+              </button>
+              <button onclick={() => { launchSkipped = true; stopPolling(); onComplete?.(); }} disabled={launchPromptInFlight}
+                class="px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 disabled:opacity-50 transition-opacity">
+                Skip →
+              </button>
+            </div>
             {#if launchError}
               <p class="text-[11px] text-red-400 leading-snug">{launchError}</p>
             {/if}

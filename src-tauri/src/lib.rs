@@ -1123,11 +1123,15 @@ pub fn run() {
             // Kill any whisper-server orphans left by a previous SIGKILL or
             // rapid dev-mode restart before prewarming a fresh one.
             transcribe::kill_orphans();
-            // Eagerly warm whisper-server so the model is loaded before the
-            // first dictation and /tmp/whisper-server-stderr.log exists at
-            // startup for diagnostics. Emits `dictation-ready` on success so
-            // the overlay's arming-tile gate can release.
-            transcribe::prewarm(cfg.clone(), app.handle().clone());
+            // Eagerly warm whisper-server only after first-run setup is done.
+            // Onboarding should be passive until the user clicks each step;
+            // avoid normal warmed-up-agent work while permissions or a usable
+            // model are still missing.
+            if crate::permissions::check_readiness().ready {
+                transcribe::prewarm(cfg.clone(), app.handle().clone());
+            } else {
+                tracing::info!("[transcribe] skipping startup prewarm until onboarding is complete");
+            }
 
             Ok(())
         })
