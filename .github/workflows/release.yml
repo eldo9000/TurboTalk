@@ -201,7 +201,7 @@ jobs:
         run: |
           set -euo pipefail
           WS='${{ steps.mac_artifacts.outputs.app_path }}/Contents/MacOS/whisper-server'
-          install_name_tool -add_rpath @executable_path/ "$WS"
+          install_name_tool -add_rpath @executable_path/../Resources/ "$WS"
 
       - name: Ad-hoc codesign and strip quarantine
         run: |
