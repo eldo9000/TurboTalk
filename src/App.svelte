@@ -299,16 +299,6 @@ Reply with only the single word, lowercase, no punctuation.
     getCurrentWindow().setSize(new LogicalSize(targetW, targetH));
   });
 
-  // When onboarding is needed: show the window and size it to fit all steps.
-  // The regular sizing $effect takes back over once onboarding is dismissed.
-  $effect(() => {
-    if (!showOnboarding) return;
-    const win = getCurrentWindow();
-    win.show();
-    win.setFocus();
-    win.setSize(new LogicalSize(440, 420));
-  });
-
   // ── Zoom ──────────────────────────────────────────────────────────────────
 
   const ZOOM_LEVELS = [100, 125, 150, 175, 200];

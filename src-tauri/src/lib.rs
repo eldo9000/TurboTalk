@@ -1004,6 +1004,18 @@ pub fn run() {
             // ── Main window — position below cursor at launch ─────────────
             if let Some(win) = app.get_webview_window("main") {
                 position_below_cursor(app.handle(), &win);
+
+                // First-run / regression gate: if Accessibility, Microphone,
+                // or a model are missing, show the window so the onboarding
+                // wizard can guide the user. Otherwise leave it hidden (tray-
+                // resident agent behaviour).
+                let readiness = crate::permissions::check_readiness();
+                if !readiness.ready {
+                    let _ = win.set_size(tauri::LogicalSize::new(440.0, 420.0));
+                    let _ = win.center();
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
             }
 
             // ── Overlay — cursor-transparent so clicks always pass through ──
