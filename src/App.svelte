@@ -314,6 +314,7 @@ Reply with only the single word, lowercase, no punctuation.
   $effect(() => {
     const zoom = ZOOM_LEVELS[zoomIdx] / 100;
     if (settingsH === 0) return;
+    if (showOnboarding) return;
     const isAdv = activeTab === 'modes' && cfgCleanupMode === 'chaperone';
     const w = isAdv ? WINDOW_W * 2 : WINDOW_W;
     const h =

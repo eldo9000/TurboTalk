@@ -9,8 +9,10 @@
   //
   // Closes itself by calling `onComplete()` when readiness is fully green.
 
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
+  import { LogicalSize } from '@tauri-apps/api/dpi';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
   import { commands } from './bindings.ts';
 
   let { onComplete, onUnsupportedContinue } = $props();
@@ -28,6 +30,10 @@
   let restartArmed       = $state(false);
   let cfgModel           = $state('');
   let cfgModels          = $state([]);
+  let contentEl          = $state(null);
+  let resizeObserver     = null;
+  let resizeRaf          = null;
+  let lastWindowHeight   = 0;
 
   const RECOMMENDED = {
     id: 'ggml-large-v3-turbo',
@@ -44,6 +50,8 @@
   ];
 
   const ALL_MODELS = [RECOMMENDED, ...ALTERNATES];
+  const WINDOW_W = 440;
+  const WINDOW_SIZE_SLACK = 56;
 
   function uniqueModels(paths) {
     return [...new Set(paths.filter(Boolean))];
@@ -56,6 +64,60 @@
   let selectedModelReady = $derived(
     !!cfgModel && cfgModels.includes(cfgModel)
   );
+
+  function currentZoom() {
+    return (parseFloat(document.documentElement.style.zoom || '100') || 100) / 100;
+  }
+
+  async function resizeToContent() {
+    await tick();
+    if (!contentEl) return;
+    const zoom = currentZoom();
+    const contentHeight = Math.ceil(contentEl.scrollHeight * zoom) + WINDOW_SIZE_SLACK;
+    const targetHeight = Math.max(360, contentHeight);
+    if (Math.abs(targetHeight - lastWindowHeight) < 2) return;
+    lastWindowHeight = targetHeight;
+    await getCurrentWindow().setSize(new LogicalSize(Math.ceil(WINDOW_W * zoom), targetHeight));
+  }
+
+  function scheduleResize() {
+    if (resizeRaf) cancelAnimationFrame(resizeRaf);
+    resizeRaf = requestAnimationFrame(() => {
+      resizeRaf = null;
+      resizeToContent();
+    });
+  }
+
+  function observeContentSize() {
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    if (!contentEl) return;
+    resizeObserver = new ResizeObserver(scheduleResize);
+    resizeObserver.observe(contentEl);
+    scheduleResize();
+  }
+
+  $effect(() => {
+    if (!contentEl) return;
+    observeContentSize();
+    return () => {
+      resizeObserver?.disconnect();
+      resizeObserver = null;
+    };
+  });
+
+  $effect(() => {
+    readiness;
+    launchAtLogin;
+    cfgModel;
+    cfgModels;
+    downloadingModel;
+    downloadPct;
+    downloadError;
+    restartArmed;
+    unsupportedPlatform;
+    scheduleResize();
+  });
 
   async function refresh() {
     const [nextReadiness, nextLaunchAtLogin, cfg, scannedModels] = await Promise.all([
@@ -97,8 +159,13 @@
       await enableLaunchAtLogin();
     }
     startPolling();
+    scheduleResize();
   });
-  onDestroy(stopPolling);
+  onDestroy(() => {
+    stopPolling();
+    resizeObserver?.disconnect();
+    if (resizeRaf) cancelAnimationFrame(resizeRaf);
+  });
 
   async function openAccessibility() {
     // Calls AXIsProcessTrustedWithOptions(prompt: true). Side-effects:
@@ -242,7 +309,7 @@
 </script>
 
 <div class="fixed inset-0 z-[100] bg-[var(--surface)] text-[var(--text-primary)] flex flex-col overflow-y-auto">
-  <div class="max-w-[420px] w-full mx-auto px-6 py-6 pb-10 flex flex-col gap-3.5">
+  <div bind:this={contentEl} class="max-w-[420px] w-full mx-auto px-6 py-6 pb-10 flex flex-col gap-3.5">
 
     <div class="flex flex-col gap-1.5">
       <h1 class="text-[18px] font-semibold leading-tight text-[var(--text-primary)]">Welcome to Turbo Talk</h1>
