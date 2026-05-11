@@ -1,6 +1,6 @@
 {
   "productName": "Turbo Talk",
-  "version": "0.8.9",
+  "version": "0.8.10",
   "identifier": "io.librewin.turbotalk",
   "build": {
     "frontendDist": "../dist",
