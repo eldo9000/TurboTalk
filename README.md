@@ -23,11 +23,11 @@
 <table>
   <tr>
     <td align="center">
-      <p><img src="docs/assets/ss1.jpg" alt="Models tab" /></p>
+      <p><img src="docs/assets/ss2.jpg" alt="Models tab" /></p>
       <p><sub>Whisper model selection</sub></p>
     </td>
     <td align="center">
-      <p><img src="docs/assets/ss2.jpg" alt="Settings tab" /></p>
+      <p><img src="docs/assets/ss1.jpg" alt="Settings tab" /></p>
       <p><sub>Hotkey, recording, and system settings</sub></p>
     </td>
   </tr>
