@@ -197,6 +197,12 @@ jobs:
           echo "dmg=$DMG"               >> "$GITHUB_OUTPUT"
           echo "bundle_dir=$BUNDLE_DIR" >> "$GITHUB_OUTPUT"
 
+      - name: Patch whisper-server rpath
+        run: |
+          set -euo pipefail
+          WS='${{ steps.mac_artifacts.outputs.app_path }}/Contents/MacOS/whisper-server'
+          install_name_tool -add_rpath @executable_path/ "$WS"
+
       - name: Ad-hoc codesign and strip quarantine
         run: |
           set -euo pipefail
