@@ -51,7 +51,7 @@
 
   const ALL_MODELS = [RECOMMENDED, ...ALTERNATES];
   const WINDOW_W = 440;
-  const WINDOW_SIZE_SLACK = 56;
+  const WINDOW_SIZE_SLACK = 18;
 
   function uniqueModels(paths) {
     return [...new Set(paths.filter(Boolean))];
@@ -309,7 +309,7 @@
 </script>
 
 <div class="fixed inset-0 z-[100] bg-[var(--surface)] text-[var(--text-primary)] flex flex-col overflow-y-auto">
-  <div bind:this={contentEl} class="max-w-[420px] w-full mx-auto px-6 py-6 pb-10 flex flex-col gap-3.5">
+  <div bind:this={contentEl} class="max-w-[420px] w-full mx-auto px-6 py-6 pb-6 flex flex-col gap-3.5">
 
     <div class="flex flex-col gap-1.5">
       <h1 class="text-[18px] font-semibold leading-tight text-[var(--text-primary)]">Welcome to Turbo Talk</h1>
