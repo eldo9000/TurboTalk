@@ -149,7 +149,7 @@
   }
 </script>
 
-<div class="fixed inset-0 z-[100] bg-[var(--surface)] flex flex-col overflow-y-auto">
+<div class="fixed inset-0 z-[100] bg-[var(--surface)] flex flex-col overflow-hidden">
   <div class="max-w-[420px] w-full mx-auto px-6 py-8 flex flex-col gap-5">
 
     <div class="flex flex-col gap-1.5">
@@ -260,7 +260,7 @@
             {#if downloadingModel}
               <div class="flex flex-col gap-1.5">
                 <div class="flex items-center justify-between text-[11px]">
-                  <span class="font-mono truncate">{downloadingModel}</span>
+                  <span class="truncate text-[var(--muted,#9a9a9a)]">{downloadingModel}</span>
                   <span class="text-[var(--text-primary)]">{downloadPct}%</span>
                 </div>
                 <div class="h-1.5 rounded-full bg-[var(--border,#2a2a2a)] overflow-hidden">
