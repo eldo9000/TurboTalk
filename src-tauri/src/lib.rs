@@ -322,6 +322,52 @@ fn set_launch_at_login(app: tauri::AppHandle, enabled: bool) -> Result<(), Strin
 
 #[tauri::command]
 #[specta::specta]
+fn reset_turbotalk(
+    app: tauri::AppHandle,
+    hotkey_state: tauri::State<'_, HotkeyState>,
+    delete_models: bool,
+) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+
+    let _ = app.autolaunch().disable();
+
+    for path in [settings::config_path(), settings::history_path()] {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("failed to remove {}: {}", path.display(), e)),
+        }
+    }
+
+    let mut reset_cfg = settings::Config::default();
+
+    if delete_models {
+        if let Some(models_dir) = settings::canonical_models_dir() {
+            match std::fs::remove_dir_all(&models_dir) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("failed to remove {}: {}", models_dir.display(), e)),
+            }
+        }
+    } else {
+        let models = settings::scan_models_dir();
+        if let Some(model) = models.first() {
+            reset_cfg.whisper.model = model.clone();
+            reset_cfg.whisper.models = models;
+            settings::save(&reset_cfg)
+                .map_err(|e| format!("failed to save reset settings: {}", e))?;
+        }
+    }
+
+    settings::update_cache(&reset_cfg);
+    *hotkey_state.write() = reset_cfg.hotkey.clone();
+    apply_overlay_visibility(&app, reset_cfg.show_overlay);
+    transcribe::invalidate_worker();
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 fn copy_history_item(text: String) -> Result<(), String> {
     use arboard::Clipboard;
     let mut cb = Clipboard::new().map_err(|e| e.to_string())?;
@@ -728,6 +774,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         scan_models_dir,
         get_launch_at_login,
         set_launch_at_login,
+        reset_turbotalk,
         list_audio_devices,
         download_model,
         cancel_download,
@@ -800,6 +847,7 @@ pub fn run() {
             scan_models_dir,
             get_launch_at_login,
             set_launch_at_login,
+            reset_turbotalk,
             list_audio_devices,
             download_model,
             cancel_download,
