@@ -3,9 +3,11 @@
 // Three things gate the app from being usable:
 //   1. macOS Accessibility — needed by CGEventTap for the global hotkey.
 //      Granting requires app restart (AXIsProcessTrusted caches per-process).
-//   2. macOS Microphone — TCC permission for cpal to capture audio.
+//   2. macOS Input Monitoring — needed by newer macOS releases for global
+//      keyboard listening. Granting takes effect after restarting the listener.
+//   3. macOS Microphone — TCC permission for cpal to capture audio.
 //      Native prompt fires on `requestAccess`; granting takes effect live.
-//   3. At least one Whisper model `.bin` exists in the canonical models dir.
+//   4. At least one Whisper model `.bin` exists in the canonical models dir.
 //
 // `check_readiness` returns the current state of all three so the frontend
 // can render an onboarding wizard and re-poll while it's open. Each step's
@@ -25,9 +27,10 @@ pub enum PermissionStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct Readiness {
     pub accessibility: PermissionStatus,
+    pub input_monitoring: PermissionStatus,
     pub microphone: PermissionStatus,
     pub model_present: bool,
-    /// True iff all three gates pass — frontend uses this as the
+    /// True iff all four gates pass — frontend uses this as the
     /// "show onboarding vs. show main UI" switch.
     pub ready: bool,
 }
@@ -47,6 +50,35 @@ fn accessibility_status() -> PermissionStatus {
 
 #[cfg(not(target_os = "macos"))]
 fn accessibility_status() -> PermissionStatus {
+    PermissionStatus::Unsupported
+}
+
+// ── Input Monitoring (IOKit HID TCC) ────────────────────────────────────────
+
+#[cfg(target_os = "macos")]
+fn input_monitoring_status() -> PermissionStatus {
+    // Values from IOKit.framework/Headers/hidsystem/IOHIDLib.h.
+    const K_IOHID_REQUEST_TYPE_LISTEN_EVENT: u32 = 1;
+    const K_IOHID_ACCESS_TYPE_GRANTED: u32 = 0;
+    const K_IOHID_ACCESS_TYPE_DENIED: u32 = 1;
+    const K_IOHID_ACCESS_TYPE_UNKNOWN: u32 = 2;
+
+    #[link(name = "IOKit", kind = "framework")]
+    extern "C" {
+        fn IOHIDCheckAccess(request_type: u32) -> u32;
+    }
+
+    let status = unsafe { IOHIDCheckAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT) };
+    match status {
+        K_IOHID_ACCESS_TYPE_GRANTED => PermissionStatus::Granted,
+        K_IOHID_ACCESS_TYPE_DENIED => PermissionStatus::Denied,
+        K_IOHID_ACCESS_TYPE_UNKNOWN => PermissionStatus::NotDetermined,
+        _ => PermissionStatus::Denied,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn input_monitoring_status() -> PermissionStatus {
     PermissionStatus::Unsupported
 }
 
@@ -132,6 +164,31 @@ pub async fn request_microphone_permission() -> PermissionStatus {
     }
 }
 
+/// Trigger the native macOS Input Monitoring prompt. This adds Turbo Talk to
+/// Privacy & Security → Input Monitoring so the user can enable keyboard-event
+/// listening for the packaged app. If the prompt was already denied, macOS will
+/// not show it again; the caller should deep-link to System Settings.
+#[tauri::command]
+#[specta::specta]
+pub fn request_input_monitoring_permission() -> PermissionStatus {
+    #[cfg(target_os = "macos")]
+    {
+        const K_IOHID_REQUEST_TYPE_LISTEN_EVENT: u32 = 1;
+
+        #[link(name = "IOKit", kind = "framework")]
+        extern "C" {
+            fn IOHIDRequestAccess(request_type: u32) -> bool;
+        }
+
+        let _ = unsafe { IOHIDRequestAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT) };
+        input_monitoring_status()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        PermissionStatus::Unsupported
+    }
+}
+
 // ── Model presence ──────────────────────────────────────────────────────────
 
 fn model_present() -> bool {
@@ -151,13 +208,16 @@ fn model_present() -> bool {
 #[specta::specta]
 pub fn check_readiness() -> Readiness {
     let accessibility = accessibility_status();
+    let input_monitoring = input_monitoring_status();
     let microphone = microphone_status();
     let model_present = model_present();
     let ready = matches!(accessibility, PermissionStatus::Granted)
+        && matches!(input_monitoring, PermissionStatus::Granted)
         && matches!(microphone, PermissionStatus::Granted)
         && model_present;
     Readiness {
         accessibility,
+        input_monitoring,
         microphone,
         model_present,
         ready,

@@ -87,6 +87,13 @@ export const commands = {
 	 */
 	requestMicrophonePermission: () => __TAURI_INVOKE<PermissionStatus>("request_microphone_permission"),
 	/**
+	 *  Trigger the native macOS Input Monitoring prompt. This adds Turbo Talk to
+	 *  Privacy & Security → Input Monitoring so the user can enable keyboard-event
+	 *  listening for the packaged app. If the prompt was already denied, macOS will
+	 *  not show it again; the caller should deep-link to System Settings.
+	 */
+	requestInputMonitoringPermission: () => __TAURI_INVOKE<PermissionStatus>("request_input_monitoring_permission"),
+	/**
 	 *  Open a specific pane in macOS System Settings. `pane` is one of:
 	 *    "accessibility" | "microphone" | "input_monitoring"
 	 *  Anything else returns an error so the frontend sees a typed failure
@@ -272,10 +279,11 @@ export type Reachable = {
 
 export type Readiness = {
 	accessibility: PermissionStatus,
+	input_monitoring: PermissionStatus,
 	microphone: PermissionStatus,
 	model_present: boolean,
 	/**
-	 *  True iff all three gates pass — frontend uses this as the
+	 *  True iff all four gates pass — frontend uses this as the
 	 *  "show onboarding vs. show main UI" switch.
 	 */
 	ready: boolean,

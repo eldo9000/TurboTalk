@@ -37,15 +37,17 @@
   import Onboarding from './Onboarding.svelte';
 
   // First-launch readiness gate. Set to true on mount and on every window
-  // focus if any prerequisite (Accessibility, Microphone, model) regresses.
-  // Onboarding component clears it via onComplete when all three pass.
+  // focus if any prerequisite (Accessibility, Input Monitoring, Microphone,
+  // model) regresses. Onboarding clears it when all four pass.
   let showOnboarding = $state(true);
   let unsupportedPlatformDismissed = $state(false);
 
   async function recheckReadiness() {
     const r = await commands.checkReadiness();
     const unsupportedPlatform =
-      r.accessibility === 'unsupported' || r.microphone === 'unsupported';
+      r.accessibility === 'unsupported'
+        || r.input_monitoring === 'unsupported'
+        || r.microphone === 'unsupported';
     showOnboarding = !r.ready && !(unsupportedPlatform && unsupportedPlatformDismissed);
   }
 
@@ -887,6 +889,8 @@ Reply with only the single word, lowercase, no punctuation.
           onclick={async () => {
             if (err.kind === 'hotkey-permission') {
               await commands.openSystemSettings('accessibility');
+            } else if (err.kind === 'hotkey-input-monitoring') {
+              await commands.openSystemSettings('input_monitoring');
             } else if (err.kind === 'mic-permission') {
               await commands.openSystemSettings('microphone');
             } else if (err.kind === 'chaperone-fallback') {
@@ -901,7 +905,7 @@ Reply with only the single word, lowercase, no punctuation.
           <div class="flex flex-col gap-0.5 min-w-0">
             <span class="text-[10px] uppercase tracking-wide text-red-400/70 font-mono">{err.kind}</span>
             <span class="text-[11px] text-red-400 leading-snug">{err.message}</span>
-            {#if err.kind === 'hotkey-permission' || err.kind === 'mic-permission'}
+            {#if err.kind === 'hotkey-permission' || err.kind === 'hotkey-input-monitoring' || err.kind === 'mic-permission'}
               <span class="text-[10px] text-red-400/60 leading-snug">Click to open System Settings →</span>
             {/if}
           </div>
