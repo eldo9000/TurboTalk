@@ -943,47 +943,37 @@ Reply with only the single word, lowercase, no punctuation.
 
   <!-- History tab -->
   {#if activeTab === 'history'}
-    <div class="flex-1 min-h-0 flex flex-col text-[12px]">
+    <div class="tt-history flex-1 min-h-0 flex flex-col">
       {#if transcriptError}
-        <div class="mx-3 mt-2 px-3 py-2 rounded-lg flex items-center justify-between gap-2
-                    bg-red-500/10 border border-red-500/25">
-          <span class="text-[11px] text-red-400 leading-snug">{transcriptError}</span>
-          <button onclick={() => { transcriptError = ''; }}
-                  class="shrink-0 text-red-400/60 hover:text-red-400 leading-none">×</button>
+        <div class="tt-banner-error">
+          <span class="tt-banner-error-msg">{transcriptError}</span>
+          <button onclick={() => { transcriptError = ''; }} class="tt-banner-close">×</button>
         </div>
       {/if}
       {#if history.length === 0}
-        <div class="flex-1 flex flex-col items-center justify-center gap-2">
+        <div class="tt-history-empty">
           {#if recording || transcribing}
-            <p class="text-[var(--text-muted)] select-none animate-pulse">
-              {recording ? 'Recording…' : 'Transcribing…'}
-            </p>
+            <p class="tt-history-empty-status">{recording ? 'Recording…' : 'Transcribing…'}</p>
           {:else}
-            <kbd class="px-3 py-1.5 rounded-lg border border-[var(--border)]
-                        bg-[var(--surface-raised)] text-[var(--text-secondary)]
-                        select-none shadow-sm">
-              {KEY_DISPLAY[cfgHotkeyKey] ?? cfgHotkeyKey}
-            </kbd>
-            <p class="text-[var(--text-muted)] select-none">
+            <kbd class="tt-kbd">{KEY_DISPLAY[cfgHotkeyKey] ?? cfgHotkeyKey}</kbd>
+            <p class="tt-history-empty-hint">
               {cfgHotkeyMode === 'toggle' ? 'Press to start · press again to stop' : 'Hold to record'}
             </p>
           {/if}
         </div>
       {:else}
-        <div class="flex-1 min-h-0 overflow-y-auto px-3 py-2 flex flex-col gap-0.5">
+        <div class="tt-history-list">
           {#each history as item (item.ts)}
             <button
               onclick={() => copyHistoryItem(item)}
               title="Click to copy"
-              class="relative w-full text-left text-[13px] leading-relaxed px-2 py-2 rounded transition-colors
-                     cursor-pointer select-text text-[var(--text-primary)]
-                     hover:bg-[color-mix(in_srgb,#fff_6%,var(--surface-raised))]"
+              class="tt-history-item"
             >
-              <span style="display: block; max-height: 4.875em; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 1.5em), transparent); mask-image: linear-gradient(to bottom, black calc(100% - 1.5em), transparent); {copiedTs === item.ts ? 'visibility: hidden;' : ''}">
+              <span class="tt-history-text" class:tt-history-text-hidden={copiedTs === item.ts}>
                 {item.text}
               </span>
               {#if copiedTs === item.ts}
-                <span class="absolute inset-0 flex items-center justify-center gap-1.5 font-medium text-emerald-400 pointer-events-none">
+                <span class="tt-history-copied">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="20 6 9 17 4 12"/>
                   </svg>
@@ -994,26 +984,19 @@ Reply with only the single word, lowercase, no punctuation.
           {/each}
         </div>
       {/if}
-      <div class="shrink-0 flex items-center justify-center gap-2 px-3 py-2">
+      <div class="tt-history-actions">
         <button
           onclick={() => recording ? commands.stopRecording() : commands.startRecording()}
           disabled={transcribing}
           title="Record into the history list. Transcript stays here — won't paste into another app."
-          class="flex items-center gap-1.5 text-[11px] font-medium px-3 py-1 rounded border transition-colors
-                 {recording
-                   ? 'text-red-400 border-red-400/50 hover:border-red-400'
-                   : 'text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]'}
-                 {transcribing ? 'opacity-50 cursor-default pointer-events-none' : ''}"
+          class="tt-btn tt-btn-icon"
+          class:tt-btn-recording={recording}
         >
-          <span class="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0"></span>
+          <span class="tt-rec-dot"></span>
           {recording ? 'Stop' : 'Record'}
         </button>
         {#if history.length > 0}
-          <button
-            onclick={clearHistory}
-            class="flex items-center gap-1.5 text-[11px] font-medium px-3 py-1 rounded border transition-colors
-                   text-[var(--text-muted)] border-[var(--border)] hover:text-red-400 hover:border-red-400/50"
-          >
+          <button onclick={clearHistory} class="tt-btn tt-btn-icon tt-btn-danger-hover">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
             </svg>
@@ -1025,178 +1008,114 @@ Reply with only the single word, lowercase, no punctuation.
   {/if}
 
   {#snippet modelRow(m)}
-    {@const filename     = m.name + '.bin'}
+    {@const filename      = m.name + '.bin'}
     {@const installedPath = cfgModels.find(p => p.endsWith(filename))}
-    {@const isInstalled  = !!installedPath}
-    {@const isSelected   = isInstalled && cfgModel === installedPath}
+    {@const isInstalled   = !!installedPath}
+    {@const isSelected    = isInstalled && cfgModel === installedPath}
     {@const isDownloading = m.name in downloadProgress}
-    {@const pct          = downloadProgress[m.name] ?? 0}
-    <div class="group flex items-center gap-2 py-1.5">
-      <div class="flex-1 min-w-0">
-        <span class="text-xs font-mono text-[var(--text-primary)]">{m.name}</span>
-        <span class="text-[10px] text-[var(--text-tertiary,#666)] ml-1.5">{m.size}</span>
-        <p class="text-[10px] mt-0.5 {m.warn ? 'text-orange-500 dark:text-yellow-400' : 'text-[var(--text-tertiary,#666)]'}">{m.description}</p>
+    {@const pct           = downloadProgress[m.name] ?? 0}
+    <div class="tt-model-row group">
+      <div class="tt-row-info">
+        <div class="tt-model-name-row">
+          <span class="tt-model-name tt-model-name-sm">{m.name}</span>
+          <span class="tt-model-size">{m.size}</span>
+        </div>
+        <p class="tt-model-desc" class:tt-warn={m.warn}>{m.description}</p>
       </div>
       {#if isDownloading}
-        <span class="shrink-0 text-[10px] text-[var(--text-primary)] tabular-nums w-7 text-right">{pct}%</span>
-        <button
-          onclick={() => commands.cancelDownload(m.name)}
-          class="shrink-0 px-3 py-1 rounded text-[11px] font-medium bg-red-500/15 border border-red-500/40
-                 text-red-400 hover:bg-red-500/25 transition-colors whitespace-nowrap"
-        >Cancel</button>
+        <span class="tt-model-pct">{pct}%</span>
+        <button onclick={() => commands.cancelDownload(m.name)} class="tt-btn tt-btn-danger">Cancel</button>
       {:else if !isInstalled}
-        <button
-          onclick={() => startDownload(m)}
-          class="shrink-0 px-3 py-1 rounded text-[11px] font-medium bg-[var(--surface)] border border-[var(--border)]
-                 text-[var(--text-primary)] hover:border-[var(--accent)] transition-colors whitespace-nowrap"
-        >Download</button>
+        <button onclick={() => startDownload(m)} class="tt-btn">Download</button>
       {:else if isSelected}
-        <button
-          onclick={() => removeModel(installedPath)}
-          title="Remove"
-          class="shrink-0 w-5 h-5 flex items-center justify-center rounded text-xs
-                 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto
-                 transition-opacity text-red-400 hover:bg-red-500/15"
-        >×</button>
-        <button disabled
-          class="shrink-0 px-3 py-1 rounded text-[11px] font-medium border border-green-500
-                 bg-green-500/20 text-[var(--text-primary)] cursor-default whitespace-nowrap"
-        >Selected</button>
+        <button onclick={() => removeModel(installedPath)} title="Remove" class="tt-model-x">×</button>
+        <button disabled class="tt-btn tt-btn-success">Selected</button>
       {:else}
-        <button
-          onclick={() => removeModel(installedPath)}
-          title="Remove"
-          class="shrink-0 w-5 h-5 flex items-center justify-center rounded text-xs
-                 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto
-                 transition-opacity text-red-400 hover:bg-red-500/15"
-        >×</button>
-        <button
-          onclick={() => selectModel(installedPath)}
-          class="shrink-0 px-3 py-1 rounded text-[11px] font-medium bg-[var(--accent)]
-                 hover:bg-[var(--accent-hover)] text-white transition-colors whitespace-nowrap"
-        >Use</button>
+        <button onclick={() => removeModel(installedPath)} title="Remove" class="tt-model-x">×</button>
+        <button onclick={() => selectModel(installedPath)} class="tt-btn tt-btn-accent">Use</button>
       {/if}
     </div>
   {/snippet}
 
   <!-- Models tab -->
   {#if activeTab === 'models'}
-    {@const rmFilename     = RECOMMENDED_MODEL.name + '.bin'}
+    {@const rmFilename      = RECOMMENDED_MODEL.name + '.bin'}
     {@const rmInstalledPath = cfgModels.find(p => p.endsWith(rmFilename))}
-    {@const rmIsInstalled  = !!rmInstalledPath}
-    {@const rmIsSelected   = rmIsInstalled && cfgModel === rmInstalledPath}
+    {@const rmIsInstalled   = !!rmInstalledPath}
+    {@const rmIsSelected    = rmIsInstalled && cfgModel === rmInstalledPath}
     {@const rmIsDownloading = RECOMMENDED_MODEL.name in downloadProgress}
-    {@const rmPct          = downloadProgress[RECOMMENDED_MODEL.name] ?? 0}
-    <div class="flex-1 min-h-0 overflow-y-auto text-[12px]">
+    {@const rmPct           = downloadProgress[RECOMMENDED_MODEL.name] ?? 0}
+    <div class="tt-set flex-1 min-h-0 overflow-y-auto">
 
       <!-- Recommended -->
-      <div class="px-4 py-3">
-        <div
-          class="group rounded-xl p-3.5 border-2 transition-colors
-                 {rmIsSelected
-                   ? 'bg-green-500/10 border-green-500/40'
-                   : 'bg-[var(--accent)]/8 border-[var(--accent)]/40 hover:border-[var(--accent)]/60'}"
-        >
-          <div class="flex items-center gap-1.5 mb-1.5">
-            <span class="text-orange-500 dark:text-yellow-400 text-xs leading-none">★</span>
-            <span class="text-[10px] uppercase tracking-wider font-semibold text-orange-500 dark:text-yellow-400">Recommended</span>
-          </div>
-          <div class="flex items-center gap-2">
-            <div class="flex-1 min-w-0">
-              <div class="flex items-baseline gap-2">
-                <span class="text-[13px] font-mono font-semibold text-[var(--text-primary)]">{RECOMMENDED_MODEL.name}</span>
-                <span class="text-[11px] text-[var(--text-muted)]">{RECOMMENDED_MODEL.size}</span>
-              </div>
-              <p class="text-[11px] text-[var(--text-secondary)] mt-1 leading-snug">{RECOMMENDED_MODEL.description}</p>
+      <div class="tt-section">
+        <div class="subsection-hd"><span class="subsection-hd-title">Recommended</span></div>
+        <div class="tt-row tt-row-field">
+          <div class="tt-model-card group" class:tt-model-card-selected={rmIsSelected}>
+            <div class="tt-model-card-hd">
+              <span class="tt-model-star">★</span>
+              <span class="tt-model-star-lbl">Recommended</span>
             </div>
-            {#if rmIsDownloading}
-              <span class="shrink-0 text-[12px] text-[var(--text-primary)] tabular-nums w-9 text-right">{rmPct}%</span>
-              <button
-                onclick={() => commands.cancelDownload(RECOMMENDED_MODEL.name)}
-                class="shrink-0 px-4 py-1.5 rounded-md text-[13px] font-medium bg-red-500/15 border border-red-500/40
-                       text-red-400 hover:bg-red-500/25 transition-colors whitespace-nowrap"
-              >Cancel</button>
-            {:else if !rmIsInstalled}
-              <button
-                onclick={() => startDownload(RECOMMENDED_MODEL)}
-                class="shrink-0 px-4 py-1.5 rounded-md text-[13px] font-medium bg-[var(--accent)]
-                       text-white hover:bg-[var(--accent-hover)] transition-colors whitespace-nowrap"
-              >Download</button>
-            {:else if rmIsSelected}
-              <button
-                onclick={() => removeModel(rmInstalledPath)}
-                title="Remove"
-                class="shrink-0 w-6 h-6 flex items-center justify-center rounded
-                       opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto
-                       transition-opacity text-red-400 hover:bg-red-500/15"
-              >×</button>
-              <button disabled
-                class="shrink-0 px-4 py-1.5 rounded-md text-[13px] font-medium border border-green-500
-                       bg-green-500/20 text-[var(--text-primary)] cursor-default whitespace-nowrap"
-              >Selected</button>
-            {:else}
-              <button
-                onclick={() => removeModel(rmInstalledPath)}
-                title="Remove"
-                class="shrink-0 w-6 h-6 flex items-center justify-center rounded
-                       opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto
-                       transition-opacity text-red-400 hover:bg-red-500/15"
-              >×</button>
-              <button
-                onclick={() => selectModel(rmInstalledPath)}
-                class="shrink-0 px-4 py-1.5 rounded-md text-[13px] font-medium bg-[var(--accent)]
-                       text-white hover:bg-[var(--accent-hover)] transition-colors whitespace-nowrap"
-              >Use</button>
-            {/if}
+            <div class="tt-model-card-body">
+              <div class="tt-row-info">
+                <div class="tt-model-name-row">
+                  <span class="tt-model-name">{RECOMMENDED_MODEL.name}</span>
+                  <span class="tt-model-size">{RECOMMENDED_MODEL.size}</span>
+                </div>
+                <p class="tt-desc">{RECOMMENDED_MODEL.description}</p>
+              </div>
+              {#if rmIsDownloading}
+                <span class="tt-model-pct tt-model-pct-lg">{rmPct}%</span>
+                <button onclick={() => commands.cancelDownload(RECOMMENDED_MODEL.name)} class="tt-btn tt-btn-md tt-btn-danger">Cancel</button>
+              {:else if !rmIsInstalled}
+                <button onclick={() => startDownload(RECOMMENDED_MODEL)} class="tt-btn tt-btn-md tt-btn-accent">Download</button>
+              {:else if rmIsSelected}
+                <button onclick={() => removeModel(rmInstalledPath)} title="Remove" class="tt-model-x tt-model-x-lg">×</button>
+                <button disabled class="tt-btn tt-btn-md tt-btn-success">Selected</button>
+              {:else}
+                <button onclick={() => removeModel(rmInstalledPath)} title="Remove" class="tt-model-x tt-model-x-lg">×</button>
+                <button onclick={() => selectModel(rmInstalledPath)} class="tt-btn tt-btn-md tt-btn-accent">Use</button>
+              {/if}
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- Available models -->
-      <div class="px-4 py-3 space-y-0.5">
-        <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)] mb-2">Available</p>
+      <!-- Available -->
+      <div class="tt-section">
+        <div class="subsection-hd"><span class="subsection-hd-title">Available</span></div>
         {#each MODEL_CATALOG as m}
           {@render modelRow(m)}
         {/each}
       </div>
 
       <!-- Custom model -->
-      <div class="px-4 py-3 space-y-2">
-        <p class="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Custom model</p>
+      <div class="tt-section tt-section-last">
+        <div class="subsection-hd"><span class="subsection-hd-title">Custom model</span></div>
         {#if customPath}
-          <div class="flex items-center gap-2 px-3 py-2 rounded-lg border border-green-500/40 bg-green-500/10">
-            <span class="flex-1 text-[12px] font-mono text-green-400 truncate" title={customPath}>
-              {customPath.split('/').at(-1)}
-            </span>
-            <span class="shrink-0 text-[11px] font-medium text-green-400">Connected</span>
-            <button
-              onclick={() => removeModel(customPath)}
-              title="Clear custom model"
-              class="shrink-0 w-5 h-5 flex items-center justify-center rounded
-                     text-red-400 hover:bg-red-500/15 transition-colors"
-            >×</button>
+          <div class="tt-row tt-row-field">
+            <div class="tt-custom-pill">
+              <span class="tt-custom-name" title={customPath}>{customPath.split('/').at(-1)}</span>
+              <span class="tt-custom-status">Connected</span>
+              <button onclick={() => removeModel(customPath)} title="Clear custom model" class="tt-model-x tt-model-x-visible">×</button>
+            </div>
           </div>
         {:else}
-          <div class="flex items-center gap-2">
+          <div class="tt-row tt-row-field">
             <input
               bind:value={newModelPath}
               onkeydown={(e) => e.key === 'Enter' && setCustomModel(newModelPath)}
               placeholder="Paste path to .bin file…"
-              class="flex-1 bg-[var(--surface)] border border-[var(--border)] rounded px-2 py-1.5
-                     text-[13px] text-[var(--text-primary)] placeholder:text-[var(--text-muted)]
-                     outline-none hover:border-[var(--accent)] focus:border-[var(--accent)] transition-colors"
+              class="tt-input"
               spellcheck="false"
             />
-            <button
-              onclick={browseCustomModel}
-              class="shrink-0 px-3 py-1.5 rounded border border-[var(--border)] text-[12px] font-medium
-                     text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--accent)]
-                     transition-colors whitespace-nowrap"
-            >Browse</button>
+            <button onclick={browseCustomModel} class="tt-btn">Browse</button>
           </div>
         {/if}
         {#if !cfgModel}
-          <p class="text-[11px] text-red-400">No model selected — transcription will fail.</p>
+          <div class="tt-row">
+            <p class="tt-warn">No model selected — transcription will fail.</p>
+          </div>
         {/if}
       </div>
 
@@ -1949,4 +1868,315 @@ Reply with only the single word, lowercase, no punctuation.
 
   /* Preset chip container — uses .tt-multi-btn underneath but wraps */
   .tt-multi-wrap { flex-wrap: wrap; gap: 4px; }
+
+  /* ── Button variants (Models + History) ──────────────────────────────── */
+  .tt-btn-md {
+    padding: 6px 14px;
+    font-size: 12px;
+    border-radius: 6px;
+  }
+  .tt-btn-accent {
+    background: var(--accent);
+    color: #fff;
+    border-color: color-mix(in srgb, var(--accent) 70%, #000);
+  }
+  .tt-btn-accent:hover:not(:disabled) {
+    background: var(--accent-hover);
+    color: #fff;
+  }
+  .tt-btn-success {
+    background: color-mix(in srgb, #22c55e 20%, var(--surface-panel));
+    color: var(--text-primary);
+    border-color: #22c55e;
+  }
+  .tt-btn-danger {
+    background: color-mix(in srgb, #ef4444 15%, var(--surface-panel));
+    color: #f87171;
+    border-color: color-mix(in srgb, #ef4444 40%, var(--border));
+  }
+  .tt-btn-danger:hover:not(:disabled) {
+    background: color-mix(in srgb, #ef4444 25%, var(--surface-panel));
+    color: #fca5a5;
+  }
+  .tt-btn-icon {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .tt-btn-danger-hover:hover:not(:disabled) {
+    color: #f87171;
+    border-color: color-mix(in srgb, #ef4444 50%, var(--border));
+    background: var(--surface-panel);
+  }
+
+  /* ── Models tab ──────────────────────────────────────────────────────── */
+  .tt-model-card {
+    width: 100%;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+    background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+    transition: border-color 0.1s, background 0.1s;
+  }
+  .tt-model-card:hover {
+    border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  }
+  .tt-model-card-selected {
+    background: color-mix(in srgb, #22c55e 10%, var(--surface));
+    border-color: color-mix(in srgb, #22c55e 40%, var(--border));
+  }
+  .tt-model-card-hd {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+  .tt-model-star {
+    color: #f59e0b;
+    font-size: 13px;
+    line-height: 1;
+  }
+  :global(html.dark) .tt-model-star { color: #facc15; }
+  .tt-model-star-lbl {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #f59e0b;
+  }
+  :global(html.dark) .tt-model-star-lbl { color: #facc15; }
+  .tt-model-card-body {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .tt-model-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+  }
+  .tt-model-name-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+  }
+  .tt-model-name {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .tt-model-name-sm { font-size: 11px; font-weight: 500; }
+  .tt-model-size {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .tt-model-desc {
+    font-size: 10.5px;
+    color: var(--text-muted);
+    margin-top: 1px;
+  }
+  .tt-model-pct {
+    flex-shrink: 0;
+    width: 32px;
+    text-align: right;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+  }
+  .tt-model-pct-lg { width: 40px; font-size: 12px; }
+  .tt-model-x {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    border: none;
+    background: transparent;
+    color: #f87171;
+    font-size: 13px;
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.1s, background 0.1s;
+  }
+  .tt-model-x:hover { background: color-mix(in srgb, #ef4444 15%, transparent); }
+  .group:hover .tt-model-x { opacity: 1; pointer-events: auto; }
+  .tt-model-x-lg { width: 24px; height: 24px; font-size: 14px; }
+  .tt-model-x-visible { opacity: 1; pointer-events: auto; }
+
+  .tt-custom-pill {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, #22c55e 40%, var(--border));
+    background: color-mix(in srgb, #22c55e 10%, var(--surface));
+  }
+  .tt-custom-name {
+    flex: 1;
+    min-width: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    color: #4ade80;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tt-custom-status {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    color: #4ade80;
+  }
+
+  .tt-warn { color: #f87171; font-size: 11px; }
+  :global(html:not(.dark)) .tt-warn { color: #dc2626; }
+
+  /* ── History tab ─────────────────────────────────────────────────────── */
+  .tt-history {
+    font-size: 13px;
+    color: var(--text-primary);
+  }
+
+  .tt-banner-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 8px 12px 0;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, #ef4444 30%, var(--border));
+    background: color-mix(in srgb, #ef4444 10%, var(--surface));
+  }
+  .tt-banner-error-msg {
+    flex: 1;
+    font-size: 11px;
+    line-height: 1.4;
+    color: #f87171;
+  }
+  .tt-banner-close {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    color: color-mix(in srgb, #f87171 70%, transparent);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+  }
+  .tt-banner-close:hover { color: #f87171; }
+
+  .tt-history-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+  .tt-history-empty-status {
+    color: var(--text-muted);
+    user-select: none;
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.45; }
+  }
+  .tt-history-empty-hint {
+    color: var(--text-muted);
+    font-size: 12px;
+    user-select: none;
+  }
+  .tt-kbd {
+    padding: 6px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface-raised);
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 14px;
+    user-select: none;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  }
+
+  .tt-history-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .tt-history-item {
+    position: relative;
+    width: 100%;
+    text-align: left;
+    font-size: 13px;
+    line-height: 1.55;
+    padding: 8px 10px;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    color: var(--text-primary);
+    transition: background 0.1s;
+  }
+  .tt-history-item:hover {
+    background: color-mix(in srgb, var(--text-primary) 6%, var(--surface-raised));
+  }
+  .tt-history-text {
+    display: block;
+    max-height: 4.875em;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 1.5em), transparent);
+    mask-image: linear-gradient(to bottom, black calc(100% - 1.5em), transparent);
+  }
+  .tt-history-text-hidden { visibility: hidden; }
+  .tt-history-copied {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-weight: 500;
+    color: #4ade80;
+    pointer-events: none;
+  }
+
+  .tt-history-actions {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+  .tt-rec-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #f87171;
+    flex-shrink: 0;
+  }
+  .tt-btn-recording {
+    color: #f87171;
+    border-color: color-mix(in srgb, #f87171 50%, var(--border));
+  }
+  .tt-btn-recording:hover {
+    color: #f87171;
+    border-color: #f87171;
+    background: color-mix(in srgb, #ef4444 8%, var(--surface-panel));
+  }
 </style>
