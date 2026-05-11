@@ -161,6 +161,13 @@ jobs:
       - name: Install whisper.cpp (provides whisper-server sidecar)
         run: brew install whisper-cpp
 
+      - name: Patch Homebrew whisper-server rpath for bundle layout
+        # Tauri places bundle.resources into Contents/Resources/. Patch the
+        # Homebrew binary BEFORE `tauri build` so the bundled DMG, .app, and
+        # updater tarball all carry the corrected rpath. Doing this post-build
+        # only patches the .app and tarball — the DMG keeps the original.
+        run: install_name_tool -add_rpath @executable_path/../Resources/ /opt/homebrew/bin/whisper-server
+
       - name: Fetch Whisper sidecars
         run: npm run fetch-sidecars
 
@@ -196,12 +203,6 @@ jobs:
           echo "sig=$SIG"               >> "$GITHUB_OUTPUT"
           echo "dmg=$DMG"               >> "$GITHUB_OUTPUT"
           echo "bundle_dir=$BUNDLE_DIR" >> "$GITHUB_OUTPUT"
-
-      - name: Patch whisper-server rpath
-        run: |
-          set -euo pipefail
-          WS='${{ steps.mac_artifacts.outputs.app_path }}/Contents/MacOS/whisper-server'
-          install_name_tool -add_rpath @executable_path/../Resources/ "$WS"
 
       - name: Ad-hoc codesign and strip quarantine
         run: |
