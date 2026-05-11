@@ -7,12 +7,6 @@
 <p align="center"><strong>Free voice dictation for getting work done.</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.8.8-blue" alt="version" />
-  <img src="https://img.shields.io/badge/license-GPL--3.0-green" alt="license" />
-  <img src="https://img.shields.io/badge/platform-macOS%20arm64-lightgrey" alt="platform" />
-</p>
-
-<p align="center">
   <a href="https://github.com/eldo9000/TurboTalk-App/releases">
     <img src="https://img.shields.io/badge/Download-Latest%20Release-blue?style=for-the-badge&logo=apple&logoColor=white" alt="Download" />
   </a>
