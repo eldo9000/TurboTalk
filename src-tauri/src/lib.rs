@@ -961,13 +961,11 @@ pub fn run() {
             let hotkey_state: HotkeyState = Arc::new(RwLock::new(cfg.hotkey.clone()));
             app.manage(hotkey_state.clone());
 
-            // ── First-launch splash — shown once, then hidden forever ─────
-            // Window is pre-declared in tauri.conf.json (visible:false). On first
-            // launch we position it on the cursor's monitor and show it; on
-            // subsequent launches we close it immediately so it never accumulates.
+            // ── Launch splash — shown on every app start ───────────────────
+            // Window is pre-declared in tauri.conf.json (visible:false) so it
+            // doesn't accumulate across hot-reloads; we position and show it here.
             if let Some(splash_win) = app.get_webview_window("splash") {
-                if !settings::has_shown_splash() {
-                    tracing::info!("[splash] first launch — positioning and showing");
+                tracing::info!("[splash] positioning and showing");
                     const SPLASH_W: f64 = 360.0;
                     const SPLASH_H: f64 = 220.0;
                     // Center on the cursor's monitor (same normalization as the
@@ -1020,18 +1018,6 @@ pub fn run() {
                         }
                     }
                     let _ = splash_win.show();
-                    let app_h = app.handle().clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_secs(2));
-                        if let Some(w) = app_h.get_webview_window("splash") {
-                            let _ = w.close();
-                        }
-                        settings::mark_splash_shown();
-                    });
-                } else {
-                    tracing::info!("[splash] not first launch — closing pre-loaded window");
-                    let _ = splash_win.close();
-                }
             }
 
             // ── Main window — position below cursor at launch ─────────────

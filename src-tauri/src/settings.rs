@@ -272,25 +272,6 @@ fn config_path() -> PathBuf {
     p
 }
 
-fn splash_sentinel_path() -> PathBuf {
-    let mut p = dirs::home_dir().unwrap_or_default();
-    p.push(".config/librewin/turbotalk/.splash_shown");
-    p
-}
-
-/// Returns true if the first-launch splash has already been shown.
-pub fn has_shown_splash() -> bool {
-    splash_sentinel_path().exists()
-}
-
-/// Records that the first-launch splash has been shown.
-pub fn mark_splash_shown() {
-    let path = splash_sentinel_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(&path, b"");
-}
 
 fn history_path() -> PathBuf {
     let mut p = dirs::home_dir().unwrap_or_default();
