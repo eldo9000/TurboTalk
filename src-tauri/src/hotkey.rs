@@ -824,10 +824,16 @@ mod imp {
                         );
                         if !surfaced_permission_error {
                             surfaced_permission_error = true;
-                            let message = if trusted {
-                                "Record trigger failed to start. Restart Turbo Talk and try again."
+                            let (kind, message) = if trusted {
+                                (
+                                    "hotkey-input-monitoring",
+                                    "Record trigger could not receive keyboard events. Turn on Turbo Talk in System Settings → Privacy & Security → Input Monitoring, then restart Turbo Talk.",
+                                )
                             } else {
-                                "Record trigger needs Accessibility permission. Add Turbo Talk in System Settings → Privacy & Security → Accessibility — Turbo Talk will pick it up automatically once granted."
+                                (
+                                    "hotkey-permission",
+                                    "Record trigger needs Accessibility permission. Add Turbo Talk in System Settings → Privacy & Security → Accessibility — Turbo Talk will pick it up automatically once granted.",
+                                )
                             };
                             let app_for_emit = app.clone();
                             std::thread::spawn(move || {
@@ -836,7 +842,7 @@ mod imp {
                                     &app_for_emit,
                                     "ui-error",
                                     common::UiError {
-                                        kind: "hotkey-permission",
+                                        kind,
                                         message: message.to_string(),
                                         recoverable: true,
                                     },
