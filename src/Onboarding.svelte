@@ -4,7 +4,8 @@
   // Polls `commands.checkReadiness()` every second while open so each row
   // flips green the moment the user grants permission in System Settings or
   // a model finishes downloading. Step 1 is Accessibility; Step 2 is
-  // Input Monitoring; Step 3 is Microphone; Step 4 is Model selection.
+  // Input Monitoring; Step 3 is Microphone; Step 4 is Model selection;
+  // Step 5 is Launch at Login.
   //
   // Closes itself by calling `onComplete()` when readiness is fully green.
 
@@ -15,9 +16,12 @@
   let { onComplete, onUnsupportedContinue } = $props();
 
   let readiness          = $state(null);
+  let launchAtLogin      = $state(false);
   let pollHandle         = null;
   let micPromptInFlight  = $state(false);
   let inputPromptInFlight = $state(false);
+  let launchPromptInFlight = $state(false);
+  let launchError        = $state('');
   let downloadingModel   = $state(null);
   let downloadPct        = $state(0);
   let downloadError      = $state('');
@@ -38,8 +42,13 @@
   ];
 
   async function refresh() {
-    readiness = await commands.checkReadiness();
-    if (readiness.ready) {
+    const [nextReadiness, nextLaunchAtLogin] = await Promise.all([
+      commands.checkReadiness(),
+      commands.getLaunchAtLogin(),
+    ]);
+    readiness = nextReadiness;
+    launchAtLogin = nextLaunchAtLogin;
+    if (readiness.ready && launchAtLogin) {
       stopPolling();
       onComplete?.();
     }
@@ -55,6 +64,9 @@
 
   onMount(async () => {
     await refresh();
+    if (!unsupportedPlatform && !launchAtLogin) {
+      await enableLaunchAtLogin();
+    }
     startPolling();
   });
   onDestroy(stopPolling);
@@ -118,6 +130,20 @@
     await commands.openSystemSettings('microphone');
   }
 
+  async function enableLaunchAtLogin() {
+    launchPromptInFlight = true;
+    launchError = '';
+    try {
+      const res = await commands.setLaunchAtLogin(true);
+      if (res.status === 'error') {
+        launchError = res.error || 'Could not enable launch at login.';
+      }
+    } finally {
+      launchPromptInFlight = false;
+      await refresh();
+    }
+  }
+
   async function downloadModel(modelId) {
     downloadingModel = modelId;
     downloadPct      = 0;
@@ -148,7 +174,7 @@
   }
 
   let stepStates = $derived.by(() => {
-    if (!readiness) return { accessibility: 'active', input_monitoring: 'pending', microphone: 'pending', model: 'pending' };
+    if (!readiness) return { accessibility: 'active', input_monitoring: 'pending', microphone: 'pending', model: 'pending', launch: 'pending' };
     const a = readiness.accessibility === 'granted';
     const i = readiness.input_monitoring === 'granted';
     const m = readiness.microphone    === 'granted';
@@ -158,6 +184,7 @@
       input_monitoring: i ? 'done' : (a ? 'active' : 'pending'),
       microphone:    m ? 'done' : (a && i ? 'active' : 'pending'),
       model:         p ? 'done' : (a && i && m ? 'active' : 'pending'),
+      launch:        launchAtLogin ? 'done' : (a && i && m && p ? 'active' : 'pending'),
     };
   });
 
@@ -356,6 +383,30 @@
               {#if downloadError}
                 <p class="text-[11px] text-red-400 leading-snug">{downloadError}</p>
               {/if}
+            {/if}
+          {/if}
+        </div>
+      </div>
+
+      <!-- Step 5: Launch at Login -->
+      <div class="flex gap-3 p-3.5 rounded-lg border {stepClass(stepStates.launch)}">
+        <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.launch)}">
+          {stepStates.launch === 'done' ? '✓' : '5'}
+        </div>
+        <div class="flex flex-col gap-2 min-w-0 flex-1">
+          <div class="flex flex-col gap-0.5">
+            <h2 class="text-[13px] font-medium leading-tight">Launch at Login</h2>
+            <p class="text-[11px] text-[var(--muted,#9a9a9a)] leading-snug">
+              Turbo Talk starts quietly when you sign in, so the menu bar trigger is ready.
+            </p>
+          </div>
+          {#if stepStates.launch === 'active'}
+            <button onclick={enableLaunchAtLogin} disabled={launchPromptInFlight}
+              class="self-start px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 disabled:opacity-50 transition-opacity">
+              {launchPromptInFlight ? 'Enabling…' : 'Enable Launch at Login'}
+            </button>
+            {#if launchError}
+              <p class="text-[11px] text-red-400 leading-snug">{launchError}</p>
             {/if}
           {/if}
         </div>
