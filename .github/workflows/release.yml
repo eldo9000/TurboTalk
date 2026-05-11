@@ -150,7 +150,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
+            target
           key: macos-cargo-aarch64-apple-darwin-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
             macos-cargo-aarch64-apple-darwin-
@@ -172,7 +172,7 @@ jobs:
         run: |
           set -euo pipefail
           V='${{ steps.tag.outputs.version_base }}'
-          BUNDLE_DIR="src-tauri/target/aarch64-apple-darwin/release/bundle"
+          BUNDLE_DIR="target/aarch64-apple-darwin/release/bundle"
           APP_PATH="$BUNDLE_DIR/macos/TurboTalk.app"
           # Tauri uses productName (with space) for the app bundle but strips
           # spaces for the filename in some versions — probe both.
