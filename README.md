@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/eldo9000/TurboTalk-App/releases/tag/v0.8.8"><img src="https://img.shields.io/badge/version-0.8.8-blue" alt="version" /></a>
   <a href="https://github.com/eldo9000/TurboTalk-App/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-green" alt="license" /></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20arm64-lightgrey" alt="platform" />
+  <a href="https://github.com/eldo9000/TurboTalk-App/releases/latest"><img src="https://img.shields.io/badge/platform-macOS%20arm64-lightgrey" alt="platform" /></a>
 </p>
 
 <p align="center">
