@@ -257,7 +257,7 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgHistoryAutoDelete = $state('10d');
   let cfgSaveHistory       = $state(true);
   let cfgShowOverlay       = $state(true);
-  let cfgTranscriptIndicator = $state(true);
+  let cfgTranscriptIndicator = $state(false);
   let cfgSoundOnStart      = $state(false);
   let cfgSoundOnFinish     = $state(false);
   let cfgSoundOnCancel     = $state(false);
@@ -617,7 +617,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfgHistoryAutoDelete = cfg.history_auto_delete             ?? '10d';
     cfgSaveHistory       = cfg.save_history                    ?? true;
     cfgShowOverlay       = cfg.show_overlay                    ?? true;
-    cfgTranscriptIndicator = cfg.transcript_size_indicator     ?? true;
+    cfgTranscriptIndicator = cfg.transcript_size_indicator     ?? false;
     cfgSoundOnStart      = cfg.sound_on_start                  ?? false;
     cfgSoundOnFinish     = cfg.sound_on_finish                  ?? false;
     cfgSoundOnCancel     = cfg.sound_on_cancel                  ?? false;

@@ -43,8 +43,8 @@ pub struct Config {
     pub show_overlay: bool,
     /// Whether the recording overlay shows a transcript-size indicator (a visual
     /// estimate of how long and how much talking the user has been doing — driven
-    /// by VAD voiced-frame counts, not real transcription).
-    #[serde(default = "default_true")]
+    /// by VAD voiced-frame counts, not real transcription). Defaults off.
+    #[serde(default)]
     pub transcript_size_indicator: bool,
     /// Play a sound cue when recording starts.
     #[serde(default)]
@@ -234,7 +234,7 @@ impl Default for Config {
             history_auto_delete: default_history_auto_delete(),
             save_history: true,
             show_overlay: true,
-            transcript_size_indicator: true,
+            transcript_size_indicator: false,
             sound_on_start: true,
             sound_on_finish: false,
             sound_on_cancel: true,
