@@ -185,7 +185,7 @@ export type Config = {
 	/**
 	 *  Whether the recording overlay shows a transcript-size indicator (a visual
 	 *  estimate of how long and how much talking the user has been doing — driven
-	 *  by VAD voiced-frame counts, not real transcription).
+	 *  by VAD voiced-frame counts, not real transcription). Defaults off.
 	 */
 	transcript_size_indicator?: boolean,
 	// Play a sound cue when recording starts.

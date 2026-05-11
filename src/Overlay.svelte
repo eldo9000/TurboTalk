@@ -25,7 +25,7 @@
   // been said. Driven by VAD-derived wordCount increments — no real
   // transcription. Pills lay out inline (wrap to new rows) so the result reads
   // as a paragraph rather than a stack of full-width bars.
-  let indicatorEnabled = $state(true);
+  let indicatorEnabled = $state(false);
   let wordPills = $state([]); // [{id, w}] where w is pixel width
   let nextPillId = 0;
 
@@ -87,7 +87,7 @@
     // non-fatal — indicator stays hidden until a config-update event arrives.
     try {
       const cfg = await commands.getConfig();
-      indicatorEnabled = cfg.transcript_size_indicator ?? true;
+      indicatorEnabled = cfg.transcript_size_indicator ?? false;
     } catch (_) { /* keep indicator off */ }
 
     // Window placement is owned entirely by the Rust side — see
@@ -237,7 +237,7 @@
     }).then(u => uns.push(u));
 
     listen('config-update', (e) => {
-      const next = e.payload?.transcript_size_indicator ?? true;
+      const next = e.payload?.transcript_size_indicator ?? false;
       indicatorEnabled = next;
       if (!next) wordPills = [];
     }).then(u => uns.push(u));
