@@ -73,8 +73,9 @@ html, body, #app {
 }
 .tt-btn-success {
   background: color-mix(in srgb, #22c55e 20%, var(--surface-panel));
-  color: var(--text-primary);
+  color: #22c55e;
   border-color: #22c55e;
+  opacity: 1 !important;
 }
 .tt-btn-danger {
   background: color-mix(in srgb, #ef4444 15%, var(--surface-panel));

@@ -262,6 +262,7 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgSoundOnFinish     = $state(false);
   let cfgSoundOnCancel     = $state(false);
   let cfgSoundVolume       = $state(0.7);
+  let volumeSaveTimer      = null;
   let showAdvanced         = $state(false);
   // Captured once from the Modes tab in Chaperone mode (two-column tall layout).
   // Used only for Modes when Chaperone is selected.
@@ -600,10 +601,10 @@ Reply with only the single word, lowercase, no punctuation.
 
   // ── Settings ──────────────────────────────────────────────────────────────
 
-  async function openSettings() {
+  async function openSettings(loadAudioDevices = true) {
     const [cfg, devs, launch] = await Promise.all([
       commands.getConfig(),
-      commands.listAudioDevices(),
+      loadAudioDevices ? commands.listAudioDevices() : Promise.resolve(audioDevices),
       commands.getLaunchAtLogin(),
     ]);
     cfgDevice            = cfg.audio?.device                   ?? 'default';
@@ -746,7 +747,7 @@ Reply with only the single word, lowercase, no punctuation.
     // The outer div has flex-1 which collapses in an unconstrained container,
     // so outerEl.scrollHeight under-counts; inner div's scrollHeight is reliable.
     activeTab = 'settings';
-    await openSettings();
+    await openSettings(false);
     await tick();
     await new Promise(r => requestAnimationFrame(r));
     const measuredChromeH = chromeHeight();
@@ -1417,16 +1418,15 @@ Reply with only the single word, lowercase, no punctuation.
         <div class="tt-section">
           <div class="subsection-hd"><span class="subsection-hd-title">Cancel shortcuts</span></div>
           <div class="tt-row tt-row-field">
-            <label class="tt-check-row">
-              <input type="checkbox" class="cb-native" bind:checked={cfgCancelOnEsc} onchange={() => saveSettings()} />
-              <span class="tt-check-lbl">Press Escape</span>
-            </label>
-          </div>
-          <div class="tt-row tt-row-field">
-            <label class="tt-check-row">
-              <input type="checkbox" class="cb-native" bind:checked={cfgCancelOnHold} onchange={() => saveSettings()} />
-              <span class="tt-check-lbl">Hold trigger key</span>
-            </label>
+            <span class="tt-lbl">Cancel on</span>
+            <div class="tt-multi">
+              <button
+                onclick={() => { cfgCancelOnEsc = !cfgCancelOnEsc; saveSettings(); }}
+                class="tt-multi-btn" class:tt-multi-on={cfgCancelOnEsc}>Escape</button>
+              <button
+                onclick={() => { cfgCancelOnHold = !cfgCancelOnHold; saveSettings(); }}
+                class="tt-multi-btn" class:tt-multi-on={cfgCancelOnHold}>Hold key</button>
+            </div>
           </div>
         </div>
 
@@ -1442,14 +1442,25 @@ Reply with only the single word, lowercase, no punctuation.
           </div>
         </div>
 
+        <!-- UI Zoom -->
+        <div class="tt-section">
+          <div class="subsection-hd"><span class="subsection-hd-title">UI Zoom</span></div>
+          <div class="tt-row tt-row-field">
+            <div class="tt-seg tt-seg-wide">
+              {#each ZOOM_LEVELS as level, i}
+                <button onclick={() => { zoomIdx = i; }} class={seg(zoomIdx === i, i, ZOOM_LEVELS.length)}>{level}%</button>
+              {/each}
+            </div>
+          </div>
+        </div>
+
         <!-- History -->
         <div class="tt-section">
           <div class="subsection-hd"><span class="subsection-hd-title">History</span></div>
           <div class="tt-row tt-row-field">
-            <label class="tt-check-row">
-              <input type="checkbox" class="cb-native" bind:checked={cfgSaveHistory} onchange={() => saveSettings()} />
-              <span class="tt-check-lbl">Save history</span>
-            </label>
+            <button
+              onclick={() => { cfgSaveHistory = !cfgSaveHistory; saveSettings(); }}
+              class="tt-multi-btn" class:tt-multi-on={cfgSaveHistory}>Save</button>
             <div class="tt-key-sel">
               <Select
                 items={HISTORY_AUTO_DELETE_ITEMS}
@@ -1465,19 +1476,31 @@ Reply with only the single word, lowercase, no punctuation.
 
         <!-- Audio indicators (Volume embedded) -->
         <div class="tt-section">
-          <div class="subsection-hd"><span class="subsection-hd-title">Audio indicators</span></div>
+          <div class="subsection-hd"><span class="subsection-hd-title">Indicators</span></div>
           <div class="tt-row tt-row-field">
-            <span class="tt-lbl">Play on</span>
+            <span class="tt-lbl">Visual Overlay</span>
+            <div class="tt-multi">
+              <button
+                onclick={() => { cfgShowOverlay = !cfgShowOverlay; saveSettings(); }}
+                class="tt-multi-btn" class:tt-multi-on={cfgShowOverlay}>Recording Active</button>
+              <button
+                onclick={() => { if (cfgShowOverlay) { cfgTranscriptIndicator = !cfgTranscriptIndicator; saveSettings(); } }}
+                class="tt-multi-btn" class:tt-multi-on={cfgTranscriptIndicator}
+                disabled={!cfgShowOverlay}>Recording Length</button>
+            </div>
+          </div>
+          <div class="tt-row tt-row-field">
+            <span class="tt-lbl">Audio Notify</span>
             <div class="tt-multi">
               <button
                 onclick={() => { cfgSoundOnStart = !cfgSoundOnStart; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnStart}>Start</button>
+                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnStart}>on Start</button>
               <button
                 onclick={() => { cfgSoundOnFinish = !cfgSoundOnFinish; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnFinish}>Finish</button>
+                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnFinish}>on Finish</button>
               <button
                 onclick={() => { cfgSoundOnCancel = !cfgSoundOnCancel; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnCancel}>Cancel</button>
+                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnCancel}>on Cancel</button>
             </div>
           </div>
           <div class="tt-row tt-row-field tt-row-col">
@@ -1487,9 +1510,9 @@ Reply with only the single word, lowercase, no punctuation.
             </div>
             <input
               type="range"
-              min="0" max="1" step="0.01"
+              min="0" max="1" step="0.05"
               bind:value={cfgSoundVolume}
-              oninput={() => saveSettings()}
+              oninput={() => { clearTimeout(volumeSaveTimer); volumeSaveTimer = setTimeout(saveSettings, 300); }}
               class="tt-range"
               style="--pct:{cfgSoundVolume * 100}%"
             />
@@ -1499,34 +1522,23 @@ Reply with only the single word, lowercase, no punctuation.
         <!-- System -->
         <div class="tt-section tt-section-last">
           <div class="subsection-hd"><span class="subsection-hd-title">System</span></div>
-          <div class="tt-row tt-row-field">
-            <label class="tt-check-row">
-              <input type="checkbox" class="cb-native" bind:checked={cfgLaunchLogin} onchange={() => saveSettings()} />
-              <span class="tt-check-lbl">Launch at login</span>
-            </label>
-          </div>
-          <div class="tt-row tt-row-field">
-            <label class="tt-check-row">
-              <input type="checkbox" class="cb-native" bind:checked={cfgShowOverlay} onchange={() => saveSettings()} />
-              <span class="tt-check-lbl">Active recording overlay</span>
-            </label>
-          </div>
-          <div class="tt-row tt-row-field">
-            <label class="tt-check-row" class:tt-check-disabled={!cfgShowOverlay}>
-              <input type="checkbox" class="cb-native" bind:checked={cfgTranscriptIndicator} disabled={!cfgShowOverlay} onchange={() => saveSettings()} />
-              <span class="tt-check-lbl">Recording length overlay</span>
-            </label>
-          </div>
-          <div class="tt-row tt-row-field">
+          <div class="tt-row tt-row-field justify-center">
             <button
-              onclick={() => { resetOpen = true; resetClosing = false; resetError = ''; }}
-              class="tt-btn tt-btn-danger-hover w-full justify-center"
-            >
-              Reset TurboTalk
-            </button>
+              onclick={() => { cfgLaunchLogin = !cfgLaunchLogin; saveSettings(); }}
+              class="tt-multi-btn" class:tt-multi-on={cfgLaunchLogin}>Automatically launch TurboTalk at login</button>
           </div>
-          <div class="tt-row tt-row-field tt-update-row">
-            <UpdateManager />
+          <div class="tt-row tt-row-field">
+            <div class="flex gap-2 w-full">
+              <button
+                onclick={() => { resetOpen = true; resetClosing = false; resetError = ''; }}
+                class="tt-btn tt-btn-danger-hover flex-1 justify-center"
+              >
+                Reset TurboTalk
+              </button>
+              <div class="flex-1">
+                <UpdateManager />
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1734,7 +1746,7 @@ Reply with only the single word, lowercase, no punctuation.
   }
   .tt-section {
     border-bottom: 1px solid var(--border);
-    padding-bottom: 16px;
+    padding-bottom: 10px;
   }
   .tt-section-last { border-bottom: none; }
 
@@ -1749,11 +1761,13 @@ Reply with only the single word, lowercase, no punctuation.
   .tt-row-field  { padding-top: 5px; padding-bottom: 5px; }
   .tt-row-col    { flex-direction: column; align-items: flex-start; gap: 5px; }
 
-  .tt-key-sel    { flex: 1; min-width: 0; margin-left: 6px; }
+  .tt-key-sel    { flex: 1; min-width: 0; margin-left: 12px; }
+  .tt-key-sel :global(button) { padding-top: 5px; padding-bottom: 5px; font-size: 13px; }
+  .tt-key-sel :global(button span) { font-size: 12px; }
   /* Fixed-width seg slot so paired-row dropdowns left-align cleanly. */
-  .tt-row .tt-seg:not(.tt-seg-wide) { width: 88px; }
+  .tt-row .tt-seg:not(.tt-seg-wide) { width: 120px; }
 
-  .tt-lbl        { flex: 1; font-size: 10px; color: var(--text-secondary); }
+  .tt-lbl        { flex: 1; font-size: 12px; color: var(--text-secondary); }
   .tt-lbl-fixed  { flex: unset; }
 
   .tt-check-row {
@@ -1771,8 +1785,8 @@ Reply with only the single word, lowercase, no punctuation.
   .tt-seg-dim   { opacity: 0.4; }
   .tt-seg-btn {
     flex: 1;
-    padding: 2px 6px;
-    font-size: 9px;
+    padding: 3px 10px;
+    font-size: 11px;
     font-family: inherit;
     font-weight: 600;
     letter-spacing: 0.04em;
@@ -1803,8 +1817,8 @@ Reply with only the single word, lowercase, no punctuation.
   /* Multi-toggle pills (Audio indicators) */
   .tt-multi { display: flex; gap: 4px; flex-shrink: 0; }
   .tt-multi-btn {
-    padding: 2px 7px;
-    font-size: 9px;
+    padding: 3px 10px;
+    font-size: 11px;
     font-family: inherit;
     font-weight: 600;
     letter-spacing: 0.04em;
@@ -1816,6 +1830,7 @@ Reply with only the single word, lowercase, no punctuation.
     transition: background 0.1s, color 0.1s;
   }
   .tt-multi-btn:hover { color: var(--text-primary); }
+  .tt-multi-btn:disabled { opacity: 0.35; cursor: default; }
   .tt-multi-on {
     background: color-mix(in srgb, var(--accent) 18%, var(--surface-panel));
     border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
@@ -1850,7 +1865,7 @@ Reply with only the single word, lowercase, no punctuation.
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    background: var(--accent);
+    background: radial-gradient(circle, #fff 30%, var(--accent) 30%);
     border: 2px solid var(--surface);
     box-shadow: 0 0 0 1px var(--accent);
     cursor: pointer;
