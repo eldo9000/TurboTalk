@@ -33,6 +33,7 @@ switch (process.platform) {
     // bundle.windows.resources. Run `npm run fetch-sidecars` to populate.
     required = [
       'src-tauri/binaries/whisper-cli-x86_64-pc-windows-msvc.exe',
+      'src-tauri/binaries/whisper-server-x86_64-pc-windows-msvc.exe',
       'src-tauri/binaries/whisper.dll',
       'src-tauri/binaries/ggml.dll',
       'src-tauri/binaries/ggml-base.dll',

@@ -29,11 +29,12 @@ const TARGETS = {
     sha256: '74f973345cb52ef5ba3ec9e7e7af8e48cc8c71722d1528603b80588a11f82e3e',
     archiveRoot: 'Release',
     files: [
-      { src: 'whisper-cli.exe', dst: 'whisper-cli-x86_64-pc-windows-msvc.exe' },
-      { src: 'whisper.dll',     dst: 'whisper.dll' },
-      { src: 'ggml.dll',        dst: 'ggml.dll' },
-      { src: 'ggml-base.dll',   dst: 'ggml-base.dll' },
-      { src: 'ggml-cpu.dll',    dst: 'ggml-cpu.dll' },
+      { src: 'whisper-cli.exe',    dst: 'whisper-cli-x86_64-pc-windows-msvc.exe' },
+      { src: 'whisper-server.exe', dst: 'whisper-server-x86_64-pc-windows-msvc.exe' },
+      { src: 'whisper.dll',        dst: 'whisper.dll' },
+      { src: 'ggml.dll',           dst: 'ggml.dll' },
+      { src: 'ggml-base.dll',      dst: 'ggml-base.dll' },
+      { src: 'ggml-cpu.dll',       dst: 'ggml-cpu.dll' },
     ],
   },
 };
