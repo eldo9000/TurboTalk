@@ -92,6 +92,10 @@ export const commands = {
 	 *  Privacy & Security → Input Monitoring so the user can enable keyboard-event
 	 *  listening for the packaged app. If the prompt was already denied, macOS will
 	 *  not show it again; the caller should deep-link to System Settings.
+	 * 
+	 *  Uses CGRequestListenEventAccess (CoreGraphics, macOS 12+) which is the
+	 *  correct TCC path for Input Monitoring on modern macOS. Falls back to
+	 *  IOHIDRequestAccess for older systems.
 	 */
 	requestInputMonitoringPermission: () => __TAURI_INVOKE<PermissionStatus>("request_input_monitoring_permission"),
 	/**
