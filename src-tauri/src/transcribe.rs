@@ -330,6 +330,7 @@ impl TranscriptionWorker {
         // It must be called after fork but before exec, which is exactly what
         // pre_exec guarantees. Failure is intentionally ignored: setsid()
         // returns EPERM if the process is already a group leader (harmless).
+        #[cfg(unix)]
         unsafe {
             use std::os::unix::process::CommandExt;
             cmd.pre_exec(|| {
