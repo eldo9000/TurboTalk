@@ -271,6 +271,76 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  build-windows:
+    name: Build (windows-x64) — workflow_dispatch only
+    runs-on: windows-latest
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-cargo-x86_64-pc-windows-msvc-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            windows-cargo-x86_64-pc-windows-msvc-
+
+      - name: Configure git auth for private cargo deps
+        env:
+          LIBRE_APPS_TOKEN: ${{ secrets.LIBRE_APPS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LIBRE_APPS_TOKEN:-}" ]; then
+            echo "::error::LIBRE_APPS_TOKEN secret is not set."
+            exit 1
+          fi
+          git config --global \
+            "url.https://oauth2:${LIBRE_APPS_TOKEN}@github.com/.insteadOf" \
+            "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Fetch Whisper sidecars
+        run: npm run fetch-sidecars
+
+      - name: Package
+        run: npm run package
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: turbotalk-windows-x64
+          path: dist-artifacts/*
+          if-no-files-found: error
+          retention-days: 3
+
   finalize:
     name: Assemble latest.json and publish release
     needs: build
