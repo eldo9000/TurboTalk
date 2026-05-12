@@ -20,16 +20,15 @@ Model warms at app startup via `prewarm()`. Second+ dictations skip the multi-se
 
 Previously confirmed 2026-05-01 / 2026-05-03 with per-call `whisper-cli` spawn (M0–M5).
 
-## v0.8 beta packaging status — updated 2026-05-06
+## v0.8 beta packaging status — updated 2026-05-11
 
 - `npm run package` builds the production frontend, release Rust binary,
   `Turbo Talk.app`, and macOS arm64 DMG.
 - v0.8 intentionally skips Apple Developer credentials, so the beta is
   unsigned/ad-hoc and not notarized.
-- Local `TurboTalk-0.8.7-macos-arm64.dmg.sha256` verifies. The `v0.8.7`
-  tag points at commit `577186d`; GitHub Actions release workflow is
-  building the matrix (macos-arm64 + windows-x64). The `v0.8.7` beta is
-  published as a GitHub prerelease once both legs go green. macOS is the
+- Local `TurboTalk-0.8.12-macos-arm64.dmg.sha256` verifies. The `v0.8.12`
+  tag points at commit `0b13130`; GitHub Actions release workflow is
+  building the matrix (macos-arm64 + windows-x64). macOS is the
   usable beta path; Windows remains packaging-only until hotkey + paste
   land.
 - A GitHub-downloaded macOS artifact is quarantined by macOS and may show
