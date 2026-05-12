@@ -1,7 +1,7 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-05-11
-**Current state:** v0.8.12 released. TASK-49 beta release scan pack completed — all blockers resolved before tagging. CI release workflow triggered by `v0.8.12` tag; GitHub Actions building macos-arm64 + windows-x64 matrix. Local DMG artifact at `dist-artifacts/TurboTalk-0.8.12-macos-arm64.dmg` (sha256 verified). Full 11-step installed-artifact smoke test on a clean macOS account is the remaining not-run gate.
+**Current state:** v0.8.12 released. TASK-39 closed — zoom layout stable at 100/125/150/175/200% across History, Models, Modes (Simple + Advanced), Settings. No unintended outer scrollbars. 125% anchor preserved. TASK-49 beta release scan pack completed — all blockers resolved before tagging. CI release workflow triggered by `v0.8.12` tag; GitHub Actions building macos-arm64 + windows-x64 matrix. Local DMG artifact at `dist-artifacts/TurboTalk-0.8.12-macos-arm64.dmg` (sha256 verified). Full 11-step installed-artifact smoke test on a clean macOS account is the remaining not-run gate.
 
 Previous state: Three regressions from the TASK-47/TASK-48 work fixed. Dictation back to working state — confirmed snappy on short, full transcript on long. **TASK-48 (CoreML / Neural Engine) shelved** to `tasks/deferred/` — current Metal path is good enough for daily use; CoreML phase 2 has two unresolved blockers (60s dyld-init ANE warmup, packaging integration) and isn't urgent.
 (1) Process leak / Mac freeze (`3871090`): persistent worker in `static WORKER` never runs Drop on process exit, so setsid'd whisper-server child survived every quit (10 orphans found, 5 holding 1.6 GB each). Fixed via `.build()?.run(cb)` split in lib.rs — `RunEvent::Exit` now calls `transcribe::abort_active()`.
