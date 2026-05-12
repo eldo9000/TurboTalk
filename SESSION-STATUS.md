@@ -1,7 +1,7 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-05-12
-**Current state:** TASK-51 complete — `docs/WINDOWS-UTM-TESTING.md` written. UTM confirmed installed. Installer at `dist-artifacts/windows-x64-tmp/TurboTalk-0.8.12-windows-x64-setup.exe`. Guide covers: Windows 11 ARM64 ISO via UUP dump, VM creation (Apple Virtualization, 8 GB RAM, 80 GB disk, shared dir), SPICE guest tools, x64 emulation verification. Next: human executes TASK-51 VM setup, then TASK-52 smoke test (8 items, no dictation).
+**Current state:** Windows pre-testing sprint complete (TASK-50–53). UTM/QEMU Windows 11 ARM64 VM built and tested. Results: app installs, UI runs, all tabs functional, settings persist, tray works. **Hotkey FAIL** — rdev `WH_KEYBOARD_LL` captures nothing in QEMU (virtio keyboard bypasses Win32 hook chain); likely QEMU artifact, not a real-hardware failure. Paste untested by dependency. 4 cosmetic/UX issues logged: invisible tray icon, onboarding flag not persisting, light mode low contrast, unsupported-platform button invisible. Full results at `docs/WINDOWS-SMOKE-RESULTS.md`. TRUTH.md updated. Next: test hotkey on real Windows hardware to close TASK-25/26.
 
 Previous state: TASK-50 complete — Windows x64 installer produced. Three build blockers found and fixed: (1) `release.yml` missing Windows matrix leg (restored as `workflow_dispatch`-only job), (2) `fetch-sidecars.mjs` missing `whisper-server.exe` extraction (added; confirmed present in whisper.cpp v1.8.4 zip), (3) `transcribe.rs` `pre_exec`/`setsid()` block missing `#[cfg(unix)]` guard (fixed). Installer at `dist-artifacts/windows-x64-tmp/TurboTalk-0.8.12-windows-x64-setup.exe` (sha256 verified).
 

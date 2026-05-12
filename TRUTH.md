@@ -29,8 +29,8 @@ Previously confirmed 2026-05-01 / 2026-05-03 with per-call `whisper-cli` spawn (
 - Local `TurboTalk-0.8.12-macos-arm64.dmg.sha256` verifies. The `v0.8.12`
   tag points at commit `0b13130`; GitHub Actions release workflow is
   building the matrix (macos-arm64 + windows-x64). macOS is the
-  usable beta path; Windows remains packaging-only until hotkey + paste
-  land.
+  usable beta path; Windows installs and UI runs but hotkey (rdev) and
+  paste are unproven — rdev captured nothing in UTM/QEMU; real hardware test pending.
 - A GitHub-downloaded macOS artifact is quarantined by macOS and may show
   "Apple could not verify Turbo Talk.app" on normal double-click. That is
   expected until Developer ID signing + notarization land; use right-click
@@ -71,7 +71,10 @@ Previously confirmed 2026-05-01 / 2026-05-03 with per-call `whisper-cli` spawn (
 
 ## What is explicitly not working
 
-- Windows hotkey + paste — stubs only (`Err("unsupported platform")`); TASK-25/26.
+- Windows hotkey — `rdev` `WH_KEYBOARD_LL` hook installs but captures no events in UTM/QEMU (x64-emulated on ARM64 + virtio keyboard bypasses Win32 low-level hook chain). Untested on real Windows hardware. TASK-25.
+- Windows paste — unreachable without working hotkey; arboard+enigo impl in place, untested. TASK-26.
+- Windows tray icon — renders as transparent/invisible blue square; no TT glyph. Cosmetic.
+- Windows onboarding flag — welcome screen re-triggers on every restart; "onboarding complete" state not persisting correctly on Windows config path.
 - Linux Whisper sidecar — upstream ships no Linux binary; Linux excluded from release matrix.
 - Developer ID codesigning / notarization is intentionally deferred for v0.8.
 
