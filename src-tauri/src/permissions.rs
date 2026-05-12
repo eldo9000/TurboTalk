@@ -176,19 +176,33 @@ pub async fn request_microphone_permission() -> PermissionStatus {
 /// Privacy & Security → Input Monitoring so the user can enable keyboard-event
 /// listening for the packaged app. If the prompt was already denied, macOS will
 /// not show it again; the caller should deep-link to System Settings.
+///
+/// Uses CGRequestListenEventAccess (CoreGraphics, macOS 12+) which is the
+/// correct TCC path for Input Monitoring on modern macOS. Falls back to
+/// IOHIDRequestAccess for older systems.
 #[tauri::command]
 #[specta::specta]
 pub fn request_input_monitoring_permission() -> PermissionStatus {
     #[cfg(target_os = "macos")]
     {
-        const K_IOHID_REQUEST_TYPE_LISTEN_EVENT: u32 = 1;
-
+        #[link(name = "CoreGraphics", kind = "framework")]
+        extern "C" {
+            // Added macOS 12.0 — requests Input Monitoring (listen-event) TCC
+            // access and adds the bundle to the Privacy list on first call.
+            fn CGRequestListenEventAccess() -> bool;
+        }
         #[link(name = "IOKit", kind = "framework")]
         extern "C" {
             fn IOHIDRequestAccess(request_type: u32) -> bool;
         }
 
-        let _ = unsafe { IOHIDRequestAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT) };
+        unsafe {
+            // Primary: CoreGraphics TCC path (macOS 12+)
+            CGRequestListenEventAccess();
+            // Belt-and-suspenders: IOKit path for older macOS
+            const K_IOHID_REQUEST_TYPE_LISTEN_EVENT: u32 = 1;
+            IOHIDRequestAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT);
+        }
         input_monitoring_status()
     }
     #[cfg(not(target_os = "macos"))]
