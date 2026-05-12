@@ -118,6 +118,13 @@ export const commands = {
 	 *  grants and the app is restarted.
 	 */
 	promptForAccessibility: () => __TAURI_INVOKE<PermissionStatus>("prompt_for_accessibility"),
+	/**
+	 *  Debug command: set the in-memory force-onboarding flag so the frontend
+	 *  shows the welcome screen immediately. No restart, no data deleted.
+	 */
+	resetOnboarding: () => __TAURI_INVOKE<void>("reset_onboarding"),
+	// Called by the frontend when onboarding completes, to clear the force flag.
+	clearForceOnboarding: () => __TAURI_INVOKE<void>("clear_force_onboarding"),
 };
 
 /* Types */
@@ -288,6 +295,11 @@ export type Readiness = {
 	 *  "show onboarding vs. show main UI" switch.
 	 */
 	ready: boolean,
+	/**
+	 *  Debug override: true when `reset_onboarding` was called this session.
+	 *  Frontend shows onboarding regardless of `ready` while this is set.
+	 */
+	force_onboarding: boolean,
 };
 
 export type WhisperConfig = {

@@ -14,6 +14,11 @@
 // "Open Settings" button calls `open_system_settings` with a pane key.
 
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set by `reset_onboarding`, cleared by `clear_force_onboarding`.
+/// Signals the frontend to show the welcome screen even when fully ready.
+static FORCE_ONBOARDING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -33,6 +38,9 @@ pub struct Readiness {
     /// True iff all four gates pass — frontend uses this as the
     /// "show onboarding vs. show main UI" switch.
     pub ready: bool,
+    /// Debug override: true when `reset_onboarding` was called this session.
+    /// Frontend shows onboarding regardless of `ready` while this is set.
+    pub force_onboarding: bool,
 }
 
 // ── Accessibility ───────────────────────────────────────────────────────────
@@ -211,6 +219,7 @@ pub fn check_readiness() -> Readiness {
     let input_monitoring = input_monitoring_status();
     let microphone = microphone_status();
     let model_present = model_present();
+    let force_onboarding = FORCE_ONBOARDING.load(Ordering::SeqCst);
     let ready = matches!(accessibility, PermissionStatus::Granted)
         && matches!(input_monitoring, PermissionStatus::Granted)
         && matches!(microphone, PermissionStatus::Granted)
@@ -221,7 +230,23 @@ pub fn check_readiness() -> Readiness {
         microphone,
         model_present,
         ready,
+        force_onboarding,
     }
+}
+
+/// Debug command: set the in-memory force-onboarding flag so the frontend
+/// shows the welcome screen immediately. No restart, no data deleted.
+#[tauri::command]
+#[specta::specta]
+pub fn reset_onboarding() {
+    FORCE_ONBOARDING.store(true, Ordering::SeqCst);
+}
+
+/// Called by the frontend when onboarding completes, to clear the force flag.
+#[tauri::command]
+#[specta::specta]
+pub fn clear_force_onboarding() {
+    FORCE_ONBOARDING.store(false, Ordering::SeqCst);
 }
 
 /// Open a specific pane in macOS System Settings. `pane` is one of:

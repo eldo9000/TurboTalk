@@ -55,14 +55,19 @@ Each item is a hard gate for cutting a peer-share release. Items map back to "th
 
 - [ ] Fresh-clone build works end to end on at least the primary platform: `git clone <url> && cd turbotalk && npm install && npm run package`. A peer who can't build it on the first try will close the tab.
 - [ ] `npm run preflight` passes.
+- [ ] Version values match across `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, artifact names, tag name, and release notes.
+- [ ] Bundle preflight covers the real shipping surface: host sidecars, companion libraries, executable bits where required, `src-tauri/resources/silero_vad.onnx`, app icons, output artifact, and matching `.sha256`.
 - [ ] `cargo clippy -- -D warnings` clean from `src-tauri/`.
 - [ ] `cargo test` passes from `src-tauri/`.
 - [ ] `npm run typecheck` passes.
 - [ ] `npm run check` (svelte-check) passes if it exists in `package.json`.
+- [ ] Beta packaging is intentionally unsigned/ad-hoc: no `APPLE_*` signing environment was used, macOS `signingIdentity` remains `"-"`, and the artifact is not notarized.
+- [ ] Manual-update policy matches the code. `RELEASING.md` says the updater is intentionally not enabled for this beta; if updater dependencies/config/plugin registration remain present, document whether they are inert or remove/disable them before release.
 
 ### 3. Runtime hygiene
 
 - [ ] One full pass of `docs/SMOKE-TEST.md` Test 3 (push-to-talk → paste into focused editor) on a packaged build, not just a `tauri dev` build.
+- [ ] One full pass of the installed-artifact smoke test on a clean macOS user account or VM: install from DMG, complete first-run permission flow, dictate into TextEdit, quit/relaunch, verify persisted settings/history, then uninstall/delete data.
 - [ ] App starts cleanly with no first-run crashes when no Whisper model is downloaded yet.
 - [ ] Error paths surface as banners or toasts, not silent hangs (TurboTalk's recorder state machine already enforces this — verify it still holds).
 - [ ] Quit from the tray fully exits — no orphaned `whisper-server` processes survive (this regression has bit before; verify with `pgrep whisper-server` after quitting).
@@ -74,11 +79,13 @@ The README claims local-only with no telemetry. A reader may want to verify this
 - [ ] `docs/PRIVACY.md` is current and reflects the actual code paths.
 - [ ] No new dependencies added since the last release that ship telemetry by default. Check the `package.json` and `Cargo.toml` diffs.
 - [ ] A grep for HTTP client usage in `src-tauri/` returns only the local Ollama and local whisper-server endpoints — no external hosts.
+- [ ] A repo-wide URL/network scan has an explained allowlist. Expected external URLs are release/download links, model-download links, documentation links, and validated browser-open links such as Ollama install pages; transcript and cleanup runtime traffic must remain localhost-only.
+- [ ] Tauri IPC commands and capability files do not expose broad filesystem, shell/process, URL-opening, or network behavior beyond the documented app flows.
 
 ### 5. Documentation
 
 - [ ] README installation and usage instructions match the current shipping behavior (model list, hotkey list, cleanup modes).
-- [ ] `docs/BUILD.md` and `docs/RELEASING.md` reflect the current procedure.
+- [ ] `docs/BUILD.md`, `docs/RELEASING.md`, `docs/SMOKE-TEST.md`, and `docs/PRIVACY.md` reflect the current procedure and actual app behavior.
 - [ ] A `CHANGELOG.md` exists at the repo root with an entry for this version. Even one bullet per release. Peer reviewers use it as a reading order.
 - [ ] The git tag for this version (`v0.X.Y`) has a corresponding GitHub release with the artifacts attached and `.sha256` companion files. Peer-share should be a downloadable artifact, not "build it yourself."
 
@@ -89,6 +96,21 @@ A reader will spend most of their time in three files: the recorder state machin
 - [ ] Skim each for leftover `dbg!`, `println!`, and commented-out experimental code.
 - [ ] Confirm no `.unwrap()` on user-controlled input paths (file picks, paste targets, Ollama endpoint URL).
 - [ ] Confirm any `unsafe` block is annotated with a `// SAFETY:` comment explaining the invariant.
+
+### 7. Beta release scan pack
+
+For the next beta, run a coordinated scan pass before tagging. Treat each item as either **pass**, **fixed**, or **documented known issue**:
+
+- [ ] Version consistency scan: all version-bearing files, tag names, artifact names, and release notes agree.
+- [ ] Updater/manual-update contradiction scan: the documented manual-update policy matches `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and `src-tauri/src/lib.rs`.
+- [ ] Local-only/privacy scan: runtime transcript and cleanup paths call only loopback services; any external URL is user-initiated, documented, and non-telemetry.
+- [ ] IPC/permissions scan: Tauri capabilities and commands expose only the minimum app surface needed for settings, model selection/download, diagnostics, paste, tray, and local cleanup.
+- [ ] Rust risk scan: all non-test `unwrap()`, `expect()`, `unsafe`, `dbg!`, `println!`, `TODO`, and `FIXME` hits are reviewed.
+- [ ] Bundle asset scan: sidecars, libraries, model resources, app icons, artifact outputs, and checksums are present and valid for the release host.
+- [ ] Unsigned-beta scan: artifacts are intentionally unsigned/not notarized and release notes warn users exactly how to launch them.
+- [ ] Installed-artifact scan: the packaged app passes the clean-account smoke path, including permission prompts and uninstall/data cleanup.
+- [ ] Orphan-process scan: quitting the app leaves no `whisper-server` or related sidecar process behind.
+- [ ] Docs-reality scan: README, privacy, build, releasing, and smoke-test docs match the exact app behavior being shipped.
 
 If any item fails, fix or document the failure before tagging the version. A documented known issue is acceptable; an undocumented broken path is not.
 
