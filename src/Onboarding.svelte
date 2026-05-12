@@ -140,6 +140,7 @@
       && nextReadiness.microphone === 'granted'
       && nextSelectedModelReady
       && nextLaunchAtLogin
+      && !nextReadiness.force_onboarding
     ) {
       stopPolling();
       onComplete?.();
@@ -297,11 +298,11 @@
 
   function stepClass(state) {
     if (state === 'active') return 'border-[var(--accent)]/40 bg-[var(--accent)]/5';
-    if (state === 'done')   return 'border-[var(--border,#2a2a2a)] opacity-70';
+    if (state === 'done')   return 'border-[var(--border,#2a2a2a)]';
     return 'border-[var(--border,#2a2a2a)] opacity-50';
   }
   function badgeClass(state) {
-    if (state === 'done')   return 'bg-emerald-500/20 text-emerald-400';
+    if (state === 'done')   return 'bg-green-600 text-white';
     if (state === 'active') return 'bg-[var(--accent)] text-white';
     return 'bg-[var(--border,#2a2a2a)] text-[var(--text-secondary)]';
   }
@@ -537,6 +538,21 @@
       {/if}
     {:else}
       <p class="text-[12px] text-[var(--text-secondary)]">Checking system…</p>
+    {/if}
+
+    {#if readiness?.force_onboarding}
+      {@const allDone = Object.values(stepStates).every(s => s === 'done')}
+      <div class="flex flex-col items-center gap-1.5 mt-1">
+        {#if allDone}
+          <p class="text-[11px] font-medium text-green-400">All checks complete</p>
+        {/if}
+        <button
+          onclick={() => { stopPolling(); onComplete?.(); }}
+          class="px-5 py-2 rounded-md text-white text-[13px] font-semibold transition-colors
+                 {allDone ? 'bg-green-600 hover:bg-green-500' : 'bg-orange-500 hover:bg-orange-400'}">
+          Close ✓
+        </button>
+      </div>
     {/if}
 
   </div>

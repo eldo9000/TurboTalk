@@ -20,6 +20,8 @@ Before doing anything else, confirm:
 - `cargo test` passes (run from `src-tauri/`).
 - `cargo clippy -- -D warnings` is green (run from `src-tauri/`).
 - A manual smoke test on a fresh `npm run tauri dev` build passes — at minimum, complete Test 3 in `SMOKE-TEST.md` (push-to-talk → transcript pastes into the focused editor).
+- The beta release scan pack in `RELEASE-READINESS.md` has no undocumented blockers:
+  version consistency, updater/manual-update consistency, local-only/privacy network surface, Tauri IPC/capability surface, Rust risk scan, bundle asset scan, unsigned-beta packaging state, installed-artifact smoke, orphan-process check, and docs-reality check.
 
 If any of the above fails, stop. Do not cut a release on top of a red tree.
 

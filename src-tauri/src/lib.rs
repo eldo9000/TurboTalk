@@ -797,6 +797,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         permissions::open_system_settings,
         permissions::restart_app,
         permissions::prompt_for_accessibility,
+        permissions::reset_onboarding,
+        permissions::clear_force_onboarding,
     ])
 }
 
@@ -870,6 +872,8 @@ pub fn run() {
             permissions::open_system_settings,
             permissions::restart_app,
             permissions::prompt_for_accessibility,
+            permissions::reset_onboarding,
+            permissions::clear_force_onboarding,
         ])
         .setup(|app| {
             // ── macOS: hide from Dock and Cmd-Tab. The tray icon is the only

@@ -48,7 +48,7 @@
       r.accessibility === 'unsupported'
         || r.input_monitoring === 'unsupported'
         || r.microphone === 'unsupported';
-    showOnboarding = !r.ready && !(unsupportedPlatform && unsupportedPlatformDismissed);
+    showOnboarding = (r.force_onboarding || !r.ready) && !(unsupportedPlatform && unsupportedPlatformDismissed);
   }
 
   // Theme — override OS setting with user preference
@@ -79,6 +79,7 @@
   let resetClosing = $state(false);
   let resetBusy    = $state(false);
   let resetError   = $state('');
+  let shiftHeld    = $state(false);
 
   function closeAbout() {
     aboutClosing = true;
@@ -898,9 +899,16 @@ Reply with only the single word, lowercase, no punctuation.
     // backend confirms what's actually granted.
     recheckReadiness();
 
+    const onKeydown = (e) => { if (e.key === 'Shift') shiftHeld = true; };
+    const onKeyup   = (e) => { if (e.key === 'Shift') shiftHeld = false; };
+    window.addEventListener('keydown', onKeydown);
+    window.addEventListener('keyup',   onKeyup);
+
     return () => {
       window.removeEventListener('keydown', handleKeydown);
       window.removeEventListener('focus', onFocus);
+      window.removeEventListener('keydown', onKeydown);
+      window.removeEventListener('keyup',   onKeyup);
       unlisteners.forEach(u => u());
     };
   });
@@ -950,7 +958,7 @@ Reply with only the single word, lowercase, no punctuation.
        a permission between sessions). -->
   {#if showOnboarding}
     <Onboarding
-      onComplete={() => { showOnboarding = false; }}
+      onComplete={async () => { commands.clearForceOnboarding(); showOnboarding = false; cfgLaunchLogin = await commands.getLaunchAtLogin(); }}
       onUnsupportedContinue={() => {
         unsupportedPlatformDismissed = true;
         showOnboarding = false;
@@ -1530,10 +1538,12 @@ Reply with only the single word, lowercase, no punctuation.
           <div class="tt-row tt-row-field">
             <div class="flex gap-2 w-full">
               <button
-                onclick={() => { resetOpen = true; resetClosing = false; resetError = ''; }}
-                class="tt-btn tt-btn-danger-hover flex-1 justify-center"
+                onclick={() => shiftHeld ? (commands.resetOnboarding(), recheckReadiness()) : (resetOpen = true, resetClosing = false, resetError = '')}
+                class="tt-btn flex-1 justify-center"
+                class:tt-btn-danger-hover={!shiftHeld}
+                class:tt-btn-success={shiftHeld}
               >
-                Reset TurboTalk
+                {shiftHeld ? 'Re-run Welcome Screen' : 'Reset TurboTalk'}
               </button>
               <div class="flex-1">
                 <UpdateManager />
@@ -1748,7 +1758,9 @@ Reply with only the single word, lowercase, no punctuation.
     border-bottom: 1px solid var(--border);
     padding-bottom: 10px;
   }
-  .tt-section-last { border-bottom: none; }
+  .tt-section-last { border-bottom: none; padding-bottom: 0; }
+  .tt-section-last .tt-row:last-child { padding-bottom: 0; }
+  .tt-section-last .tt-row-field:last-child { padding-bottom: 4px; }
 
   .tt-row {
     display: flex;
