@@ -185,11 +185,13 @@ Add a single line under "Where We Are":
 
 Commit as `chore(status): record v<new-version> release`.
 
-## Manual updates policy
+## Update policy
 
-**TurboTalk beta uses manual updates only.** When a new release ships, users download the new artifact and replace the old one. The Tauri updater plugin is intentionally **not** enabled.
+TurboTalk ships a **manual check-for-updates** button in the Settings tab. The Tauri updater plugin is wired and will check `https://github.com/eldo9000/TurboTalk-App/releases/latest/download/latest.json` when the user clicks "Check for updates." It does **not** check automatically on launch and does not run in the background — the check is strictly user-initiated and throttled to once per week via localStorage.
 
-Before enabling auto-update we need: (1) a long-lived updater signing key with a documented secure-custody plan, (2) a stable artifact-hosting URL that we control, (3) a written key-rotation/loss procedure. Until those three exist, do not enable the updater plugin.
+This is not a full auto-updater. Users who never click the button will not receive update prompts. Communicating new releases via direct message / release notes is still the primary distribution path for this beta.
+
+Before enabling background auto-update we need: (1) a long-lived updater signing key with a documented secure-custody plan, (2) a stable artifact-hosting URL that we control, (3) a written key-rotation/loss procedure. Until those three exist, do not change the updater from its current manual-check-only mode.
 
 ## Future signed releases (deferred)
 

@@ -53,9 +53,9 @@ const MIN_RECORDING_MS: u32 = 100;
 /// Mic warmth — how long the cpal input stream stays open after a recording
 /// ends. Trade-off:
 ///   - warm  → next press skips CoreAudio cold-start (~200 ms) and pre-roll
-///             ring stays primed for leading-word capture (TASK-37);
+///     ring stays primed for leading-word capture (TASK-37);
 ///   - cold  → macOS immediately restores normal system audio routing
-///             (YouTube/music stops sounding like a phone call).
+///     (YouTube/music stops sounding like a phone call).
 ///
 /// User-controllable via `settings.audio.idle_timeout_secs`. Read on every
 /// `stop()` / `cancel()` so changes take effect on the next press without a
