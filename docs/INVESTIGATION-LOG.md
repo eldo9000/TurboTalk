@@ -11,3 +11,5 @@
 | 2026-05-11 | RULED OUT | dispatch 2/3 — fetch-sidecars missing whisper-server.exe fixed; build still fails: pre_exec/setsid() in transcribe.rs lacks #[cfg(unix)] guard |
 | 2026-05-11 | OPEN | dispatch 3/3 — transcribe.rs pre_exec(setsid) block is ungated; wrap with #[cfg(unix)] to compile on Windows |
 | 2026-05-11 | CONFIRMED | dispatch 3/3 — #[cfg(unix)] guard on pre_exec/setsid fixed Windows build; installer downloaded: TurboTalk-0.8.12-windows-x64-setup.exe |
+| 2026-05-12 | OPEN | dispatch 1/1 — write docs/WINDOWS-UTM-TESTING.md; UTM confirmed installed, installer at dist-artifacts/windows-x64-tmp/ confirmed present |
+| 2026-05-12 | CONFIRMED | dispatch 1/1 — docs/WINDOWS-UTM-TESTING.md written; UTM present, installer confirmed, 6-step guide covers ISO acquisition through x64 verification |
