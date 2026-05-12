@@ -23,6 +23,8 @@ switch (process.platform) {
       'src-tauri/binaries/libwhisper.1.dylib',
       'src-tauri/binaries/libggml.0.dylib',
       'src-tauri/binaries/libggml-base.0.dylib',
+      'src-tauri/binaries/libggml-blas.so',
+      'src-tauri/binaries/libggml-metal.so',
     ];
     break;
   case 'win32':

@@ -163,9 +163,10 @@ No other macOS system permissions are requested. There is no Automation prompt p
 ### Known limitations
 
 - **macOS:** Apple Silicon only. Ad-hoc signed only — not Apple-notarized. Expect a Gatekeeper warning on first launch (right-click → Open the first time).
+- **macOS — hotkey dead after install:** If the push-to-talk hotkey does nothing after the first install, open System Settings → Privacy & Security → Accessibility, remove Turbo Talk from the list, re-add it, toggle it on, then quit and relaunch. This is a one-time step required when macOS first registers an ad-hoc signed app in TCC.
 - **Windows:** Installer packaging exists, but end-to-end dictation is not supported yet. Hotkey + paste are still unsupported off macOS. The `.exe` is unsigned, so SmartScreen warns on first run. WebView2 runtime is required (preinstalled on Windows 11; Windows 10 users may need <https://developer.microsoft.com/microsoft-edge/webview2/>).
 - **Linux:** X11 only — **Wayland is not supported.** AppImage requires FUSE (`libfuse2` on Debian/Ubuntu). Tray-icon support depends on your desktop's AppIndicator support (GNOME may need an extension).
-- **macOS:** Auto-updater built in — the app checks for updates on launch and prompts when one is available. Windows/Linux: re-download to update.
+- **Updates:** Settings → "Check for updates" manually checks GitHub for a newer release. There is no background auto-update; the check only runs when you click the button.
 - History is saved to disk by default, retained for 10 days. Configurable in Settings — choose `restart` (clear on launch), `1d`, `5d`, `10d`, or `30d`. Capped at 50 entries either way.
 - The Advanced cleanup mode requires a local Ollama install. If you don't run Ollama, leave cleanup on `Off` or `Simple`.
 
