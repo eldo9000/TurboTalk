@@ -193,7 +193,7 @@
       // can land on a pane where Turbo Talk is not listed yet, forcing the
       // user through the manual file-picker path.
       if (status !== 'granted') {
-        await delay(1200);
+        await delay(2000);
         await refresh();
         if (readiness?.input_monitoring !== 'granted') {
           await commands.openSystemSettings('input_monitoring');
