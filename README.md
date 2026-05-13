@@ -4,6 +4,7 @@
 
 <h1 align="center">Turbo Talk</h1>
 
+<p align="center"><strong>Go fast.</strong></p>
 <p align="center"><strong>Free voice dictation for getting work done.</strong></p>
 
 <p align="center">
