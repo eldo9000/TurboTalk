@@ -141,7 +141,11 @@ export const commands = {
 	 *  `service` must be one of: "accessibility" | "input_monitoring"
 	 */
 	resetTccEntry: (service: string) => typedError<null, string>(__TAURI_INVOKE("reset_tcc_entry", { service })),
-	// Re-pins the main window's right edge after a zoom/mode resize changes the width.
+	/**
+	 *  Called from the frontend after every `setSize`.
+	 *  `adv_width` is the *zoomed* advanced window width (e.g. 1100 at 125% zoom).
+	 *  Fixes x so the right edge stays flush regardless of zoom level.
+	 */
 	repinMainWindow: (advWidth: number) => __TAURI_INVOKE<void>("repin_main_window", { advWidth }),
 };
 
