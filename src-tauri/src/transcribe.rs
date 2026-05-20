@@ -15,8 +15,7 @@ use tauri::Emitter;
 
 /// Allowed roots for the whisper binary:
 /// - the directory containing the running executable (release bundle sidecar)
-/// - the cargo target/ tree of this crate (dev builds)
-/// - the `src-tauri/binaries/` directory bundled at compile time (dev fallback)
+/// - in debug builds only, the cargo target/ tree and `src-tauri/binaries/`
 ///
 /// Any configured path that does not canonicalize to a location inside one of
 /// these roots is rejected — including arbitrary system binaries like `/bin/ls`.
@@ -31,12 +30,15 @@ fn allowed_whisper_roots() -> Vec<PathBuf> {
         }
     }
 
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    if let Ok(canon) = manifest_dir.join("target").canonicalize() {
-        roots.push(canon);
-    }
-    if let Ok(canon) = manifest_dir.join("binaries").canonicalize() {
-        roots.push(canon);
+    #[cfg(debug_assertions)]
+    {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        if let Ok(canon) = manifest_dir.join("target").canonicalize() {
+            roots.push(canon);
+        }
+        if let Ok(canon) = manifest_dir.join("binaries").canonicalize() {
+            roots.push(canon);
+        }
     }
 
     roots
@@ -101,13 +103,16 @@ fn find_whisper(configured_bin: &str) -> anyhow::Result<PathBuf> {
         }
     }
 
-    for sidecar in &sidecars {
-        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("binaries")
-            .join(sidecar);
-        if dev.exists() {
-            tracing::debug!("[transcribe] using dev sidecar: {:?}", dev);
-            return Ok(dev);
+    #[cfg(debug_assertions)]
+    {
+        for sidecar in &sidecars {
+            let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("binaries")
+                .join(sidecar);
+            if dev.exists() {
+                tracing::debug!("[transcribe] using dev sidecar: {:?}", dev);
+                return Ok(dev);
+            }
         }
     }
 
@@ -128,7 +133,9 @@ fn find_whisper(configured_bin: &str) -> anyhow::Result<PathBuf> {
 }
 
 /// Locate the whisper-server binary.
-/// Priority: dev binaries dir → bundled sidecar (next to exe) → configured path.
+/// Priority:
+/// - debug: dev binaries dir → current executable dir → configured path
+/// - release: current executable dir → configured path
 ///
 /// IMPORTANT: `binaries/` is checked BEFORE `current_exe().parent()` because
 /// Tauri's dev build copies `whisper-server` (and stale `libggml`/`libwhisper`
@@ -142,13 +149,16 @@ fn find_whisper_server(configured_bin: &str) -> anyhow::Result<PathBuf> {
 
     // Dev mode: binaries/ symlink → Homebrew binary. Checked FIRST to avoid
     // target/debug/ stale-dylib registry split (see comment above).
-    for sidecar in &sidecars {
-        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("binaries")
-            .join(sidecar);
-        if dev.exists() {
-            tracing::debug!("[transcribe] using dev whisper-server sidecar: {:?}", dev);
-            return Ok(dev);
+    #[cfg(debug_assertions)]
+    {
+        for sidecar in &sidecars {
+            let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("binaries")
+                .join(sidecar);
+            if dev.exists() {
+                tracing::debug!("[transcribe] using dev whisper-server sidecar: {:?}", dev);
+                return Ok(dev);
+            }
         }
     }
 
@@ -177,7 +187,10 @@ fn find_whisper_server(configured_bin: &str) -> anyhow::Result<PathBuf> {
              exists in the app bundle."
         );
     }
-    tracing::debug!("[transcribe] using configured whisper-server bin: {}", configured_bin);
+    tracing::debug!(
+        "[transcribe] using configured whisper-server bin: {}",
+        configured_bin
+    );
     Ok(configured)
 }
 
@@ -210,18 +223,32 @@ fn strip_trailing_filler(text: &str) -> String {
     // Each entry is matched case-insensitively against the trimmed tail.
     // Punctuation after the filler word is consumed along with it.
     const FILLERS: &[&str] = &[
-        "okay", "ok", "yeah", "yep", "yup", "alright", "all right",
-        "thank you", "thanks", "uh", "um", "uh huh",
+        "okay",
+        "ok",
+        "yeah",
+        "yep",
+        "yup",
+        "alright",
+        "all right",
+        "thank you",
+        "thanks",
+        "uh",
+        "um",
+        "uh huh",
     ];
     let mut s = text.to_string();
     loop {
         let trimmed = s.trim_end_matches(|c: char| c.is_whitespace() || c == '.' || c == ',');
         let lower = trimmed.to_lowercase();
-        let matched = FILLERS.iter().find_map(|&f| {
-            lower.strip_suffix(f).map(|rest| rest.len())
-        });
+        let matched = FILLERS
+            .iter()
+            .find_map(|&f| lower.strip_suffix(f).map(|rest| rest.len()));
         match matched {
-            Some(keep) => s = trimmed[..keep].trim_end_matches(|c: char| c.is_whitespace() || c == ',' || c == '.').to_string(),
+            Some(keep) => {
+                s = trimmed[..keep]
+                    .trim_end_matches(|c: char| c.is_whitespace() || c == ',' || c == '.')
+                    .to_string()
+            }
             None => break,
         }
     }
@@ -362,7 +389,20 @@ impl TranscriptionWorker {
             .timeout(std::time::Duration::from_millis(400))
             .build()
             .unwrap_or_default();
-        let http_client = reqwest::blocking::Client::new();
+        // IMPORTANT: reqwest's *blocking* client defaults to a 30 s total
+        // request timeout (Timeout::default() = Some(30 s) — unlike the async
+        // client, which defaults to None). `Client::new()` silently inherits
+        // it. A long dictation (~3 min of dense speech) transcribes in >30 s
+        // on large-v3-turbo, so the default cut the connection mid-inference
+        // and surfaced as "error sending request" while whisper-server kept
+        // running. Set an explicit, generous cap instead. 120 s comfortably
+        // covers a ~10 min whole-file batch-fallback POST on this hardware
+        // (480 s audio benched at ~55 s); the streaming path keeps individual
+        // requests far below this.
+        let http_client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_default();
         let base_url = format!("http://127.0.0.1:{}", port);
         let mut ready = false;
         for attempt in 0..150 {
@@ -538,6 +578,7 @@ pub fn invalidate_worker() {
     *slot = None;
     READY.store(false, Ordering::Release);
     PREWARM_FAILED.store(false, Ordering::Release);
+    PREWARM_IN_FLIGHT.store(false, Ordering::Release);
 }
 
 /// Get-or-build the worker against the current settings snapshot. If the
@@ -591,6 +632,11 @@ static READY: AtomicBool = AtomicBool::new(false);
 /// when a successful build completes (e.g. after the user fixes the config).
 static PREWARM_FAILED: AtomicBool = AtomicBool::new(false);
 
+/// True while a background prewarm thread is currently building the worker.
+/// This lets multiple callers ask for readiness without spawning duplicate
+/// whisper-server start attempts during the same cold window.
+static PREWARM_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
 /// True if dictation is ready (whisper-server loaded). Cheap atomic load.
 pub fn is_ready() -> bool {
     READY.load(Ordering::Acquire)
@@ -626,12 +672,23 @@ pub fn kill_orphans() {
 /// a press is currently waiting. On failure: emits `dictation-ready-failed`
 /// with the error message so the frontend can surface it.
 pub fn prewarm(cfg: crate::settings::Config, app: tauri::AppHandle) {
+    if READY.load(Ordering::Acquire) {
+        return;
+    }
+    if PREWARM_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        tracing::debug!("[transcribe] prewarm already in flight");
+        return;
+    }
     std::thread::spawn(move || {
         tracing::info!("[transcribe] prewarming whisper-server worker");
         match worker_for(&cfg) {
             Ok(_) => {
                 READY.store(true, Ordering::Release);
                 PREWARM_FAILED.store(false, Ordering::Release);
+                PREWARM_IN_FLIGHT.store(false, Ordering::Release);
                 tracing::info!("[transcribe] prewarm complete — worker ready");
                 if let Err(e) = app.emit("dictation-ready", ()) {
                     tracing::warn!("[transcribe] failed to emit dictation-ready: {:?}", e);
@@ -639,6 +696,7 @@ pub fn prewarm(cfg: crate::settings::Config, app: tauri::AppHandle) {
             }
             Err(e) => {
                 PREWARM_FAILED.store(true, Ordering::Release);
+                PREWARM_IN_FLIGHT.store(false, Ordering::Release);
                 let msg = format!("{:#}", e);
                 tracing::warn!("[transcribe] prewarm failed: {}", msg);
                 if let Err(emit_err) = app.emit("dictation-ready-failed", msg) {
