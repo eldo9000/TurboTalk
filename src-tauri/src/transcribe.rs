@@ -864,13 +864,6 @@ impl SegmentTranscriber {
     }
 }
 
-impl Drop for SegmentTranscriber {
-    fn drop(&mut self) {
-        if let Some(h) = self.worker.take() {
-            let _ = h.join();
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
