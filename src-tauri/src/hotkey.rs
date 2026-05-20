@@ -160,9 +160,17 @@ mod common {
     /// Call from the OS listener thread on trigger-key down (after auto-repeat
     /// dedup). When the deadline elapses, if the same press is still held and
     /// the recorder is still Recording or Transcribing, fire `trigger_cancel`.
-    /// Also arms `SUPPRESS_PTT_UP_COUNT` so the upcoming key-up's `ptt_up`
-    /// no-ops instead of cascading into `CANCEL_PENDING`.
-    pub(super) fn arm_hold_cancel(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
+    ///
+    /// `toggle_mode` controls whether `SUPPRESS_PTT_UP_COUNT` is armed: in
+    /// hold mode a key-up `ptt_up` is always coming and needs the suppression
+    /// slot; in toggle mode key-release is a no-op, so no suppression is
+    /// needed and arming one would swallow the user's very next stop-press.
+    pub(super) fn arm_hold_cancel(
+        recorder: &Arc<Recorder>,
+        tray_icon: &TrayIcon,
+        app: &AppHandle,
+        toggle_mode: bool,
+    ) {
         let s = recorder.state();
         if !matches!(
             s,
@@ -189,7 +197,12 @@ mod common {
             ) {
                 return;
             }
-            arm_ptt_up_suppression();
+            // In hold mode a key-up ptt_up is always on its way and needs
+            // this slot. In toggle mode key-release is a no-op — skip so
+            // the slot doesn't leak into the next recording's stop-press.
+            if !toggle_mode {
+                arm_ptt_up_suppression();
+            }
             trigger_cancel(&rec, &tray, &app);
         });
     }
@@ -837,7 +850,7 @@ mod imp {
                                 // → timer no-ops, normal PTT semantics apply.
                                 if is_key_down {
                                     if cancel_on_hold {
-                                        common::arm_hold_cancel(&recorder_cb, &tray_cb, &app_cb);
+                                        common::arm_hold_cancel(&recorder_cb, &tray_cb, &app_cb, toggle_mode);
                                     }
                                 } else {
                                     common::disarm_hold_cancel();
@@ -1104,7 +1117,7 @@ mod imp {
                         // is busy. Held past the deadline → cancel; released
                         // early → no-op and normal PTT semantics apply.
                         if cancel_on_hold {
-                            common::arm_hold_cancel(&recorder, &tray_icon, &app);
+                            common::arm_hold_cancel(&recorder, &tray_icon, &app, toggle_mode);
                         }
                         if toggle_mode {
                             if recorder.is_recording() {
