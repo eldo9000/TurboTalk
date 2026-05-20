@@ -455,8 +455,8 @@
     class:arming={mode === 'arming'}
     class:recording={mode === 'recording'}
     class:transcribing={mode === 'transcribing'}
-    class:warn={mode === 'recording' && elapsedSecs >= WARN_SECS && elapsedSecs < ALERT_SECS}
-    class:alert={mode === 'recording' && elapsedSecs >= ALERT_SECS}
+    class:warn={mode === 'recording' && speechFrames * 0.05 >= WARN_SECS && speechFrames * 0.05 < ALERT_SECS}
+    class:alert={mode === 'recording' && speechFrames * 0.05 >= ALERT_SECS}
     class:peek={isPeeking}
     style:background={isPeeking ? 'rgba(16,16,16,0.12)' : 'rgba(16,16,16,0.87)'}
     style:backdrop-filter={isPeeking ? 'blur(1px) saturate(100%)' : 'blur(18px) saturate(160%)'}
@@ -478,9 +478,9 @@
       </span>
       {#if mode === 'recording' || (mode === 'transcribing' && elapsedSecs > 0)}
         <span class="text-[9px] tabular-nums select-none leading-tight"
-              style="color: {mode === 'recording' && elapsedSecs >= ALERT_SECS
+              style="color: {mode === 'recording' && speechFrames * 0.05 >= ALERT_SECS
                 ? 'rgba(239,100,68,0.85)'
-                : mode === 'recording' && elapsedSecs >= WARN_SECS
+                : mode === 'recording' && speechFrames * 0.05 >= WARN_SECS
                   ? 'rgba(251,191,36,0.75)'
                   : 'rgba(255,255,255,0.4)'};">
           {wordCount > 0 ? `~${wordCount}w · ` : ''}{fmtElapsed(elapsedSecs)}
