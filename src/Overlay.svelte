@@ -19,8 +19,8 @@
   let elapsedSecs     = $state(0);
   let elapsedTimer    = null;
 
-  const WARN_SECS  = 120; // 2 min — faster pulse
-  const ALERT_SECS = 240; // 4 min — glow pulse
+  const WARN_WORDS  = 100; // ~43s speech — faster pulse
+  const ALERT_WORDS = 300; // ~2min speech — aggressive glow pulse
 
   function fmtElapsed(s) {
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -321,8 +321,8 @@
     50%       { border-color: rgba(239, 68, 68, 1); }
   }
   @keyframes pulse-red-alert {
-    0%, 100% { border-color: rgba(251, 100, 36, 0.6); box-shadow: 0 0 0 0 rgba(239,68,68,0); }
-    50%       { border-color: rgba(239, 68, 68, 1);   box-shadow: 0 0 8px 2px rgba(239,68,68,0.35); }
+    0%, 100% { border-color: rgba(239, 68, 68, 0.5); box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+    50%       { border-color: rgba(239, 68, 68, 1);   box-shadow: 0 0 16px 5px rgba(239,68,68,0.55); }
   }
   @keyframes pulse-yellow {
     0%, 100% { border-color: rgba(251, 191, 36, 0.15); }
@@ -355,9 +355,9 @@
   .pill.recording.warn {
     animation: pulse-red-warn 4s ease-in-out infinite;
   }
-  /* Past ALERT_SECS: glow pulse, orange-red tint */
+  /* Past ALERT_WORDS: hard glow pulse, 1.5s cycle */
   .pill.recording.alert {
-    animation: pulse-red-alert 2s ease-in-out infinite;
+    animation: pulse-red-alert 1.5s ease-in-out infinite;
   }
   .pill.transcribing {
     animation: pulse-yellow 10s ease-in-out infinite;
@@ -455,8 +455,8 @@
     class:arming={mode === 'arming'}
     class:recording={mode === 'recording'}
     class:transcribing={mode === 'transcribing'}
-    class:warn={mode === 'recording' && speechFrames * 0.05 >= WARN_SECS && speechFrames * 0.05 < ALERT_SECS}
-    class:alert={mode === 'recording' && speechFrames * 0.05 >= ALERT_SECS}
+    class:warn={mode === 'recording' && wordCount >= WARN_WORDS && wordCount < ALERT_WORDS}
+    class:alert={mode === 'recording' && wordCount >= ALERT_WORDS}
     class:peek={isPeeking}
     style:background={isPeeking ? 'rgba(16,16,16,0.12)' : 'rgba(16,16,16,0.87)'}
     style:backdrop-filter={isPeeking ? 'blur(1px) saturate(100%)' : 'blur(18px) saturate(160%)'}
@@ -478,9 +478,9 @@
       </span>
       {#if mode === 'recording' || (mode === 'transcribing' && elapsedSecs > 0)}
         <span class="text-[9px] tabular-nums select-none leading-tight"
-              style="color: {mode === 'recording' && speechFrames * 0.05 >= ALERT_SECS
+              style="color: {mode === 'recording' && wordCount >= ALERT_WORDS
                 ? 'rgba(239,100,68,0.85)'
-                : mode === 'recording' && speechFrames * 0.05 >= WARN_SECS
+                : mode === 'recording' && wordCount >= WARN_WORDS
                   ? 'rgba(251,191,36,0.75)'
                   : 'rgba(255,255,255,0.4)'};">
           {wordCount > 0 ? `~${wordCount}w · ` : ''}{fmtElapsed(elapsedSecs)}
