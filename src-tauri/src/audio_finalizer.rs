@@ -333,11 +333,6 @@ impl FinalizerHandle {
 pub struct StreamingFinalizer {
     sender: Sender<WorkerMsg>,
     worker: Option<JoinHandle<()>>,
-    /// Receives mid-recording segments cut at silence boundaries or the
-    /// MAX cap. Unbounded — segment rate (~1 per 12–25 s) is too low to
-    /// need backpressure. Consumers should drain this concurrently with
-    /// recording and on `finish()` before joining results.
-    segment_rx: Receiver<SegmentEmit>,
 }
 
 impl StreamingFinalizer {
@@ -345,7 +340,16 @@ impl StreamingFinalizer {
     /// channel count from the cpal stream config — the resampler is
     /// configured against those. The worker becomes a no-op resampler
     /// when src_rate == 16 kHz.
-    pub fn start(src_rate: u32, src_channels: u16, normalize_peak: f32) -> Self {
+    /// Spawn the worker thread and return both the finalizer handle and the
+    /// segment receiver. The receiver yields `SegmentEmit` values as the
+    /// worker detects silence-boundary or MAX-cap cuts during recording.
+    /// Pass it to `SegmentTranscriber::start` before the recording begins.
+    /// The channel closes automatically when the worker exits after `finish()`.
+    pub fn start(
+        src_rate: u32,
+        src_channels: u16,
+        normalize_peak: f32,
+    ) -> (Self, Receiver<SegmentEmit>) {
         let (tx, rx) = bounded::<WorkerMsg>(CHANNEL_DEPTH);
         let (seg_tx, seg_rx) = unbounded::<SegmentEmit>();
         let worker = std::thread::Builder::new()
@@ -353,18 +357,7 @@ impl StreamingFinalizer {
             .spawn(move || run_worker(rx, src_rate, src_channels, normalize_peak, seg_tx))
             .expect("spawn streaming finalizer worker");
 
-        Self {
-            sender: tx,
-            worker: Some(worker),
-            segment_rx: seg_rx,
-        }
-    }
-
-    /// Borrow the segment receiver so callers can drain mid-recording
-    /// segments concurrently. Segments arrive at silence boundaries and
-    /// MAX-cap cuts; the final tail arrives in `FinalizeResult::trimmed`.
-    pub fn segment_receiver(&self) -> &Receiver<SegmentEmit> {
-        &self.segment_rx
+        (Self { sender: tx, worker: Some(worker) }, seg_rx)
     }
 
     /// Hand a chunk of native-rate samples to the worker. Non-blocking
@@ -995,7 +988,7 @@ mod tests {
             *s = ((i as f32 * 0.0001).sin()) * 0.001;
         }
 
-        let finalizer = StreamingFinalizer::start(SR, 1, 0.89);
+        let (finalizer, _seg_rx) = StreamingFinalizer::start(SR, 1, 0.89);
         // Ship in 4096-sample chunks to simulate ~85 ms callback periods.
         for chunk in input.chunks(4096) {
             finalizer
@@ -1187,7 +1180,7 @@ mod tests {
             stereo.push(0.0);
         }
 
-        let finalizer = StreamingFinalizer::start(SR, 2, 0.89);
+        let (finalizer, _seg_rx) = StreamingFinalizer::start(SR, 2, 0.89);
         for chunk in stereo.chunks(4096) {
             // 4096 interleaved stereo samples = 2048 mono frames.
             finalizer
