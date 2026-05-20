@@ -3,7 +3,7 @@
    * Toast — ephemeral notification message.
    *
    * Renders as an absolutely positioned card in the bottom-right corner.
-   * Animates in via the fadeIn keyframe defined in tokens.css (ghost/app.css).
+   * Animates in via the fadeIn keyframe defined in tokens.css.
    * The parent is responsible for showing/hiding it (bind a boolean or null).
    *
    * Props:
