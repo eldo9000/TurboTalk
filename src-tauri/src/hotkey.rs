@@ -153,11 +153,7 @@ mod common {
     /// the recorder is still Recording or Transcribing, fire `trigger_cancel`.
     /// Also arms `SUPPRESS_PTT_UP_COUNT` so the upcoming key-up's `ptt_up`
     /// no-ops instead of cascading into `CANCEL_PENDING`.
-    pub(super) fn arm_hold_cancel(
-        recorder: &Arc<Recorder>,
-        tray_icon: &TrayIcon,
-        app: &AppHandle,
-    ) {
+    pub(super) fn arm_hold_cancel(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
         let s = recorder.state();
         if !matches!(
             s,
@@ -326,6 +322,8 @@ mod common {
             // tile only fills (red border, canvas, word pills) once we're
             // actually capturing.
             if !crate::transcribe::is_ready() {
+                crate::transcribe::prewarm(crate::settings::load(), app.clone());
+
                 // Pin the overlay to the cursor's monitor up front so the
                 // arming tile never flashes on the wrong display.
                 crate::reposition_overlay_to_cursor_monitor(&app);
@@ -338,8 +336,7 @@ mod common {
                 //   - CANCEL_PENDING (user released key during the wait)
                 //   - PREWARM_FAILED (background thread reported failure)
                 //   - device_lost (mic disappeared mid-wait)
-                let deadline = std::time::Instant::now()
-                    + std::time::Duration::from_secs(30);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
                 let mut ready = false;
                 let mut cancelled = false;
                 loop {
@@ -725,10 +722,22 @@ mod imp {
                         let flags = event.get_flags();
 
                         // Read current config (RwLock read — nanoseconds, uncontended)
-                        let (target_keycode, target_flag, toggle_mode, cancel_on_esc, cancel_on_hold) = {
+                        let (
+                            target_keycode,
+                            target_flag,
+                            toggle_mode,
+                            cancel_on_esc,
+                            cancel_on_hold,
+                        ) = {
                             let hk = hk_cb.read();
                             let (kc, f) = key_for_name(&hk.key);
-                            (kc, f, hk.mode == "toggle", hk.cancel_on_esc, hk.cancel_on_hold)
+                            (
+                                kc,
+                                f,
+                                hk.mode == "toggle",
+                                hk.cancel_on_esc,
+                                hk.cancel_on_hold,
+                            )
                         };
 
                         // Escape → cancel any in-flight recording. Read-only on
@@ -767,11 +776,7 @@ mod imp {
                                 // → timer no-ops, normal PTT semantics apply.
                                 if is_key_down {
                                     if cancel_on_hold {
-                                        common::arm_hold_cancel(
-                                            &recorder_cb,
-                                            &tray_cb,
-                                            &app_cb,
-                                        );
+                                        common::arm_hold_cancel(&recorder_cb, &tray_cb, &app_cb);
                                     }
                                 } else {
                                     common::disarm_hold_cancel();

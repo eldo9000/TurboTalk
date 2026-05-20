@@ -41,11 +41,20 @@ pub struct Config {
     /// When false, the overlay window is hidden — the tray icon still reflects state.
     #[serde(default = "default_true")]
     pub show_overlay: bool,
+    /// Where on the screen the overlay pill anchors: "bottom" (default) or "top".
+    /// Anything else is treated as "bottom" by the positioning code.
+    #[serde(default = "default_overlay_position")]
+    pub overlay_position: String,
     /// Whether the recording overlay shows a transcript-size indicator (a visual
     /// estimate of how long and how much talking the user has been doing — driven
     /// by VAD voiced-frame counts, not real transcription). Defaults off.
     #[serde(default)]
     pub transcript_size_indicator: bool,
+    /// Whether to show a small red dot near the cursor during recording.
+    /// The dot follows the mouse pointer and appears bottom-right of the hotspot.
+    /// Defaults off.
+    #[serde(default)]
+    pub cursor_dot_indicator: bool,
     /// Play a sound cue when recording starts.
     #[serde(default)]
     pub sound_on_start: bool,
@@ -70,6 +79,9 @@ fn default_theme() -> String {
 }
 fn default_history_auto_delete() -> String {
     "10d".into()
+}
+fn default_overlay_position() -> String {
+    "bottom".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
@@ -162,11 +174,10 @@ fn default_idle_timeout_secs() -> u32 {
 
 impl Default for WhisperConfig {
     fn default() -> Self {
-        let model = default_model_path().to_string_lossy().into_owned();
         Self {
             bin: "auto".into(),
-            models: vec![model.clone()],
-            model,
+            models: vec![],
+            model: String::new(),
         }
     }
 }
@@ -234,7 +245,9 @@ impl Default for Config {
             history_auto_delete: default_history_auto_delete(),
             save_history: true,
             show_overlay: true,
+            overlay_position: default_overlay_position(),
             transcript_size_indicator: false,
+            cursor_dot_indicator: false,
             sound_on_start: true,
             sound_on_finish: false,
             sound_on_cancel: true,
@@ -271,7 +284,6 @@ pub(crate) fn config_path() -> PathBuf {
     p.push(".config/librewin/turbotalk/config.toml");
     p
 }
-
 
 pub(crate) fn history_path() -> PathBuf {
     let mut p = dirs::home_dir().unwrap_or_default();
@@ -374,12 +386,6 @@ pub(crate) fn save_history_at(
     }
     std::fs::write(path, serde_json::to_string(trimmed)?)?;
     Ok(())
-}
-
-fn default_model_path() -> PathBuf {
-    let mut p = dirs::home_dir().unwrap_or_default();
-    p.push(".config/librewin/turbotalk/models/ggml-large-v3-turbo.bin");
-    p
 }
 
 pub fn load() -> Config {
@@ -574,6 +580,16 @@ mod tests {
         assert!(serde_json::from_str::<CleanupMode>("\"Off\"").is_err());
         assert!(serde_json::from_str::<CleanupMode>("\"Regex\"").is_err());
         assert!(serde_json::from_str::<CleanupMode>("\"Chaperone\"").is_err());
+    }
+
+    #[test]
+    fn default_config_does_not_select_missing_model() {
+        let cfg = Config::default();
+        assert_eq!(cfg.whisper.model, "");
+        assert!(
+            cfg.whisper.models.is_empty(),
+            "fresh installs must not show a placeholder path as an installed model"
+        );
     }
 
     // ----------------------------------------------------------------------

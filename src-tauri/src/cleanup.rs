@@ -159,14 +159,32 @@ fn strip_non_speech_annotations(text: &str) -> String {
     // Whisper outputs these annotation tokens for non-speech sounds.
     // Listed in lowercase; matched case-insensitively against the input.
     const ANNOTATIONS: &[&str] = &[
-        "(sigh)", "(sighs)", "(sighing)",
-        "(exhale)", "(exhales)", "(exhaling)",
-        "(inhale)", "(inhales)", "(inhaling)",
-        "(breath)", "(breathes)", "(breathing)",
-        "(cough)", "(coughs)", "(coughing)",
-        "(laugh)", "(laughs)", "(laughing)",
-        "(chuckle)", "(chuckles)", "(chuckling)",
-        "[blank_audio]", "[noise]", "[music]", "[applause]", "[laughter]",
+        "(sigh)",
+        "(sighs)",
+        "(sighing)",
+        "(exhale)",
+        "(exhales)",
+        "(exhaling)",
+        "(inhale)",
+        "(inhales)",
+        "(inhaling)",
+        "(breath)",
+        "(breathes)",
+        "(breathing)",
+        "(cough)",
+        "(coughs)",
+        "(coughing)",
+        "(laugh)",
+        "(laughs)",
+        "(laughing)",
+        "(chuckle)",
+        "(chuckles)",
+        "(chuckling)",
+        "[blank_audio]",
+        "[noise]",
+        "[music]",
+        "[applause]",
+        "[laughter]",
     ];
 
     let lower = text.to_lowercase();
@@ -400,8 +418,14 @@ mod tests {
     fn non_speech_annotation_stripping() {
         assert_eq!(strip_non_speech_annotations("(sigh)"), "");
         assert_eq!(strip_non_speech_annotations("(Sigh)"), "");
-        assert_eq!(strip_non_speech_annotations("(sigh) hello world"), "hello world");
-        assert_eq!(strip_non_speech_annotations("hello (exhales) world"), "hello world");
+        assert_eq!(
+            strip_non_speech_annotations("(sigh) hello world"),
+            "hello world"
+        );
+        assert_eq!(
+            strip_non_speech_annotations("hello (exhales) world"),
+            "hello world"
+        );
         assert_eq!(strip_non_speech_annotations("[BLANK_AUDIO]"), "");
         assert_eq!(strip_non_speech_annotations("[blank_audio]"), "");
         assert_eq!(strip_non_speech_annotations("hello world"), "hello world");
