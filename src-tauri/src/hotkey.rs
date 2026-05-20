@@ -129,6 +129,15 @@ mod common {
     /// critical section is a single load/store and never blocks audio work.
     static CURRENT_JOB_ID: parking_lot::Mutex<Option<u64>> = parking_lot::Mutex::new(None);
 
+    /// Segment transcriber started in `ptt_down` immediately after recording
+    /// begins. Processes mid-recording segment cuts concurrently while the user
+    /// is still speaking so that by key-release only the tail remains.
+    /// Taken and used in `ptt_up`; taken and dropped (joining the worker) in
+    /// cancel paths so the thread is never leaked.
+    static CURRENT_SEG_TRANSCRIBER: parking_lot::Mutex<
+        Option<crate::transcribe::SegmentTranscriber>,
+    > = parking_lot::Mutex::new(None);
+
     /// Hold-to-cancel: how long the trigger key must be held during a busy
     /// recorder (Recording or Transcribing) before the gesture fires. Longer
     /// than typical tap-to-toggle latency so a normal toggle stop never trips
@@ -211,6 +220,10 @@ mod common {
         let app = app.clone();
         std::thread::spawn(move || {
             rec.cancel();
+            // Drop the segment transcriber (joins its worker). rec.cancel()
+            // closes the streaming finalizer channel, so the seg worker will
+            // drain any buffered items and exit promptly.
+            let _ = CURRENT_SEG_TRANSCRIBER.lock().take();
             let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
             emit_critical(&app, "recording-cancelled", ());
             // If cancel killed the whisper-server (Transcribing → Ready path),
@@ -391,6 +404,15 @@ mod common {
                 return;
             }
 
+            // Start the segment transcriber now so concurrent mid-recording
+            // segment transcriptions can run while the user is still speaking.
+            // The receiver was installed in AudioCapture during start(); taking
+            // it here transfers ownership to SegmentTranscriber.
+            if let Some(seg_rx) = rec.take_segment_receiver() {
+                *CURRENT_SEG_TRANSCRIBER.lock() =
+                    Some(crate::transcribe::SegmentTranscriber::start(seg_rx));
+            }
+
             // Allocate this job's id.
             let job_id = next_job_id();
             *CURRENT_JOB_ID.lock() = Some(job_id);
@@ -433,6 +455,7 @@ mod common {
             if try_consume_ptt_up_suppression() {
                 let _ = CURRENT_JOB_ID.lock().take();
                 let _ = FOCUS_AT_START.lock().take();
+                let _ = CURRENT_SEG_TRANSCRIBER.lock().take();
                 return;
             }
             // Recover the job id allocated when this recording started. If the
@@ -444,6 +467,10 @@ mod common {
             // "did the macOS query succeed". We only compare-and-emit later if
             // we actually have a job and reach the paste stage.
             let focus_at_start: Option<String> = FOCUS_AT_START.lock().take().flatten();
+            // Recover the segment transcriber started at key-down. Used in the
+            // Wav arm to assemble concurrent segment results with the tail.
+            // Dropped automatically (joining its worker) in Discard / Err arms.
+            let seg_transcriber_opt = CURRENT_SEG_TRANSCRIBER.lock().take();
 
             // Tray-state policy: Recording icon only during literal capture; the
             // moment we enter FinalizingAudio (inside `rec.stop()`) the tray flips
@@ -480,8 +507,42 @@ mod common {
                         emit_stage(&app, job_id, "transcribing");
                     }
 
-                    // Stage 1: raw whisper transcription (no cleanup).
-                    let transcribe_result = crate::transcribe::run_raw(&path);
+                    // Stage 1: transcribe the tail WAV (audio after the last
+                    // segment cut, or the whole recording if no segments were
+                    // emitted — identical to pre-TASK-54 batch behavior).
+                    let tail_result = crate::transcribe::run_raw(&path);
+
+                    // Stage 2: wait for any in-flight concurrent segment
+                    // transcriptions (started at key-down) to finish, then
+                    // assemble them in emission order. Segments precede the
+                    // tail chronologically.
+                    let seg_text = seg_transcriber_opt
+                        .map(|st| st.join_segments())
+                        .unwrap_or_default();
+
+                    let transcribe_result: anyhow::Result<String> = match tail_result {
+                        Ok(tail) => {
+                            let parts: Vec<&str> = [seg_text.as_str(), tail.as_str()]
+                                .into_iter()
+                                .filter(|s| !s.is_empty())
+                                .collect();
+                            Ok(parts.join(" "))
+                        }
+                        Err(e) => {
+                            if !seg_text.is_empty() {
+                                tracing::warn!(
+                                    "[transcribe job_id={:?}] tail failed, \
+                                     using {} chars from segments: {}",
+                                    job_id_opt,
+                                    seg_text.chars().count(),
+                                    e
+                                );
+                                Ok(seg_text)
+                            } else {
+                                Err(e)
+                            }
+                        }
+                    };
 
                     // Transcribing → Cleaning (always — even on whisper error,
                     // so the lifecycle reaches `finish` through legal transitions).
