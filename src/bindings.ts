@@ -217,11 +217,15 @@ export type Config = {
 	 */
 	overlay_position?: string,
 	/**
-	 *  Whether the recording overlay shows a transcript-size indicator (a visual
-	 *  estimate of how long and how much talking the user has been doing — driven
-	 *  by VAD voiced-frame counts, not real transcription). Defaults off.
+	 *  Whether the recording overlay shows a length counter to the right of the
+	 *  pill — a VAD-derived estimate of how much has been said. Defaults off.
 	 */
 	transcript_size_indicator?: boolean,
+	/**
+	 *  Unit for the length counter: "lines" (default, ~11 words/line) or
+	 *  "paragraphs" (~80 words/paragraph).
+	 */
+	length_indicator_unit?: string,
 	/**
 	 *  Whether to show a small red dot near the cursor during recording.
 	 *  The dot follows the mouse pointer and appears bottom-right of the hotspot.
