@@ -36,16 +36,26 @@
   let resizeRaf          = null;
   let lastWindowHeight   = 0;
 
+  // Stale-entry fix: track whether user has already clicked "Open System
+  // Settings" for a given step. Once set, show the fix-stale-entry UI if
+  // the step is still blocked after they return.
+  let imOpenedSettings   = $state(false);
+  let axOpenedSettings   = $state(false);
+  let fixImInFlight      = $state(false);
+  let fixAxInFlight      = $state(false);
+  let fixImError         = $state('');
+  let fixAxError         = $state('');
+
   const RECOMMENDED = {
-    id: 'ggml-large-v3-turbo',
-    label: 'Large v3 Turbo',
-    size: '1.6 GB',
-    description: 'Best accuracy for daily dictation · multilingual · fast',
+    id: 'ggml-large-v3-turbo-q5_0',
+    label: 'Large v3 Turbo (q5_0)',
+    size: '574 MB',
+    description: 'Recommended starter · fast · lower RAM',
   };
 
   const ALTERNATES = [
-    { id: 'ggml-large-v3-turbo-q5_0', label: 'Large v3 Turbo (q5_0)',
-      size: '574 MB', description: 'Quantized · lower accuracy, lower RAM' },
+    { id: 'ggml-large-v3-turbo', label: 'Large v3 Turbo',
+      size: '1.6 GB', description: 'Higher accuracy · multilingual · more RAM' },
     { id: 'ggml-large-v3', label: 'Large v3',
       size: '3.1 GB', description: 'Maximum accuracy · slowest' },
   ];
@@ -117,6 +127,10 @@
     downloadError;
     restartArmed;
     unsupportedPlatform;
+    imOpenedSettings;
+    axOpenedSettings;
+    fixImError;
+    fixAxError;
     scheduleResize();
   });
 
@@ -167,6 +181,7 @@
   });
 
   async function openAccessibility() {
+    axOpenedSettings = true;
     // Calls AXIsProcessTrustedWithOptions(prompt: true). Side-effects:
     //   1. macOS auto-adds Turbo Talk to the Accessibility list (off).
     //   2. macOS shows its native "would like to use Accessibility" prompt
@@ -185,6 +200,7 @@
   }
 
   async function openInputMonitoring() {
+    imOpenedSettings = true;
     inputPromptInFlight = true;
     try {
       const status = await commands.requestInputMonitoringPermission();
@@ -275,6 +291,39 @@
     }
   }
 
+  // Reset a stale TCC entry so the user can re-grant from a clean slate.
+  // Called when the user opened System Settings but the step is still blocked,
+  // indicating a stale entry from a previous install is in the way.
+  async function fixStaleTccIm() {
+    fixImInFlight = true;
+    fixImError = '';
+    try {
+      await commands.resetTccEntry('input_monitoring');
+      await openInputMonitoring();
+    } catch (e) {
+      fixImError = typeof e === 'string'
+        ? e
+        : 'Reset failed. Try manually removing Turbo Talk from Input Monitoring in System Settings, then click Open System Settings above.';
+    } finally {
+      fixImInFlight = false;
+    }
+  }
+
+  async function fixStaleTccAx() {
+    fixAxInFlight = true;
+    fixAxError = '';
+    try {
+      await commands.resetTccEntry('accessibility');
+      await openAccessibility();
+    } catch (e) {
+      fixAxError = typeof e === 'string'
+        ? e
+        : 'Reset failed. Try manually removing Turbo Talk from Accessibility in System Settings, then click Open System Settings above.';
+    } finally {
+      fixAxInFlight = false;
+    }
+  }
+
   let stepStates = $derived.by(() => {
     if (!readiness) return { accessibility: 'active', input_monitoring: 'pending', microphone: 'pending', model: 'pending', launch: 'pending' };
     const a = readiness.accessibility === 'granted';
@@ -305,6 +354,14 @@
     if (state === 'done')   return 'bg-green-600 text-white';
     if (state === 'active') return 'bg-[var(--accent)] text-white';
     return 'bg-[var(--border,#2a2a2a)] text-[var(--text-secondary)]';
+  }
+
+  // Connector line between two adjacent steps. Green when the upper step is
+  // done, muted otherwise. `w-1` (4 px) gives a clearly visible thick line.
+  function connectorClass(upperStepDone) {
+    return upperStepDone
+      ? 'bg-green-600'
+      : 'bg-[var(--border,#2a2a2a)]';
   }
 </script>
 
@@ -337,203 +394,254 @@
           </button>
         </div>
       {:else}
-      <!-- Step 1: Input Monitoring -->
-      <div class="flex gap-3 {stepStates.input_monitoring === 'done' ? 'p-3' : 'p-3.5'} rounded-lg border {stepClass(stepStates.input_monitoring)}">
-        <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.input_monitoring)}">
-          {stepStates.input_monitoring === 'done' ? '✓' : '1'}
-        </div>
-        <div class="flex flex-col gap-2 min-w-0 flex-1">
-          <div class="flex flex-col gap-0.5">
-            <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Allow Input Monitoring</h2>
-            {#if stepStates.input_monitoring !== 'done'}
-              <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-                This lets Turbo Talk receive the push-to-talk key while another app is focused.
-                Restart once after turning it on.
-              </p>
-            {/if}
+      <!-- Steps wrapped in a flex-col with no gap; connector divs provide spacing
+           and draw the progress line between badge circles. Badge center is at
+           12 px (p-3 padding) + 12 px (half of w-6) = 24 px from the card left
+           edge. Connectors use ml-[23px] w-1 so the 4 px line is centered at
+           23 + 2 = 25 px — 1 px off, invisible at this scale. -->
+      <div class="flex flex-col">
+
+        <!-- Step 1: Input Monitoring -->
+        <div class="flex gap-3 {stepStates.input_monitoring === 'done' ? 'p-3' : 'p-3.5'} rounded-lg border {stepClass(stepStates.input_monitoring)}">
+          <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.input_monitoring)}">
+            {stepStates.input_monitoring === 'done' ? '✓' : '1'}
           </div>
-          {#if stepStates.input_monitoring === 'active'}
-            <div class="flex gap-2 flex-wrap">
-              <button onclick={openInputMonitoring}
-                disabled={inputPromptInFlight}
-                class="px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 transition-opacity">
-                {inputPromptInFlight ? 'Waiting for macOS…' : 'Open System Settings'}
-              </button>
-              {#if restartArmed}
-                <button onclick={restart}
-                  class="px-3 py-1.5 rounded-md border border-[var(--border,#3a3a3a)] text-[12px] hover:bg-white/5 transition-colors">
-                  Restart Turbo Talk
-                </button>
+          <div class="flex flex-col gap-2 min-w-0 flex-1">
+            <div class="flex flex-col gap-0.5">
+              <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Allow Input Monitoring</h2>
+              {#if stepStates.input_monitoring !== 'done'}
+                <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                  This lets Turbo Talk receive the push-to-talk key while another app is focused.
+                  Restart once after turning it on.
+                </p>
               {/if}
             </div>
-            <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-              Toggle Turbo Talk on under Privacy &amp; Security → Input Monitoring.
-              If it doesn't appear in the list, click <strong>+</strong> to add it manually.
-            </p>
-          {/if}
-        </div>
-      </div>
-
-      <!-- Step 2: Microphone -->
-      <div class="flex gap-3 {stepStates.microphone === 'done' ? 'p-3' : 'p-3.5'} rounded-lg border {stepClass(stepStates.microphone)}">
-        <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.microphone)}">
-          {stepStates.microphone === 'done' ? '✓' : '2'}
-        </div>
-        <div class="flex flex-col gap-2 min-w-0 flex-1">
-          <div class="flex flex-col gap-0.5">
-            <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Allow Microphone</h2>
-            {#if stepStates.microphone !== 'done'}
-              <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-                So Turbo Talk can record your voice while you hold the hotkey. Audio never leaves your machine.
-              </p>
-            {/if}
-          </div>
-          {#if stepStates.microphone === 'active'}
-            {#if readiness.microphone === 'not_determined'}
-              <button onclick={grantMic} disabled={micPromptInFlight}
-                class="self-start px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 disabled:opacity-50 transition-opacity">
-                {micPromptInFlight ? 'Waiting for prompt…' : 'Grant Microphone Access'}
-              </button>
-            {:else}
-              <button onclick={openMicSettings}
-                class="self-start px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 transition-opacity">
-                Open System Settings
-              </button>
-              <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-                Toggle Turbo Talk on under Privacy &amp; Security → Microphone.
-              </p>
-            {/if}
-          {/if}
-        </div>
-      </div>
-
-      <!-- Step 3: Accessibility (restart required, surfaced after native prompts) -->
-      <div class="flex gap-3 {stepStates.accessibility === 'done' ? 'p-3' : 'p-3.5'} rounded-lg border {stepClass(stepStates.accessibility)}">
-        <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.accessibility)}">
-          {stepStates.accessibility === 'done' ? '✓' : '3'}
-        </div>
-        <div class="flex flex-col gap-2 min-w-0 flex-1">
-          <div class="flex flex-col gap-0.5">
-            <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Allow Accessibility</h2>
-            {#if stepStates.accessibility !== 'done'}
-              <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-                Turbo Talk needs Accessibility permission to read your push-to-talk hotkey globally.
-                Granting this requires restarting the app once.
-              </p>
-            {/if}
-          </div>
-          {#if stepStates.accessibility === 'active'}
-            <div class="flex gap-2 flex-wrap">
-              <button onclick={openAccessibility}
-                class="px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 transition-opacity">
-                Open System Settings
-              </button>
-              {#if restartArmed}
-                <button onclick={restart}
-                  class="px-3 py-1.5 rounded-md border border-[var(--border,#3a3a3a)] text-[12px] hover:bg-white/5 transition-colors">
-                  Restart Turbo Talk
+            {#if stepStates.input_monitoring === 'active'}
+              <div class="flex gap-2 flex-wrap">
+                <button onclick={openInputMonitoring}
+                  disabled={inputPromptInFlight}
+                  class="px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 transition-opacity">
+                  {inputPromptInFlight ? 'Waiting for macOS…' : 'Open System Settings'}
                 </button>
-              {/if}
-            </div>
-            {#if restartArmed}
-              <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-                Toggle Turbo Talk on under Privacy &amp; Security → Accessibility, then click Restart.
-              </p>
-            {/if}
-          {/if}
-        </div>
-      </div>
-
-      <!-- Step 4: Model -->
-      <div class="flex gap-3 p-3.5 rounded-lg border {stepClass(stepStates.model)}">
-        <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.model)}">
-          {stepStates.model === 'done' ? '✓' : '4'}
-        </div>
-        <div class="flex flex-col gap-2 min-w-0 flex-1">
-          <div class="flex flex-col gap-0.5">
-            <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Download a transcription model</h2>
-            <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-              Whisper runs locally on your Mac. Pick a model — the recommended one fits most users.
-            </p>
-          </div>
-          {#if stepStates.model === 'active' || stepStates.model === 'done'}
-            {#if downloadingModel}
-              <div class="flex flex-col gap-1.5">
-                <div class="flex items-center justify-between text-[11px]">
-                  <span class="truncate text-[var(--text-secondary)]">{downloadingModel}</span>
-                  <span class="text-[var(--text-primary)]">{downloadPct}%</span>
-                </div>
-                <div class="h-1.5 rounded-full bg-[var(--border,#2a2a2a)] overflow-hidden">
-                  <div class="h-full bg-[var(--accent)] transition-all" style="width: {downloadPct}%"></div>
-                </div>
+                {#if restartArmed}
+                  <button onclick={restart}
+                    class="px-3 py-1.5 rounded-md border border-[var(--border,#3a3a3a)] text-[12px] hover:bg-white/5 transition-colors">
+                    Restart Turbo Talk
+                  </button>
+                {/if}
               </div>
-            {:else}
-              {#each ALL_MODELS as model, idx (model.id)}
-                {@const path = installedPath(model.id)}
-                {@const isSelected = path && path === cfgModel}
-                <div class="flex items-start justify-between gap-2 p-2 rounded-md border border-[var(--border,#2a2a2a)]">
-                  <div class="flex flex-col gap-0.5 min-w-0">
-                    <div class="flex items-center gap-2 min-w-0">
-                      <span class="text-[12px] font-medium text-[var(--text-primary)] truncate">{model.label}</span>
-                      {#if idx === 0}
-                        <span class="shrink-0 text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-400 text-black">Recommended</span>
+              <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                Toggle Turbo Talk on under Privacy &amp; Security → Input Monitoring.
+                If it doesn't appear in the list, click <strong>+</strong> to add it manually.
+              </p>
+              {#if imOpenedSettings}
+                <div class="flex flex-col gap-1.5 p-2.5 rounded-md border border-orange-500/30 bg-orange-500/8">
+                  <p class="text-[11px] text-orange-200/90 leading-snug font-medium">Already in the list but still not working?</p>
+                  <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                    A stale entry from a previous install may be blocking it. This removes the old entry and re-registers Turbo Talk automatically.
+                  </p>
+                  <button onclick={fixStaleTccIm} disabled={fixImInFlight || inputPromptInFlight}
+                    class="self-start px-2.5 py-1 rounded-md border border-orange-500/40 text-[11px] font-medium text-orange-100/90 hover:bg-orange-500/15 disabled:opacity-50 transition-colors">
+                    {fixImInFlight ? 'Resetting…' : 'Fix stale entry'}
+                  </button>
+                  {#if fixImError}
+                    <p class="text-[11px] text-red-400 leading-snug">{fixImError}</p>
+                  {/if}
+                </div>
+              {/if}
+            {/if}
+          </div>
+        </div>
+
+        <!-- Connector 1 → 2 -->
+        <div class="h-3.5 ml-[23px] w-1 rounded-full {connectorClass(stepStates.input_monitoring === 'done')}"></div>
+
+        <!-- Step 2: Microphone -->
+        <div class="flex gap-3 {stepStates.microphone === 'done' ? 'p-3' : 'p-3.5'} rounded-lg border {stepClass(stepStates.microphone)}">
+          <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.microphone)}">
+            {stepStates.microphone === 'done' ? '✓' : '2'}
+          </div>
+          <div class="flex flex-col gap-2 min-w-0 flex-1">
+            <div class="flex flex-col gap-0.5">
+              <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Allow Microphone</h2>
+              {#if stepStates.microphone !== 'done'}
+                <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                  So Turbo Talk can record your voice while you hold the hotkey. Audio never leaves your machine.
+                </p>
+              {/if}
+            </div>
+            {#if stepStates.microphone === 'active'}
+              {#if readiness.microphone === 'not_determined'}
+                <button onclick={grantMic} disabled={micPromptInFlight}
+                  class="self-start px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 disabled:opacity-50 transition-opacity">
+                  {micPromptInFlight ? 'Waiting for prompt…' : 'Grant Microphone Access'}
+                </button>
+              {:else}
+                <button onclick={openMicSettings}
+                  class="self-start px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 transition-opacity">
+                  Open System Settings
+                </button>
+                <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                  Toggle Turbo Talk on under Privacy &amp; Security → Microphone.
+                </p>
+              {/if}
+            {/if}
+          </div>
+        </div>
+
+        <!-- Connector 2 → 3 -->
+        <div class="h-3.5 ml-[23px] w-1 rounded-full {connectorClass(stepStates.microphone === 'done')}"></div>
+
+        <!-- Step 3: Accessibility (restart required, surfaced after native prompts) -->
+        <div class="flex gap-3 {stepStates.accessibility === 'done' ? 'p-3' : 'p-3.5'} rounded-lg border {stepClass(stepStates.accessibility)}">
+          <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.accessibility)}">
+            {stepStates.accessibility === 'done' ? '✓' : '3'}
+          </div>
+          <div class="flex flex-col gap-2 min-w-0 flex-1">
+            <div class="flex flex-col gap-0.5">
+              <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Allow Accessibility</h2>
+              {#if stepStates.accessibility !== 'done'}
+                <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                  Turbo Talk needs Accessibility permission to read your push-to-talk hotkey globally.
+                  Granting this requires restarting the app once.
+                </p>
+              {/if}
+            </div>
+            {#if stepStates.accessibility === 'active'}
+              <div class="flex gap-2 flex-wrap">
+                <button onclick={openAccessibility}
+                  class="px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 transition-opacity">
+                  Open System Settings
+                </button>
+                {#if restartArmed}
+                  <button onclick={restart}
+                    class="px-3 py-1.5 rounded-md border border-[var(--border,#3a3a3a)] text-[12px] hover:bg-white/5 transition-colors">
+                    Restart Turbo Talk
+                  </button>
+                {/if}
+              </div>
+              {#if restartArmed}
+                <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                  Toggle Turbo Talk on under Privacy &amp; Security → Accessibility, then click Restart.
+                </p>
+              {/if}
+              {#if axOpenedSettings}
+                <div class="flex flex-col gap-1.5 p-2.5 rounded-md border border-orange-500/30 bg-orange-500/8">
+                  <p class="text-[11px] text-orange-200/90 leading-snug font-medium">Already in the list but still not working?</p>
+                  <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                    A stale entry from a previous install may be blocking it. This removes the old entry and re-registers Turbo Talk automatically.
+                  </p>
+                  <button onclick={fixStaleTccAx} disabled={fixAxInFlight}
+                    class="self-start px-2.5 py-1 rounded-md border border-orange-500/40 text-[11px] font-medium text-orange-100/90 hover:bg-orange-500/15 disabled:opacity-50 transition-colors">
+                    {fixAxInFlight ? 'Resetting…' : 'Fix stale entry'}
+                  </button>
+                  {#if fixAxError}
+                    <p class="text-[11px] text-red-400 leading-snug">{fixAxError}</p>
+                  {/if}
+                </div>
+              {/if}
+            {/if}
+          </div>
+        </div>
+
+        <!-- Connector 3 → 4 -->
+        <div class="h-3.5 ml-[23px] w-1 rounded-full {connectorClass(stepStates.accessibility === 'done')}"></div>
+
+        <!-- Step 4: Model -->
+        <div class="flex gap-3 p-3.5 rounded-lg border {stepClass(stepStates.model)}">
+          <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.model)}">
+            {stepStates.model === 'done' ? '✓' : '4'}
+          </div>
+          <div class="flex flex-col gap-2 min-w-0 flex-1">
+            <div class="flex flex-col gap-0.5">
+              <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Download a transcription model</h2>
+              <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                Whisper runs locally on your Mac. Pick a model — the recommended one fits most users.
+              </p>
+            </div>
+            {#if stepStates.model === 'active' || stepStates.model === 'done'}
+              {#if downloadingModel}
+                <div class="flex flex-col gap-1.5">
+                  <div class="flex items-center justify-between text-[11px]">
+                    <span class="truncate text-[var(--text-secondary)]">{downloadingModel}</span>
+                    <span class="text-[var(--text-primary)]">{downloadPct}%</span>
+                  </div>
+                  <div class="h-1.5 rounded-full bg-[var(--border,#2a2a2a)] overflow-hidden">
+                    <div class="h-full bg-[var(--accent)] transition-all" style="width: {downloadPct}%"></div>
+                  </div>
+                </div>
+              {:else}
+                {#each ALL_MODELS as model, idx (model.id)}
+                  {@const path = installedPath(model.id)}
+                  {@const isSelected = path && path === cfgModel}
+                  <div class="flex items-start justify-between gap-2 p-2 rounded-md border border-[var(--border,#2a2a2a)]">
+                    <div class="flex flex-col gap-0.5 min-w-0">
+                      <div class="flex items-center gap-2 min-w-0">
+                        <span class="text-[12px] font-medium text-[var(--text-primary)] truncate">{model.label}</span>
+                        {#if idx === 0}
+                          <span class="shrink-0 text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-400 text-black">Recommended</span>
+                        {/if}
+                      </div>
+                      <span class="text-[11px] text-[var(--text-secondary)] leading-snug">{model.description}</span>
+                    </div>
+                    <div class="shrink-0 flex items-center gap-2">
+                      <span class="text-[11px] font-mono text-[var(--text-secondary)]">{model.size}</span>
+                      {#if path}
+                        <button onclick={() => selectModel(path)}
+                          disabled={isSelected}
+                          class="px-2 py-1 rounded-md border border-[var(--border,#3a3a3a)] text-[11px] font-medium text-[var(--text-primary)] hover:bg-white/5 disabled:opacity-60 disabled:hover:bg-transparent transition-colors">
+                          {isSelected ? 'Selected' : 'Select'}
+                        </button>
+                      {:else}
+                        <button onclick={() => downloadModel(model)}
+                          class="px-2 py-1 rounded-md bg-[var(--accent)] text-white text-[11px] font-medium hover:opacity-90 transition-opacity">
+                          Download
+                        </button>
                       {/if}
                     </div>
-                    <span class="text-[11px] text-[var(--text-secondary)] leading-snug">{model.description}</span>
                   </div>
-                  <div class="shrink-0 flex items-center gap-2">
-                    <span class="text-[11px] font-mono text-[var(--text-secondary)]">{model.size}</span>
-                    {#if path}
-                      <button onclick={() => selectModel(path)}
-                        disabled={isSelected}
-                        class="px-2 py-1 rounded-md border border-[var(--border,#3a3a3a)] text-[11px] font-medium text-[var(--text-primary)] hover:bg-white/5 disabled:opacity-60 disabled:hover:bg-transparent transition-colors">
-                        {isSelected ? 'Selected' : 'Select'}
-                      </button>
-                    {:else}
-                      <button onclick={() => downloadModel(model)}
-                        class="px-2 py-1 rounded-md bg-[var(--accent)] text-white text-[11px] font-medium hover:opacity-90 transition-opacity">
-                        Download
-                      </button>
-                    {/if}
-                  </div>
-                </div>
-              {/each}
-              {#if downloadError}
-                <p class="text-[11px] text-red-400 leading-snug">{downloadError}</p>
+                {/each}
+                {#if downloadError}
+                  <p class="text-[11px] text-red-400 leading-snug">{downloadError}</p>
+                {/if}
               {/if}
             {/if}
-          {/if}
-        </div>
-      </div>
-
-      <!-- Step 5: Launch at Login -->
-      <div class="flex gap-3 p-3.5 rounded-lg border {stepClass(stepStates.launch)}">
-        <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.launch)}">
-          {stepStates.launch === 'done' ? '✓' : '5'}
-        </div>
-        <div class="flex flex-col gap-2 min-w-0 flex-1">
-          <div class="flex flex-col gap-0.5">
-            <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Launch at Login</h2>
-            <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-              Turbo Talk starts quietly when you sign in, so the menu bar trigger is ready.
-            </p>
           </div>
-          {#if stepStates.launch === 'active'}
-            <div class="flex gap-2">
-              <button onclick={enableLaunchAtLogin} disabled={launchPromptInFlight}
-                class="px-3 py-1.5 rounded-md bg-green-600 text-white text-[12px] font-medium hover:bg-green-500 disabled:opacity-50 transition-colors">
-                {launchPromptInFlight ? 'Enabling…' : 'Enable Automatic Login'}
-              </button>
-              <button onclick={() => { launchSkipped = true; stopPolling(); onComplete?.(); }} disabled={launchPromptInFlight}
-                class="px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 disabled:opacity-50 transition-opacity">
-                Skip →
-              </button>
-            </div>
-            {#if launchError}
-              <p class="text-[11px] text-red-400 leading-snug">{launchError}</p>
-            {/if}
-          {/if}
         </div>
+
+        <!-- Connector 4 → 5 -->
+        <div class="h-3.5 ml-[23px] w-1 rounded-full {connectorClass(stepStates.model === 'done')}"></div>
+
+        <!-- Step 5: Launch at Login -->
+        <div class="flex gap-3 p-3.5 rounded-lg border {stepClass(stepStates.launch)}">
+          <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.launch)}">
+            {stepStates.launch === 'done' ? '✓' : '5'}
+          </div>
+          <div class="flex flex-col gap-2 min-w-0 flex-1">
+            <div class="flex flex-col gap-0.5">
+              <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Launch at Login</h2>
+              <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                Turbo Talk starts quietly when you sign in, so the menu bar trigger is ready.
+              </p>
+            </div>
+            {#if stepStates.launch === 'active'}
+              <div class="flex gap-2">
+                <button onclick={enableLaunchAtLogin} disabled={launchPromptInFlight}
+                  class="px-3 py-1.5 rounded-md bg-green-600 text-white text-[12px] font-medium hover:bg-green-500 disabled:opacity-50 transition-colors">
+                  {launchPromptInFlight ? 'Enabling…' : 'Enable Automatic Login'}
+                </button>
+                <button onclick={() => { launchSkipped = true; stopPolling(); onComplete?.(); }} disabled={launchPromptInFlight}
+                  class="px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 disabled:opacity-50 transition-opacity">
+                  Skip →
+                </button>
+              </div>
+              {#if launchError}
+                <p class="text-[11px] text-red-400 leading-snug">{launchError}</p>
+              {/if}
+            {/if}
+          </div>
+        </div>
+
       </div>
       {/if}
     {:else}

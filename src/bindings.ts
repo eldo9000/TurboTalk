@@ -10,6 +10,7 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 export const commands = {
 	getConfig: () => __TAURI_INVOKE<Config>("get_config"),
 	saveConfig: (cfg: Config) => typedError<null, string>(__TAURI_INVOKE("save_config", { cfg })),
+	prewarmModel: () => typedError<null, string>(__TAURI_INVOKE("prewarm_model")),
 	scanModelsDir: () => __TAURI_INVOKE<string[]>("scan_models_dir"),
 	getLaunchAtLogin: () => __TAURI_INVOKE<boolean>("get_launch_at_login"),
 	setLaunchAtLogin: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_launch_at_login", { enabled })),
@@ -129,6 +130,19 @@ export const commands = {
 	resetOnboarding: () => __TAURI_INVOKE<void>("reset_onboarding"),
 	// Called by the frontend when onboarding completes, to clear the force flag.
 	clearForceOnboarding: () => __TAURI_INVOKE<void>("clear_force_onboarding"),
+	/**
+	 *  Reset the TCC permission entry for Turbo Talk so the onboarding wizard
+	 *  can clear stale entries left by a previous install. After this call the
+	 *  bundle is no longer in the Privacy list; the caller should immediately
+	 *  re-run the relevant registration path (IOHIDManager open for input
+	 *  monitoring, AXIsProcessTrustedWithOptions for accessibility) so macOS
+	 *  re-adds a fresh, correctly-bound entry.
+	 * 
+	 *  `service` must be one of: "accessibility" | "input_monitoring"
+	 */
+	resetTccEntry: (service: string) => typedError<null, string>(__TAURI_INVOKE("reset_tcc_entry", { service })),
+	// Re-pins the main window's right edge after a zoom/mode resize changes the width.
+	repinMainWindow: (advWidth: number) => __TAURI_INVOKE<void>("repin_main_window", { advWidth }),
 };
 
 /* Types */
@@ -194,11 +208,22 @@ export type Config = {
 	 */
 	show_overlay?: boolean,
 	/**
+	 *  Where on the screen the overlay pill anchors: "bottom" (default) or "top".
+	 *  Anything else is treated as "bottom" by the positioning code.
+	 */
+	overlay_position?: string,
+	/**
 	 *  Whether the recording overlay shows a transcript-size indicator (a visual
 	 *  estimate of how long and how much talking the user has been doing — driven
 	 *  by VAD voiced-frame counts, not real transcription). Defaults off.
 	 */
 	transcript_size_indicator?: boolean,
+	/**
+	 *  Whether to show a small red dot near the cursor during recording.
+	 *  The dot follows the mouse pointer and appears bottom-right of the hotspot.
+	 *  Defaults off.
+	 */
+	cursor_dot_indicator?: boolean,
 	// Play a sound cue when recording starts.
 	sound_on_start?: boolean,
 	// Play a sound cue when transcription finishes and text is pasted.
