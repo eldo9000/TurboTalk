@@ -7,6 +7,7 @@
 // Sidecars are produced/installed by TASK-27 (per-host whisper.cpp build).
 // If a check fails on a host where TASK-27 has not been run, that's the expected error.
 
+import { execFileSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +21,7 @@ switch (process.platform) {
   case 'darwin':
     required = [
       'src-tauri/binaries/whisper-cli-aarch64-apple-darwin',
+      'src-tauri/binaries/whisper-server-aarch64-apple-darwin',
       'src-tauri/binaries/libwhisper.1.dylib',
       'src-tauri/binaries/libggml.0.dylib',
       'src-tauri/binaries/libggml-base.0.dylib',
@@ -77,6 +79,24 @@ for (const rel of required) {
 if (missingCount > 0) {
   console.error(`[preflight] ${missingCount} required asset(s) missing for host ${process.platform}`);
   process.exit(1);
+}
+
+if (process.platform === 'darwin') {
+  const server = resolve(repoRoot, 'src-tauri/binaries/whisper-server-aarch64-apple-darwin');
+  const links = execFileSync('otool', ['-L', server], { encoding: 'utf8' });
+  const leakedLinks = links
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) =>
+      (line.startsWith('/opt/homebrew/') || line.startsWith('/usr/local/')) &&
+      !line.startsWith('/usr/lib/')
+    );
+  if (leakedLinks.length > 0) {
+    console.error('[preflight] whisper-server is not self-contained; Homebrew links remain:');
+    for (const line of leakedLinks) console.error(`[preflight]   ${line}`);
+    console.error('[preflight]   run `npm run refresh-whisper-server` before packaging');
+    process.exit(1);
+  }
 }
 
 console.log(`[preflight] all required bundle assets present for host ${process.platform}`);
