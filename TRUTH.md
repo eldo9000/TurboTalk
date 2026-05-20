@@ -18,13 +18,17 @@ What this project can honestly claim today. Updated when a claim changes.
 
 Model warms at app startup via `prewarm()`. Second+ dictations skip the multi-second model reload.
 
-**Long-recording timeout — fixed 2026-05-19 (uncommitted):** dictations whose
+**Long-recording timeout — fixed (commit `7238aa4`):** dictations whose
 transcription ran longer than 30 s (≈ 3 min of dense speech) silently failed
 with `"error sending request"` because the transcribe HTTP client inherited
 reqwest's blocking-client default 30 s timeout. Now set to an explicit 120 s.
-whisper-server itself handles long audio fine (480 s WAV → HTTP 200 in 55 s).
-Streaming/chunked transcription for an instant finalize on long recordings is
-planned in `tasks/TASK-54`, not yet implemented.
+
+**Streaming chunked transcription — landed 2026-05-20 (TASK-54):** silence-boundary
+segments emitted during recording are transcribed concurrently via `SegmentTranscriber`
+so that by key-release only the final tail remains. Segments and tail assembled in
+chronological order before the single cleanup pass. Batch fallback: if no segments
+were emitted (short recordings, no silence boundary hit), path is identical to the
+pre-TASK-54 whole-file POST.
 
 Previously confirmed 2026-05-01 / 2026-05-03 with per-call `whisper-cli` spawn (M0–M5).
 
