@@ -220,9 +220,9 @@ mod common {
         let app = app.clone();
         std::thread::spawn(move || {
             rec.cancel();
-            // Drop the segment transcriber (joins its worker). rec.cancel()
-            // closes the streaming finalizer channel, so the seg worker will
-            // drain any buffered items and exit promptly.
+            // Detach the segment transcriber (JoinHandle drop = detach, not
+            // join). The worker will exit on its own once the segment channel
+            // closes; we don't need its results.
             let _ = CURRENT_SEG_TRANSCRIBER.lock().take();
             let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
             emit_critical(&app, "recording-cancelled", ());
