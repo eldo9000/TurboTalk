@@ -5,8 +5,6 @@
 // string rather than crashing. The command never panics.
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-
 /// All fields are `String` or `bool` for trivial JSON serialisation. String
 /// fields use sentinel values ("ok", "missing", "error: …") so the frontend
 /// can render them without additional type magic.
@@ -65,14 +63,18 @@ fn check_sidecar() -> (String, bool) {
         }
     }
 
-    // Dev mode: src-tauri/binaries/ at compile time.
-    for sidecar in sidecars {
-        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("binaries")
-            .join(sidecar);
-        if dev.exists() {
-            let ok = is_executable(&dev);
-            return (dev.to_string_lossy().into_owned(), ok);
+    // Dev mode: src-tauri/binaries/ at compile time. Release diagnostics must
+    // not mask a broken install by reaching back into the source checkout.
+    #[cfg(debug_assertions)]
+    {
+        for sidecar in sidecars {
+            let dev = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("binaries")
+                .join(sidecar);
+            if dev.exists() {
+                let ok = is_executable(&dev);
+                return (dev.to_string_lossy().into_owned(), ok);
+            }
         }
     }
 

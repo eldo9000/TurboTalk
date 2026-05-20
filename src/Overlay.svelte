@@ -26,6 +26,12 @@
   // transcription. Pills lay out inline (wrap to new rows) so the result reads
   // as a paragraph rather than a stack of full-width bars.
   let indicatorEnabled = $state(false);
+  // Overlay placement on the screen: 'bottom' (default) or 'top'. Mirrors
+  // the Rust-side `overlay_position` setting. Drives indicator-pillbox CSS:
+  // bottom-anchored pill → pillbox grows upward (above pill);
+  // top-anchored pill → pillbox grows downward (below pill) so it doesn't
+  // disappear off the top of the screen.
+  let overlayPosition = $state('bottom');
   let wordPills = $state([]); // [{id, w}] where w is pixel width
   let nextPillId = 0;
 
@@ -83,12 +89,13 @@
     canvasEl.height = CANVAS_H * dpr;
     draw();
 
-    // Initial config read for the transcript-size indicator. Failure here is
-    // non-fatal — indicator stays hidden until a config-update event arrives.
+    // Initial config read for the transcript-size indicator + overlay position.
+    // Failure here is non-fatal — defaults stay until a config-update event arrives.
     try {
       const cfg = await commands.getConfig();
       indicatorEnabled = cfg.transcript_size_indicator ?? false;
-    } catch (_) { /* keep indicator off */ }
+      overlayPosition = cfg.overlay_position ?? 'bottom';
+    } catch (_) { /* keep defaults */ }
 
     // Window placement is owned entirely by the Rust side — see
     // `reposition_overlay_to_cursor_monitor` in src-tauri/src/lib.rs.
@@ -240,6 +247,10 @@
       const next = e.payload?.transcript_size_indicator ?? false;
       indicatorEnabled = next;
       if (!next) wordPills = [];
+      overlayPosition = e.payload?.overlay_position ?? 'bottom';
+      // Rust repositions the window on save; refresh hoverZone so peek-
+      // through detection picks up the new frame.
+      setTimeout(() => { refreshHoverZone(); }, 200);
     }).then(u => uns.push(u));
 
     return () => {
@@ -344,6 +355,18 @@
     -webkit-mask-image: linear-gradient(to top, black 75%, transparent 100%);
     mask-image: linear-gradient(to top, black 75%, transparent 100%);
   }
+  /* Top-anchored overlay: flip the pillbox below the pill and grow downward,
+     so accumulating pills don't run off the top of the screen. The mask
+     direction inverts so the BOTTOM (overflow edge) fades out. */
+  .indicator-pillbox.top {
+    bottom: auto;
+    top: 100%;
+    margin-bottom: 0;
+    margin-top: 8px;
+    align-content: flex-start;
+    -webkit-mask-image: linear-gradient(to bottom, black 75%, transparent 100%);
+    mask-image: linear-gradient(to bottom, black 75%, transparent 100%);
+  }
   .indicator-pillbox.show { opacity: 1; }
   .word-line {
     height: 5px;
@@ -360,6 +383,7 @@
     <div
       class="indicator-pillbox"
       class:show={mode === 'recording'}
+      class:top={overlayPosition === 'top'}
       style:opacity={mode === 'recording' ? (isPeeking ? 0.24 : 1) : 0}
     >
       {#each wordPills as p (p.id)}

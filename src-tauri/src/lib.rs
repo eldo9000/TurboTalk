@@ -68,6 +68,10 @@ fn save_config(
     settings::update_cache(&cfg);
     *hotkey_state.write() = cfg.hotkey.clone();
     apply_overlay_visibility(&app, cfg.show_overlay);
+    // Pick up overlay_position changes on the next render — repositioning
+    // now (rather than waiting for the next PTT) keeps the pill out of the
+    // user's way the moment they toggle the setting.
+    reposition_overlay_to_cursor_monitor(&app);
     // TASK-20: drop the cached TranscriptionWorker so the next dictation
     // picks up any changes to `whisper.model` or `cleanup.vocabulary`. The
     // rebuild is cheap (path validation only — no model load) so we do not
@@ -85,14 +89,42 @@ fn save_config(
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+fn prewarm_model(app: tauri::AppHandle) -> Result<(), String> {
+    let cfg = settings::load();
+    if cfg.whisper.model.trim().is_empty() {
+        return Err("No transcription model is selected.".to_string());
+    }
+    transcribe::prewarm(cfg, app);
+    Ok(())
+}
+
 /// Logical pill-bottom geometry, shared with the frontend's expectations.
 /// The window is 460×280, but the visible pill is a 260×80 rect inside it
 /// surrounded by a 100 px gutter (room for blur/shadow). For the pill to
 /// land `BOTTOM_GAP` above the screen bottom, the *window's* top-left needs
-/// to sit at `screen_bottom - (WIN_H + BOTTOM_GAP + GUTTER)`. We bake that
+/// to sit at `screen_bottom - (PILL_H + BOTTOM_GAP + GUTTER)`. We bake that
 /// into the y math here so the frontend never re-positions.
 const OVERLAY_W_LOGICAL: f64 = 460.0;
-const OVERLAY_PILL_BOTTOM_OFFSET: f64 = 290.0; // WIN_H 80 + BOTTOM_GAP 110 + GUTTER 100
+const OVERLAY_PILL_BOTTOM_OFFSET: f64 = 290.0; // PILL_H 80 + BOTTOM_GAP 110 + GUTTER 100
+/// Top-position equivalent: window top sits `TOP_GAP - GUTTER` below the
+/// screen top so the pill (centered inside the 280 px window) lands
+/// `TOP_GAP` (110 px) below the screen top. TOP_GAP matches BOTTOM_GAP so
+/// the visual breathing room is symmetric. On macOS the menu bar at the
+/// very top occupies ~24 px of that gap.
+const OVERLAY_PILL_TOP_OFFSET: f64 = 10.0; // TOP_GAP 110 - GUTTER 100
+
+/// Compute the window-top y for the overlay given the monitor origin, monitor
+/// height (logical), and the user's overlay_position preference. Centralises
+/// the top vs bottom branch so the macOS and Windows/Linux paths agree.
+fn overlay_y_for_position(mp_y: f64, mon_h_logical: f64, position: &str) -> f64 {
+    if position == "top" {
+        mp_y + OVERLAY_PILL_TOP_OFFSET
+    } else {
+        mp_y + mon_h_logical - OVERLAY_PILL_BOTTOM_OFFSET
+    }
+}
 
 /// Reposition the overlay window so its content lands on whichever monitor the
 /// mouse cursor is currently on. Called from `ptt_down` before the frontend
@@ -117,7 +149,9 @@ const OVERLAY_PILL_BOTTOM_OFFSET: f64 = 290.0; // WIN_H 80 + BOTTOM_GAP 110 + GU
 #[cfg(target_os = "macos")]
 pub fn reposition_overlay_to_cursor_monitor(app: &tauri::AppHandle) {
     use tauri::{LogicalPosition, Manager};
-    let Some(overlay) = app.get_webview_window("overlay") else { return };
+    let Some(overlay) = app.get_webview_window("overlay") else {
+        return;
+    };
     let cursor = match app.cursor_position() {
         Ok(c) => c,
         Err(e) => {
@@ -213,14 +247,16 @@ pub fn reposition_overlay_to_cursor_monitor(app: &tauri::AppHandle) {
     let scale = monitor.scale_factor();
     let mon_w_logical = ms.width as f64 / scale;
     let mon_h_logical = ms.height as f64 / scale;
+    let position = settings::load().overlay_position;
     let x = mp.x as f64 + (mon_w_logical - OVERLAY_W_LOGICAL) / 2.0;
-    let y = mp.y as f64 + mon_h_logical - OVERLAY_PILL_BOTTOM_OFFSET;
+    let y = overlay_y_for_position(mp.y as f64, mon_h_logical, &position);
 
     let pre = overlay.outer_position().ok();
     tracing::info!(
-        "[overlay] set_position logical=({:.0},{:.0}) (target monitor pos=({},{}) scale={:.2}) pre_outer={:?}",
+        "[overlay] set_position logical=({:.0},{:.0}) position={} (target monitor pos=({},{}) scale={:.2}) pre_outer={:?}",
         x,
         y,
+        position,
         mp.x,
         mp.y,
         scale,
@@ -253,9 +289,15 @@ pub fn reposition_overlay_to_cursor_monitor(app: &tauri::AppHandle) {
 #[cfg(not(target_os = "macos"))]
 pub fn reposition_overlay_to_cursor_monitor(app: &tauri::AppHandle) {
     use tauri::{LogicalPosition, Manager};
-    let Some(overlay) = app.get_webview_window("overlay") else { return };
-    let Ok(cursor) = app.cursor_position() else { return };
-    let Ok(monitors) = overlay.available_monitors() else { return };
+    let Some(overlay) = app.get_webview_window("overlay") else {
+        return;
+    };
+    let Ok(cursor) = app.cursor_position() else {
+        return;
+    };
+    let Ok(monitors) = overlay.available_monitors() else {
+        return;
+    };
 
     let monitor = monitors
         .iter()
@@ -277,8 +319,9 @@ pub fn reposition_overlay_to_cursor_monitor(app: &tauri::AppHandle) {
     let scale = monitor.scale_factor();
     let mon_w_logical = ms.width as f64 / scale;
     let mon_h_logical = ms.height as f64 / scale;
+    let position = settings::load().overlay_position;
     let x = (mp.x as f64 + (ms.width as f64 - OVERLAY_W_LOGICAL * scale) / 2.0) / scale;
-    let y = mp.y as f64 / scale + mon_h_logical - OVERLAY_PILL_BOTTOM_OFFSET;
+    let y = overlay_y_for_position(mp.y as f64 / scale, mon_h_logical, &position);
 
     let _ = overlay.set_position(LogicalPosition::new(x, y));
 }
@@ -615,6 +658,10 @@ async fn download_model(
         let _ = tokio::fs::remove_file(&canonical).await;
         return Err("download destination escaped models directory".into());
     }
+    let _ = app.emit(
+        "download-progress",
+        serde_json::json!({ "name": &model_id, "pct": 100u8 }),
+    );
     Ok(canonical.to_string_lossy().into_owned())
 }
 
@@ -704,17 +751,60 @@ use tauri::{
     Emitter, Manager, RunEvent, WindowEvent,
 };
 
-/// Position `win` directly below the mouse cursor, centered on it horizontally.
-/// Works on dual-monitor setups — whichever display the cursor is on, that's
-/// where the window lands.
-fn position_below_cursor(app: &tauri::AppHandle, win: &tauri::WebviewWindow) {
+/// Unzoomed advanced-mode width (WINDOW_W * 2 in the frontend).
+/// Used as the default anchor when zoom is unknown (tray click before frontend loads).
+const ADV_WIN_W_BASE: f64 = 880.0;
+
+/// macOS menu bar clearance so the titlebar isn't tucked under it.
+#[cfg(target_os = "macos")]
+const CORNER_TOP_OFFSET: f64 = 24.0;
+
+/// Compute the x that places the window's right edge at `monitor_right - adv_width`
+/// so in advanced mode (window = adv_width) it snaps flush, and in normal mode it floats.
+/// Returns (x, y). For y: macOS top-right, Windows bottom-right.
+fn corner_xy(
+    win: &tauri::WebviewWindow,
+    monitor: &tauri::Monitor,
+    adv_width: f64,
+) -> (f64, f64) {
+    let scale = monitor.scale_factor();
+    let mp = monitor.position();
+    let ms = monitor.size();
+    let mon_x = mp.x as f64;
+    let mon_y = mp.y as f64;
+    let mon_w = ms.width as f64 / scale;
+    let mon_h = ms.height as f64 / scale;
+
+    let x = mon_x + mon_w - adv_width;
+
+    #[cfg(target_os = "macos")]
+    let y = {
+        let _ = (mon_h, win);
+        mon_y + CORNER_TOP_OFFSET
+    };
+    #[cfg(not(target_os = "macos"))]
+    let y = {
+        let win_h = win
+            .outer_size()
+            .map(|s| s.height as f64 / scale)
+            .unwrap_or(280.0);
+        mon_y + mon_h - win_h
+    };
+
+    (x, y)
+}
+
+/// Pin the main window to the corner on the monitor containing the cursor.
+/// Uses `adv_width` as the anchor width — the right edge of the monitor minus
+/// adv_width is the fixed x position, so the window snaps flush when it reaches
+/// that width and floats otherwise.
+fn position_main_window_inner(
+    app: &tauri::AppHandle,
+    win: &tauri::WebviewWindow,
+    adv_width: f64,
+) {
     use tauri::LogicalPosition;
 
-    let Ok(cursor) = app.cursor_position() else { return };
-
-    // On macOS, cursor_position reports primary-scaled physical pixels.
-    // Divide by the primary monitor's scale factor to get logical NSPoints,
-    // which is the same space monitor positions are reported in.
     let primary_scale = win
         .primary_monitor()
         .ok()
@@ -722,44 +812,59 @@ fn position_below_cursor(app: &tauri::AppHandle, win: &tauri::WebviewWindow) {
         .map(|m| m.scale_factor())
         .unwrap_or(1.0);
 
-    #[cfg(target_os = "macos")]
-    let (cx, cy) = (cursor.x / primary_scale, cursor.y / primary_scale);
-    #[cfg(not(target_os = "macos"))]
-    let (cx, cy) = (cursor.x, cursor.y);
+    let cursor = app.cursor_position().ok();
+    let (cx, cy) = match cursor {
+        #[cfg(target_os = "macos")]
+        Some(c) => (c.x / primary_scale, c.y / primary_scale),
+        #[cfg(not(target_os = "macos"))]
+        Some(c) => (c.x, c.y),
+        None => (f64::NAN, f64::NAN),
+    };
 
-    // Find the monitor containing the cursor.
     let monitors = win.available_monitors().ok().unwrap_or_default();
     let monitor = monitors
         .iter()
         .find(|m| {
+            if cx.is_nan() {
+                return false;
+            }
             let p = m.position();
             let s = m.size();
             let scale = m.scale_factor();
             let lw = s.width as f64 / scale;
             let lh = s.height as f64 / scale;
-            cx >= p.x as f64 && cx < p.x as f64 + lw
-                && cy >= p.y as f64 && cy < p.y as f64 + lh
+            cx >= p.x as f64 && cx < p.x as f64 + lw && cy >= p.y as f64 && cy < p.y as f64 + lh
         })
         .cloned()
         .or_else(|| win.current_monitor().ok().flatten())
         .or_else(|| win.primary_monitor().ok().flatten());
 
     let Some(monitor) = monitor else { return };
-    let scale = monitor.scale_factor();
-    let mp = monitor.position();
-    let ms = monitor.size();
-    let mon_x = mp.x as f64;
-    let mon_w = ms.width as f64 / scale;
+    let (x, y) = corner_xy(win, &monitor, adv_width);
+    let _ = win.set_position(LogicalPosition::new(x, y));
+}
 
-    let win_w = win
-        .outer_size()
-        .map(|s| s.width as f64 / scale)
-        .unwrap_or(440.0);
+fn position_main_window(app: &tauri::AppHandle, win: &tauri::WebviewWindow) {
+    position_main_window_inner(app, win, ADV_WIN_W_BASE);
+}
 
-    // Center on cursor horizontally, 8px below it; clamp to monitor width.
-    let x = (cx - win_w / 2.0).clamp(mon_x, mon_x + mon_w - win_w);
-    let y = cy + 8.0;
-
+/// Called from the frontend after every `setSize`.
+/// `adv_width` is the *zoomed* advanced window width (e.g. 1100 at 125% zoom).
+/// Fixes x so the right edge stays flush regardless of zoom level.
+#[tauri::command]
+#[specta::specta]
+fn repin_main_window(app: tauri::AppHandle, adv_width: f64) {
+    use tauri::{LogicalPosition, Manager};
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    let monitor = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| win.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else { return };
+    let (x, y) = corner_xy(&win, &monitor, adv_width);
     let _ = win.set_position(LogicalPosition::new(x, y));
 }
 
@@ -771,6 +876,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new().commands(tauri_specta::collect_commands![
         get_config,
         save_config,
+        prewarm_model,
         scan_models_dir,
         get_launch_at_login,
         set_launch_at_login,
@@ -799,6 +905,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         permissions::prompt_for_accessibility,
         permissions::reset_onboarding,
         permissions::clear_force_onboarding,
+        permissions::reset_tcc_entry,
+        repin_main_window,
     ])
 }
 
@@ -811,7 +919,11 @@ pub fn run() {
     tracing_subscriber::registry()
         .with(filter)
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
-        .with(tracing_subscriber::fmt::layer().with_writer(non_blocking).with_ansi(false))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(non_blocking)
+                .with_ansi(false),
+        )
         .init();
 
     // ── Typed Rust↔TS contract ─────────────────────────────────────────────
@@ -846,6 +958,7 @@ pub fn run() {
             get_accent,
             get_config,
             save_config,
+            prewarm_model,
             scan_models_dir,
             get_launch_at_login,
             set_launch_at_login,
@@ -874,6 +987,8 @@ pub fn run() {
             permissions::prompt_for_accessibility,
             permissions::reset_onboarding,
             permissions::clear_force_onboarding,
+            permissions::reset_tcc_entry,
+            repin_main_window,
         ])
         .setup(|app| {
             // ── macOS: hide from Dock and Cmd-Tab. The tray icon is the only
@@ -947,7 +1062,7 @@ pub fn run() {
                             return;
                         }
                         if let Some(win) = app.get_webview_window("main") {
-                            position_below_cursor(app, &win);
+                            position_main_window(app, &win);
                             let _ = win.show();
                             let _ = win.set_focus();
                         }
@@ -1057,7 +1172,7 @@ pub fn run() {
 
             // ── Main window — position below cursor at launch ─────────────
             if let Some(win) = app.get_webview_window("main") {
-                position_below_cursor(app.handle(), &win);
+                position_main_window(app.handle(), &win);
 
                 // First-run / regression gate: if Accessibility, Microphone,
                 // or a model are missing, show the window so the onboarding
@@ -1079,6 +1194,11 @@ pub fn run() {
                     let _ = overlay.hide();
                 }
             }
+
+            // ── Cursor dot — cursor-transparent, always starts hidden ──
+            if let Some(dot) = app.get_webview_window("cursor-dot") {
+                let _ = dot.set_ignore_cursor_events(true);
+            }
             // Pin the overlay to the cursor's monitor at startup so the very
             // first press doesn't have to fight a stale primary-monitor
             // placement from `center: true` in tauri.conf.json.
@@ -1097,7 +1217,14 @@ pub fn run() {
             let level_rec = recorder.clone();
             let level_app = app.handle().clone();
             let level_tray = tray_icon.clone();
-            std::thread::spawn(move || loop {
+            std::thread::spawn(move || {
+                // Cursor-dot: offset from cursor hotspot in logical points.
+                const DOT_OFFSET_X: f64 = 12.0;
+                const DOT_OFFSET_Y: f64 = 16.0;
+                let mut cached_primary_scale = 1.0f64;
+                let mut dot_was_visible = false;
+
+                loop {
                 std::thread::sleep(std::time::Duration::from_millis(50));
                 if level_rec.device_lost() {
                     tracing::warn!("[lib] observed device-lost flag — cancelling recorder");
@@ -1109,9 +1236,46 @@ pub fn run() {
                     // to learn a new clear-overlay path.
                     let _ = level_app.emit("recording-discarded", ());
                 }
-                if level_rec.is_recording() {
+                let is_recording = level_rec.is_recording();
+                if is_recording {
                     let _ = level_app.emit("audio-level", level_rec.level());
                 }
+
+                // Cursor-dot indicator: follow mouse while recording or transcribing.
+                let cfg = settings::load();
+                let is_busy = level_rec.state().is_busy();
+                if cfg.cursor_dot_indicator && is_busy {
+                    if let Ok(cursor) = level_app.cursor_position() {
+                        if let Some(dot) = level_app.get_webview_window("cursor-dot") {
+                            if !dot_was_visible {
+                                // Refresh scale factor on first show.
+                                cached_primary_scale = dot
+                                    .primary_monitor()
+                                    .ok()
+                                    .flatten()
+                                    .map(|m| m.scale_factor())
+                                    .unwrap_or(1.0);
+                            }
+                            let lx = cursor.x / cached_primary_scale + DOT_OFFSET_X;
+                            let ly = cursor.y / cached_primary_scale + DOT_OFFSET_Y;
+                            // macOS NSPanel quirk: demote level before
+                            // set_position (same workaround as the overlay).
+                            let _ = dot.set_always_on_top(false);
+                            let _ = dot.set_position(tauri::LogicalPosition::new(lx, ly));
+                            let _ = dot.set_always_on_top(true);
+                            if !dot_was_visible {
+                                let _ = dot.show();
+                                dot_was_visible = true;
+                            }
+                        }
+                    }
+                } else if dot_was_visible && !is_busy {
+                    if let Some(dot) = level_app.get_webview_window("cursor-dot") {
+                        let _ = dot.hide();
+                    }
+                    dot_was_visible = false;
+                }
+                } // end loop
             });
 
             // TASK-23: manage recorder and tray_icon as app state so the
