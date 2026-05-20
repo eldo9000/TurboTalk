@@ -72,7 +72,7 @@
 // - Channel disconnect (capture-feeder dies before finalize): worker
 //   treats this as `Finish` with whatever it has so far.
 
-use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
+use crossbeam_channel::{bounded, unbounded, Receiver, Sender, TrySendError};
 use parking_lot::Mutex;
 use std::thread::JoinHandle;
 use std::time::Instant;
@@ -103,6 +103,23 @@ const RESAMPLER_CHUNK_IN: usize = 1024;
 /// transient worker stall (e.g. a long Silero compute on a heavily-loaded
 /// CPU) doesn't drop chunks.
 const CHANNEL_DEPTH: usize = 512;
+/// Minimum 16 kHz samples that must have accumulated in the current segment
+/// before a silence boundary triggers a cut. Prevents hairline segments on
+/// brief inter-word pauses.  12 s × 16 000 = 192 000 samples.
+const MIN_SEGMENT_SAMPLES: usize = 12 * TARGET_SAMPLE_RATE as usize;
+/// Hard ceiling: force a cut even without a detected silence boundary so
+/// no single whisper-server request approaches the HTTP timeout.
+/// 25 s × 16 000 = 400 000 samples.
+const MAX_SEGMENT_SAMPLES: usize = 25 * TARGET_SAMPLE_RATE as usize;
+
+/// A segment of audio cut during recording and emitted by the worker on
+/// the segment channel. `index` is a monotonically increasing counter
+/// (0, 1, 2 …) that the caller uses to reassemble ordered transcript
+/// text after parallel transcription.
+pub struct SegmentEmit {
+    pub index: usize,
+    pub samples: Vec<f32>,
+}
 
 /// One unit of work shipped from the capture-feeder thread to the
 /// streaming worker.
@@ -138,6 +155,11 @@ pub struct FinalizeResult {
     /// applied. Mirrors the batch path's "no speech detected → full
     /// range fallback" semantic, exposed for logging.
     pub speech_detected: bool,
+    /// How many mid-recording segments were emitted on the segment channel
+    /// before this final tail. Zero means the recording was short enough
+    /// that no silence-boundary or MAX-cap cuts fired — `trimmed` contains
+    /// the whole VAD-trimmed output, same as the legacy batch path.
+    pub segments_emitted: usize,
 }
 
 /// Streaming-VAD smoothing state. Mirror of `vad::SmoothedVad` but the
@@ -311,6 +333,11 @@ impl FinalizerHandle {
 pub struct StreamingFinalizer {
     sender: Sender<WorkerMsg>,
     worker: Option<JoinHandle<()>>,
+    /// Receives mid-recording segments cut at silence boundaries or the
+    /// MAX cap. Unbounded — segment rate (~1 per 12–25 s) is too low to
+    /// need backpressure. Consumers should drain this concurrently with
+    /// recording and on `finish()` before joining results.
+    segment_rx: Receiver<SegmentEmit>,
 }
 
 impl StreamingFinalizer {
@@ -320,15 +347,24 @@ impl StreamingFinalizer {
     /// when src_rate == 16 kHz.
     pub fn start(src_rate: u32, src_channels: u16, normalize_peak: f32) -> Self {
         let (tx, rx) = bounded::<WorkerMsg>(CHANNEL_DEPTH);
+        let (seg_tx, seg_rx) = unbounded::<SegmentEmit>();
         let worker = std::thread::Builder::new()
             .name("turbotalk-finalizer".into())
-            .spawn(move || run_worker(rx, src_rate, src_channels, normalize_peak))
+            .spawn(move || run_worker(rx, src_rate, src_channels, normalize_peak, seg_tx))
             .expect("spawn streaming finalizer worker");
 
         Self {
             sender: tx,
             worker: Some(worker),
+            segment_rx: seg_rx,
         }
+    }
+
+    /// Borrow the segment receiver so callers can drain mid-recording
+    /// segments concurrently. Segments arrive at silence boundaries and
+    /// MAX-cap cuts; the final tail arrives in `FinalizeResult::trimmed`.
+    pub fn segment_receiver(&self) -> &Receiver<SegmentEmit> {
+        &self.segment_rx
     }
 
     /// Hand a chunk of native-rate samples to the worker. Non-blocking
@@ -399,7 +435,13 @@ pub enum DropReason {
 
 // ---------- Worker thread body ----------------------------------------------
 
-fn run_worker(rx: Receiver<WorkerMsg>, src_rate: u32, src_channels: u16, normalize_peak: f32) {
+fn run_worker(
+    rx: Receiver<WorkerMsg>,
+    src_rate: u32,
+    src_channels: u16,
+    normalize_peak: f32,
+    seg_tx: Sender<SegmentEmit>,
+) {
     use rubato::{FftFixedIn, Resampler};
 
     // Build the resampler if a rate conversion is needed. Pass-through
@@ -423,6 +465,8 @@ fn run_worker(rx: Receiver<WorkerMsg>, src_rate: u32, src_channels: u16, normali
                 );
                 // Drain the channel until Finish so the capture-feeder's
                 // try_send keeps succeeding, then return an empty result.
+                // seg_tx drops here, closing the segment channel.
+                drop(seg_tx);
                 drain_until_finish_and_signal_failure(rx);
                 return;
             }
@@ -447,6 +491,11 @@ fn run_worker(rx: Receiver<WorkerMsg>, src_rate: u32, src_channels: u16, normali
 
     let mut incremental_resample_total_ms: f32 = 0.0;
 
+    // Segmentation state. seg_start_sample is the index into resampled_buf
+    // where the current (not-yet-emitted) segment begins.
+    let mut seg_start_sample: usize = 0;
+    let mut seg_index: usize = 0;
+
     loop {
         let msg = match rx.recv() {
             Ok(m) => m,
@@ -469,7 +518,17 @@ fn run_worker(rx: Receiver<WorkerMsg>, src_rate: u32, src_channels: u16, normali
                     &mut delay_to_skip,
                     &mut incremental_resample_total_ms,
                 );
+                let in_speech_before = vad_state.smoothing.in_speech;
                 run_vad_on_new_frames(&resampled_buf, &mut vad_state);
+                maybe_emit_segment(
+                    &resampled_buf,
+                    in_speech_before,
+                    vad_state.smoothing.in_speech,
+                    &mut seg_start_sample,
+                    &mut seg_index,
+                    normalize_peak,
+                    &seg_tx,
+                );
             }
             WorkerMsg::Finish(resp_tx) => {
                 let t_flush = Instant::now();
@@ -554,24 +613,25 @@ fn run_worker(rx: Receiver<WorkerMsg>, src_rate: u32, src_channels: u16, normali
                     }
                 }
 
-                // Resolve the kept slice indices in the same way as the
-                // batch path: prefill backward from speech_start_frame,
-                // hangover-extended speech_end_frame becomes exclusive.
+                // Resolve the kept slice indices for the final tail — the
+                // audio from seg_start_sample to the VAD-trimmed end.
+                // Clamp start to seg_start_sample so previously-emitted
+                // segment audio is never re-included in trimmed.
                 let (start_sample, end_sample, speech_detected) =
                     if vad_state.vad_failed || vad_state.vad_cell.is_none() {
-                        (0, resampled_buf.len(), false)
+                        (seg_start_sample, resampled_buf.len(), false)
                     } else if let (Some(s), Some(e)) = (
                         vad_state.smoothing.speech_start_frame,
                         vad_state.smoothing.speech_end_frame,
                     ) {
                         let prefill_start = s.saturating_sub(PREFILL_FRAMES);
-                        let start = prefill_start * VAD_FRAME_SAMPLES;
+                        // Clamp so we never back up into an already-emitted segment.
+                        let start = (prefill_start * VAD_FRAME_SAMPLES).max(seg_start_sample);
                         let end = ((e + 1) * VAD_FRAME_SAMPLES).min(resampled_buf.len());
                         (start, end, true)
                     } else {
-                        // No speech detected — full-range fallback,
-                        // matches batch path.
-                        (0, resampled_buf.len(), false)
+                        // No speech detected in tail — return tail range as-is.
+                        (seg_start_sample, resampled_buf.len(), false)
                     };
 
                 let mut trimmed = if end_sample > start_sample {
@@ -592,6 +652,7 @@ fn run_worker(rx: Receiver<WorkerMsg>, src_rate: u32, src_channels: u16, normali
                     incremental_vad_total_ms: vad_state.incremental_vad_total_ms,
                     finalize_flush_ms,
                     speech_detected,
+                    segments_emitted: seg_index,
                 });
                 return;
             }
@@ -613,9 +674,61 @@ fn drain_until_finish_and_signal_failure(rx: Receiver<WorkerMsg>) {
                 incremental_vad_total_ms: 0.0,
                 finalize_flush_ms: 0.0,
                 speech_detected: false,
+                segments_emitted: 0,
             });
             return;
         }
+    }
+}
+
+/// Check whether a segment should be cut after a VAD batch and, if so,
+/// extract it from `resampled_buf`, peak-normalize it, and send it on
+/// `seg_tx`. Called once per `Samples` message, after `run_vad_on_new_frames`.
+///
+/// Cut fires when EITHER:
+///   - a silence boundary was just crossed (in_speech: true→false) AND
+///     the accumulated segment is ≥ MIN_SEGMENT_SAMPLES, OR
+///   - the accumulated segment has hit MAX_SEGMENT_SAMPLES regardless of VAD.
+///
+/// On a MAX-cap cut the end is clamped to exactly seg_start + MAX so the
+/// next segment starts cleanly; on a silence-boundary cut the end is the
+/// current buffer tail (the silence is the natural cut point).
+fn maybe_emit_segment(
+    resampled_buf: &[f32],
+    in_speech_before: bool,
+    in_speech_after: bool,
+    seg_start_sample: &mut usize,
+    seg_index: &mut usize,
+    normalize_peak: f32,
+    seg_tx: &Sender<SegmentEmit>,
+) {
+    let seg_len = resampled_buf.len().saturating_sub(*seg_start_sample);
+    let silence_boundary = in_speech_before && !in_speech_after;
+
+    let (should_cut, cut_end) = if silence_boundary && seg_len >= MIN_SEGMENT_SAMPLES {
+        (true, resampled_buf.len())
+    } else if seg_len >= MAX_SEGMENT_SAMPLES {
+        (true, *seg_start_sample + MAX_SEGMENT_SAMPLES)
+    } else {
+        (false, 0)
+    };
+
+    if should_cut {
+        let mut samples = resampled_buf[*seg_start_sample..cut_end].to_vec();
+        peak_normalize(&mut samples, normalize_peak);
+        tracing::info!(
+            "[finalizer] segment {} cut at {}s (silence_boundary={} seg_len={}s)",
+            *seg_index,
+            cut_end / TARGET_SAMPLE_RATE as usize,
+            silence_boundary,
+            seg_len / TARGET_SAMPLE_RATE as usize,
+        );
+        let _ = seg_tx.send(SegmentEmit {
+            index: *seg_index,
+            samples,
+        });
+        *seg_index += 1;
+        *seg_start_sample = cut_end;
     }
 }
 
@@ -972,6 +1085,90 @@ mod tests {
             end,
             end,
         );
+    }
+
+    // ── Segmentation tests ────────────────────────────────────────────────────
+
+    /// Silence boundary + segment ≥ MIN_SEGMENT_SAMPLES → cut fires.
+    #[test]
+    fn segmentation_silence_boundary_above_min_fires_cut() {
+        let buf: Vec<f32> = vec![0.0; MIN_SEGMENT_SAMPLES + 1000];
+        let mut start = 0usize;
+        let mut idx = 0usize;
+        let (tx, rx) = unbounded::<SegmentEmit>();
+        // in_speech_before=true, in_speech_after=false → silence boundary
+        maybe_emit_segment(&buf, true, false, &mut start, &mut idx, 0.89, &tx);
+        assert_eq!(idx, 1, "one segment must have been emitted");
+        assert_eq!(start, buf.len(), "seg_start_sample must advance to buf end");
+        let seg = rx.try_recv().expect("segment must be on channel");
+        assert_eq!(seg.index, 0);
+        assert_eq!(seg.samples.len(), buf.len());
+    }
+
+    /// Silence boundary but segment < MIN_SEGMENT_SAMPLES → no cut.
+    #[test]
+    fn segmentation_silence_boundary_below_min_no_cut() {
+        let buf: Vec<f32> = vec![0.0; MIN_SEGMENT_SAMPLES - 1];
+        let mut start = 0usize;
+        let mut idx = 0usize;
+        let (tx, rx) = unbounded::<SegmentEmit>();
+        maybe_emit_segment(&buf, true, false, &mut start, &mut idx, 0.89, &tx);
+        assert_eq!(idx, 0, "no segment should be emitted when below MIN");
+        assert!(rx.try_recv().is_err(), "channel must be empty");
+        let _ = start; // start unchanged
+    }
+
+    /// No silence boundary but segment hits MAX_SEGMENT_SAMPLES → hard cut.
+    #[test]
+    fn segmentation_max_cap_forces_cut_without_silence() {
+        let buf: Vec<f32> = vec![0.0; MAX_SEGMENT_SAMPLES + 500];
+        let mut start = 0usize;
+        let mut idx = 0usize;
+        let (tx, rx) = unbounded::<SegmentEmit>();
+        // in_speech stays true (no silence boundary)
+        maybe_emit_segment(&buf, true, true, &mut start, &mut idx, 0.89, &tx);
+        assert_eq!(idx, 1, "MAX cap must force a cut");
+        assert_eq!(start, MAX_SEGMENT_SAMPLES, "seg_start advances by exactly MAX");
+        let seg = rx.try_recv().expect("segment on channel");
+        assert_eq!(seg.samples.len(), MAX_SEGMENT_SAMPLES);
+    }
+
+    /// Two sequential silence boundaries each above MIN emit segments
+    /// with monotonically increasing indices.
+    #[test]
+    fn segmentation_two_sequential_cuts_ordered_indices() {
+        let buf1: Vec<f32> = vec![0.0; MIN_SEGMENT_SAMPLES + 100];
+        let buf2: Vec<f32> = vec![0.0; MIN_SEGMENT_SAMPLES * 2 + 200]; // extends buf1
+        let mut start = 0usize;
+        let mut idx = 0usize;
+        let (tx, rx) = unbounded::<SegmentEmit>();
+
+        // First cut on buf1
+        maybe_emit_segment(&buf1, true, false, &mut start, &mut idx, 0.89, &tx);
+        assert_eq!(idx, 1);
+
+        // Second cut: buf2 represents the full resampled_buf after more audio
+        maybe_emit_segment(&buf2, true, false, &mut start, &mut idx, 0.89, &tx);
+        assert_eq!(idx, 2);
+
+        let s0 = rx.try_recv().expect("segment 0");
+        let s1 = rx.try_recv().expect("segment 1");
+        assert_eq!(s0.index, 0);
+        assert_eq!(s1.index, 1);
+        // seg 1 starts from where seg 0 ended — must be shorter than the full buf
+        assert!(s1.samples.len() < buf2.len(), "second segment is a slice, not the whole buf");
+    }
+
+    /// Segment of exactly MIN_SEGMENT_SAMPLES on a silence boundary → fires.
+    #[test]
+    fn segmentation_exact_min_boundary_fires() {
+        let buf: Vec<f32> = vec![0.0; MIN_SEGMENT_SAMPLES];
+        let mut start = 0usize;
+        let mut idx = 0usize;
+        let (tx, rx) = unbounded::<SegmentEmit>();
+        maybe_emit_segment(&buf, true, false, &mut start, &mut idx, 0.89, &tx);
+        assert_eq!(idx, 1);
+        assert!(rx.try_recv().is_ok());
     }
 
     /// Streaming finalizer with a 48 kHz stereo input must produce a
