@@ -21,7 +21,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tempfile::TempPath;
 
-use crate::audio_finalizer::{DropReason, FinalizeResult, StreamingFinalizer};
+use crate::audio_finalizer::{DropReason, FinalizeResult, SegmentEmit, StreamingFinalizer};
+use crossbeam_channel::Receiver as SegReceiver;
 
 /// Peak target ≈ -1 dBFS — leaves 1 dB of headroom so the i16 conversion
 /// can't clip even on the loudest inter-sample peaks. Matches Handy and
@@ -130,6 +131,11 @@ pub struct AudioCapture {
     /// `stop()` falls back to the legacy batch finalizer path against
     /// the canonical `samples` buffer — no recording is ever lost.
     streaming: Mutex<Option<StreamingFinalizer>>,
+    /// Segment receiver from the streaming finalizer. Stored here so
+    /// the hotkey handler can take it via `take_segment_receiver()` right
+    /// after `start()` and hand it to `SegmentTranscriber`. Cleared on
+    /// `cancel()` and when hotkey takes it; harmlessly empty in `stop()`.
+    segment_rx: Mutex<Option<SegReceiver<SegmentEmit>>>,
     /// Capture-feeder thread handle. The feeder polls `samples` and ships
     /// each new chunk to the streaming worker. Joined by `stop()` /
     /// `cancel()` after `feeder_stop` is set so it returns cleanly.
@@ -363,6 +369,7 @@ impl AudioCapture {
             watchdog_handle: Mutex::new(None),
             shutdown_watchdog: Arc::new(AtomicBool::new(false)),
             streaming: Mutex::new(None),
+            segment_rx: Mutex::new(None),
             feeder: Mutex::new(None),
             feeder_stop: Arc::new(AtomicBool::new(false)),
             feeder_cursor: Arc::new(AtomicUsize::new(0)),
@@ -614,6 +621,15 @@ impl AudioCapture {
         self.device_lost.swap(false, Ordering::SeqCst)
     }
 
+    /// Take the segment receiver produced by the most recent `start()`.
+    /// Returns `None` if no recording is in progress or the receiver was
+    /// already taken. The caller (hotkey.rs) passes this to
+    /// `SegmentTranscriber::start` so segments are transcribed concurrently
+    /// with recording rather than all at once after release.
+    pub fn take_segment_receiver(&self) -> Option<SegReceiver<SegmentEmit>> {
+        self.segment_rx.lock().take()
+    }
+
     pub fn start(&self) -> anyhow::Result<()> {
         self.samples.lock().clear();
         self.level.store(0_f32.to_bits(), Ordering::Relaxed);
@@ -716,8 +732,9 @@ impl AudioCapture {
         // state and consumes chunks off the cpal callback's critical
         // path. The feeder polls `samples` every ~10 ms and ships any
         // newly-appended tail to the worker.
-        let finalizer = StreamingFinalizer::start(src_rate, src_channels, NORMALIZE_PEAK);
+        let (finalizer, seg_rx) = StreamingFinalizer::start(src_rate, src_channels, NORMALIZE_PEAK);
         *self.streaming.lock() = Some(finalizer);
+        *self.segment_rx.lock() = Some(seg_rx);
 
         let feeder_handle = self.spawn_feeder();
         *self.feeder.lock() = Some(feeder_handle);
@@ -885,6 +902,8 @@ impl AudioCapture {
         }
         let streaming = self.streaming.lock().take();
         drop(streaming);
+        // Drop any un-taken segment receiver — no segments to transcribe on cancel.
+        *self.segment_rx.lock() = None;
 
         // Device-lost: the underlying cpal stream is broken — drop it
         // immediately so the next start() opens a fresh stream against

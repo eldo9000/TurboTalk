@@ -726,6 +726,144 @@ pub fn run_raw(wav: &Path) -> anyhow::Result<String> {
     worker.transcribe(wav)
 }
 
+// ── Segment transcription queue (TASK-54B) ───────────────────────────────────
+
+/// Write a slice of 16 kHz mono f32 samples to a temporary WAV file.
+fn write_segment_wav(
+    samples: &[f32],
+    seg_index: usize,
+) -> anyhow::Result<std::path::PathBuf> {
+    let path = std::env::temp_dir().join(format!("turbotalk-seg-{}.wav", seg_index));
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut writer = hound::WavWriter::create(&path, spec)?;
+    for &s in samples {
+        writer.write_sample(s)?;
+    }
+    writer.finalize()?;
+    Ok(path)
+}
+
+/// Transcribe one segment: write WAV, call `run_raw` with one retry on
+/// failure, clean up the temp file. Returns an empty string on final failure
+/// so the assembly step can still produce a partial transcript.
+fn transcribe_one_segment(seg: &crate::audio_finalizer::SegmentEmit) -> String {
+    let wav_path = match write_segment_wav(&seg.samples, seg.index) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                "[seg-transcriber] WAV write failed for segment {}: {} — skipping",
+                seg.index,
+                e
+            );
+            return String::new();
+        }
+    };
+
+    let result = run_raw(&wav_path).or_else(|e| {
+        tracing::warn!(
+            "[seg-transcriber] segment {} first attempt failed: {} — retrying once",
+            seg.index,
+            e
+        );
+        run_raw(&wav_path)
+    });
+
+    let _ = std::fs::remove_file(&wav_path);
+
+    match result {
+        Ok(text) => {
+            tracing::info!(
+                "[seg-transcriber] segment {} → {:?}",
+                seg.index,
+                text
+            );
+            text
+        }
+        Err(e) => {
+            tracing::warn!(
+                "[seg-transcriber] segment {} failed after retry: {} — using empty",
+                seg.index,
+                e
+            );
+            String::new()
+        }
+    }
+}
+
+fn seg_transcriber_worker(
+    seg_rx: crossbeam_channel::Receiver<crate::audio_finalizer::SegmentEmit>,
+    results: std::sync::Arc<Mutex<std::collections::BTreeMap<usize, String>>>,
+) {
+    while let Ok(seg) = seg_rx.recv() {
+        tracing::info!(
+            "[seg-transcriber] transcribing segment {} ({} samples = {:.1}s)",
+            seg.index,
+            seg.samples.len(),
+            seg.samples.len() as f32 / 16_000.0,
+        );
+        let text = transcribe_one_segment(&seg);
+        results
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(seg.index, text);
+    }
+    tracing::info!("[seg-transcriber] channel closed — all mid-recording segments done");
+}
+
+/// Concurrent segment transcription queue. Spawned right after recording
+/// starts and processes each `SegmentEmit` from the finalizer as it arrives,
+/// so that by key-release only the final tail remains to transcribe.
+///
+/// `join_segments()` blocks until the channel closes and all transcriptions
+/// are complete, then returns the assembled text in segment-index order.
+pub struct SegmentTranscriber {
+    worker: Option<std::thread::JoinHandle<()>>,
+    results: std::sync::Arc<Mutex<std::collections::BTreeMap<usize, String>>>,
+}
+
+impl SegmentTranscriber {
+    /// Spawn the background transcription thread. Pass the `Receiver` from
+    /// `AudioCapture::take_segment_receiver()` immediately after `start()`.
+    pub fn start(
+        seg_rx: crossbeam_channel::Receiver<crate::audio_finalizer::SegmentEmit>,
+    ) -> Self {
+        let results = std::sync::Arc::new(Mutex::new(std::collections::BTreeMap::new()));
+        let results_clone = results.clone();
+        let worker = std::thread::Builder::new()
+            .name("turbotalk-seg-transcriber".into())
+            .spawn(move || seg_transcriber_worker(seg_rx, results_clone))
+            .expect("spawn segment transcriber worker");
+        Self {
+            worker: Some(worker),
+            results,
+        }
+    }
+
+    /// Wait for all in-flight transcriptions and return the assembled text.
+    /// Non-empty segment texts are joined with single spaces in segment-index
+    /// order. Failed segments (stored as empty strings) are silently skipped
+    /// — the batch fallback in `stop()` handles the recovery path.
+    ///
+    /// **Must be called after `StreamingFinalizer::finish()`** so the segment
+    /// channel is closed and the worker thread can exit cleanly.
+    pub fn join_segments(mut self) -> String {
+        if let Some(h) = self.worker.take() {
+            let _ = h.join();
+        }
+        let map = self.results.lock().unwrap_or_else(|e| e.into_inner());
+        map.values()
+            .filter(|t| !t.is_empty())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Path-traversal hardening tests for TASK-2.
@@ -882,6 +1020,59 @@ mod tests {
             "worker construction must reject a model path outside the models dir"
         );
     }
+
+    // ── TASK-54B: SegmentTranscriber assembly ─────────────────────────────
+
+    /// BTreeMap naturally yields values in key order — verify the assembly
+    /// logic preserves segment order regardless of insertion order.
+    #[test]
+    fn segment_assembly_preserves_index_order() {
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(2usize, "third".to_string());
+        map.insert(0usize, "first".to_string());
+        map.insert(1usize, "second".to_string());
+        let result: String = map
+            .values()
+            .filter(|t| !t.is_empty())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(result, "first second third");
+    }
+
+    /// Failed segments are stored as empty strings and must be silently
+    /// filtered so a single bad segment doesn't produce a double-space gap.
+    #[test]
+    fn segment_assembly_filters_empty_slots() {
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(0usize, "hello".to_string());
+        map.insert(1usize, String::new()); // failed transcription
+        map.insert(2usize, "world".to_string());
+        let result: String = map
+            .values()
+            .filter(|t| !t.is_empty())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(result, "hello world");
+    }
+
+    /// write_segment_wav round-trips: the produced WAV is readable by hound
+    /// and contains the same number of samples as the input slice.
+    #[test]
+    fn write_segment_wav_round_trips() {
+        let samples: Vec<f32> = (0..1600).map(|i| (i as f32 / 1600.0) * 0.5).collect();
+        let path = write_segment_wav(&samples, 999).expect("write ok");
+        let reader = hound::WavReader::open(&path).expect("read ok");
+        let spec = reader.spec();
+        assert_eq!(spec.channels, 1);
+        assert_eq!(spec.sample_rate, 16_000);
+        assert_eq!(spec.bits_per_sample, 32);
+        assert_eq!(reader.duration(), samples.len() as u32);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ── TASK-47: TranscriptionWorker::abort() no-op test ─────────────────
 
     // ----------------------------------------------------------------------
     // TASK-47: TranscriptionWorker::abort() no-op test.
