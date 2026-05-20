@@ -75,6 +75,22 @@
 
   let aboutOpen    = $state(false);
   let aboutClosing = $state(false);
+  let noModelPopupOpen    = $state(false);
+  let noModelPopupClosing = $state(false);
+
+  function closeNoModelPopup() {
+    noModelPopupClosing = true;
+    setTimeout(() => { noModelPopupOpen = false; noModelPopupClosing = false; }, 250);
+  }
+
+  function tryStartRecording() {
+    if (!cfgModel) {
+      noModelPopupOpen = true;
+      noModelPopupClosing = false;
+      return;
+    }
+    commands.startRecording();
+  }
   let resetOpen    = $state(false);
   let resetClosing = $state(false);
   let resetBusy    = $state(false);
@@ -108,6 +124,16 @@
     showOnboarding = true;
     unsupportedPlatformDismissed = false;
     await recheckReadiness();
+  }
+
+  async function completeOnboarding() {
+    await commands.clearForceOnboarding();
+    showOnboarding = false;
+    cfgLaunchLogin = await commands.getLaunchAtLogin();
+    const res = await commands.prewarmModel();
+    if (res.status === 'error') {
+      console.warn('[onboarding] prewarm skipped:', res.error);
+    }
   }
 
   // History
@@ -258,7 +284,9 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgHistoryAutoDelete = $state('10d');
   let cfgSaveHistory       = $state(true);
   let cfgShowOverlay       = $state(true);
+  let cfgOverlayPosition   = $state('bottom');
   let cfgTranscriptIndicator = $state(false);
+  let cfgCursorDotIndicator  = $state(false);
   let cfgSoundOnStart      = $state(false);
   let cfgSoundOnFinish     = $state(false);
   let cfgSoundOnCancel     = $state(false);
@@ -329,7 +357,10 @@ Reply with only the single word, lowercase, no punctuation.
     const targetH = Math.ceil(h * zoom) + WINDOW_SIZE_SLACK;
     if (targetW === lastWindowSize.w && targetH === lastWindowSize.h) return;
     lastWindowSize = { w: targetW, h: targetH };
-    getCurrentWindow().setSize(new LogicalSize(targetW, targetH));
+    const advW = Math.ceil(WINDOW_W * 2 * zoom);
+    getCurrentWindow().setSize(new LogicalSize(targetW, targetH)).then(() => {
+      commands.repinMainWindow(advW);
+    });
   });
 
   // ── Zoom ──────────────────────────────────────────────────────────────────
@@ -375,24 +406,29 @@ Reply with only the single word, lowercase, no punctuation.
   // The default starter model. Surfaced in its own "Recommended" section
   // above the rest of the catalog so first-time users don't have to choose.
   const RECOMMENDED_MODEL = {
-    name: 'ggml-large-v3-turbo',
-    size: '1.6 GB',
-    description: 'Best accuracy for daily dictation · multilingual · fast',
-    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin',
+    name: 'ggml-large-v3-turbo-q5_0',
+    tier: 'FAST',
+    tierTag: 'cheap',
+    size: '574 MB',
+    description: 'lower RAM',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin',
   };
 
   const MODEL_CATALOG = [
     {
-      name: 'ggml-large-v3-turbo-q5_0',
-      size: '574 MB',
-      description: 'Quantized turbo · lower accuracy, lower RAM',
-      warn: true,
-      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin',
+      name: 'ggml-large-v3-turbo',
+      tier: 'BALANCED',
+      tierTag: 'optimized',
+      size: '1.6 GB',
+      description: 'multilingual · more RAM',
+      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin',
     },
     {
       name: 'ggml-large-v3',
+      tier: 'SLOW',
+      tierTag: 'accurate',
       size: '3.1 GB',
-      description: 'Maximum accuracy · multilingual · slowest',
+      description: 'multilingual · slowest',
       url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin',
     },
   ];
@@ -619,7 +655,9 @@ Reply with only the single word, lowercase, no punctuation.
     cfgHistoryAutoDelete = cfg.history_auto_delete             ?? '10d';
     cfgSaveHistory       = cfg.save_history                    ?? true;
     cfgShowOverlay       = cfg.show_overlay                    ?? true;
+    cfgOverlayPosition   = cfg.overlay_position                ?? 'bottom';
     cfgTranscriptIndicator = cfg.transcript_size_indicator     ?? false;
+    cfgCursorDotIndicator  = cfg.cursor_dot_indicator          ?? false;
     cfgSoundOnStart      = cfg.sound_on_start                  ?? false;
     cfgSoundOnFinish     = cfg.sound_on_finish                  ?? false;
     cfgSoundOnCancel     = cfg.sound_on_cancel                  ?? false;
@@ -644,7 +682,9 @@ Reply with only the single word, lowercase, no punctuation.
     cfg.history_auto_delete           = cfgHistoryAutoDelete;
     cfg.save_history                  = cfgSaveHistory;
     cfg.show_overlay                  = cfgShowOverlay;
+    cfg.overlay_position              = cfgOverlayPosition;
     cfg.transcript_size_indicator     = cfgTranscriptIndicator;
+    cfg.cursor_dot_indicator          = cfgCursorDotIndicator;
     cfg.sound_on_start                = cfgSoundOnStart;
     cfg.sound_on_finish               = cfgSoundOnFinish;
     cfg.sound_on_cancel               = cfgSoundOnCancel;
@@ -790,7 +830,12 @@ Reply with only the single word, lowercase, no punctuation.
     }).then(u => unlisteners.push(u));
     listen('download-progress', (e) => {
       const { name, pct } = e.payload;
-      downloadProgress = { ...downloadProgress, [name]: pct };
+      if (pct >= 100) {
+        const { [name]: _removed, ...rest } = downloadProgress;
+        downloadProgress = rest;
+      } else {
+        downloadProgress = { ...downloadProgress, [name]: pct };
+      }
     }).then(u => unlisteners.push(u));
     listen('transcript',  (e) => {
       recording = false;
@@ -958,7 +1003,7 @@ Reply with only the single word, lowercase, no punctuation.
        a permission between sessions). -->
   {#if showOnboarding}
     <Onboarding
-      onComplete={async () => { commands.clearForceOnboarding(); showOnboarding = false; cfgLaunchLogin = await commands.getLaunchAtLogin(); }}
+      onComplete={completeOnboarding}
       onUnsupportedContinue={() => {
         unsupportedPlatformDismissed = true;
         showOnboarding = false;
@@ -1007,6 +1052,20 @@ Reply with only the single word, lowercase, no punctuation.
 
   </div>
 
+  <!-- No-model banner — unmissable red bar above all tab content. Only
+       hidden when a whisper model is selected. -->
+  {#if !cfgModel && !showOnboarding}
+    <button
+      onclick={() => switchTab('models')}
+      class="tt-no-model-banner"
+      title="Open Models tab"
+    >
+      <span class="tt-no-model-banner-icon">⚠</span>
+      <span class="tt-no-model-banner-msg">Install model before use.</span>
+      <span class="tt-no-model-banner-cta">Open Models →</span>
+    </button>
+  {/if}
+
   <!-- History tab -->
   {#if activeTab === 'history'}
     <div class="tt-history flex-1 min-h-0 flex flex-col">
@@ -1052,7 +1111,7 @@ Reply with only the single word, lowercase, no punctuation.
       {/if}
       <div class="tt-history-actions">
         <button
-          onclick={() => recording ? commands.stopRecording() : commands.startRecording()}
+          onclick={() => recording ? commands.stopRecording() : tryStartRecording()}
           disabled={transcribing}
           title="Record into the history list. Transcript stays here — won't paste into another app."
           class="tt-btn tt-btn-icon"
@@ -1083,11 +1142,13 @@ Reply with only the single word, lowercase, no punctuation.
     <div class="tt-model-row group">
       <div class="tt-row-info">
         <div class="tt-model-name-row">
-          <span class="tt-model-name tt-model-name-sm">{m.name}</span>
-          <span class="tt-model-size">{m.size}</span>
+          <span class="tt-tier-name">{m.tier}</span>
+          <span class="tt-tier-tag">{m.tierTag}</span>
+          <span class="tt-model-desc" class:tt-warn={m.warn}>{m.description}</span>
         </div>
-        <p class="tt-model-desc" class:tt-warn={m.warn}>{m.description}</p>
+        <span class="tt-model-id">{m.name}</span>
       </div>
+      <span class="tt-model-size">{m.size}</span>
       {#if isDownloading}
         <span class="tt-model-pct">{pct}%</span>
         <button onclick={() => commands.cancelDownload(m.name)} class="tt-btn tt-btn-danger">Cancel</button>
@@ -1125,11 +1186,13 @@ Reply with only the single word, lowercase, no punctuation.
             <div class="tt-model-card-body">
               <div class="tt-row-info">
                 <div class="tt-model-name-row">
-                  <span class="tt-model-name">{RECOMMENDED_MODEL.name}</span>
-                  <span class="tt-model-size">{RECOMMENDED_MODEL.size}</span>
+                  <span class="tt-tier-name">{RECOMMENDED_MODEL.tier}</span>
+                  <span class="tt-tier-tag">{RECOMMENDED_MODEL.tierTag}</span>
+                  <span class="tt-desc">{RECOMMENDED_MODEL.description}</span>
                 </div>
-                <p class="tt-desc">{RECOMMENDED_MODEL.description}</p>
+                <span class="tt-model-id">{RECOMMENDED_MODEL.name}</span>
               </div>
+              <span class="tt-model-size">{RECOMMENDED_MODEL.size}</span>
               {#if rmIsDownloading}
                 <span class="tt-model-pct tt-model-pct-lg">{rmPct}%</span>
                 <button onclick={() => commands.cancelDownload(RECOMMENDED_MODEL.name)} class="tt-btn tt-btn-md tt-btn-danger">Cancel</button>
@@ -1498,6 +1561,27 @@ Reply with only the single word, lowercase, no punctuation.
             </div>
           </div>
           <div class="tt-row tt-row-field">
+            <span class="tt-lbl">Overlay Position</span>
+            <div class="tt-multi">
+              <button
+                onclick={() => { if (cfgShowOverlay) { cfgOverlayPosition = 'bottom'; saveSettings(); } }}
+                class="tt-multi-btn" class:tt-multi-on={cfgOverlayPosition === 'bottom'}
+                disabled={!cfgShowOverlay}>Bottom</button>
+              <button
+                onclick={() => { if (cfgShowOverlay) { cfgOverlayPosition = 'top'; saveSettings(); } }}
+                class="tt-multi-btn" class:tt-multi-on={cfgOverlayPosition === 'top'}
+                disabled={!cfgShowOverlay}>Top</button>
+            </div>
+          </div>
+          <div class="tt-row tt-row-field">
+            <span class="tt-lbl">Cursor Dot</span>
+            <div class="tt-multi">
+              <button
+                onclick={() => { cfgCursorDotIndicator = !cfgCursorDotIndicator; saveSettings(); }}
+                class="tt-multi-btn" class:tt-multi-on={cfgCursorDotIndicator}>Follow Cursor</button>
+            </div>
+          </div>
+          <div class="tt-row tt-row-field">
             <span class="tt-lbl">Audio Notify</span>
             <div class="tt-multi">
               <button
@@ -1593,6 +1677,58 @@ Reply with only the single word, lowercase, no punctuation.
             <span class="text-[10px] text-[var(--text-muted)]">Powered by</span>
             <span class="text-[10px] text-[var(--text-secondary)]">whisper.cpp · Ollama</span>
           </div>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- No-model popup — shown when the user presses Record with no whisper
+       model selected. Yellow, unmissable, click anywhere or Escape to
+       dismiss; the primary CTA jumps straight to the Models tab. -->
+  {#if noModelPopupOpen}
+    <div
+      class="about-backdrop {noModelPopupClosing ? 'about-backdrop-out' : 'about-backdrop-in'}"
+      onclick={(event) => {
+        if (event.target === event.currentTarget) {
+          closeNoModelPopup();
+        }
+      }}
+      onkeydown={(event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          closeNoModelPopup();
+        }
+      }}
+      role="button"
+      tabindex="0"
+      aria-label="Close no-model alert"
+    >
+      <div
+        class="about-card no-model-card {noModelPopupClosing ? 'about-card-out' : 'about-card-in'}"
+        role="dialog"
+        aria-modal="true"
+        tabindex="-1"
+      >
+        <div class="flex flex-col items-center gap-2 pb-3">
+          <span class="no-model-icon">⚠</span>
+          <span class="no-model-title">NO MODEL INSTALLED</span>
+          <p class="no-model-body">
+            TurboTalk needs a whisper model before it can transcribe. Download one to get started.
+          </p>
+        </div>
+        <div class="flex flex-col gap-2 pt-2">
+          <button
+            onclick={() => { closeNoModelPopup(); switchTab('models'); }}
+            class="no-model-cta"
+          >
+            Open Models
+          </button>
+          <button
+            onclick={closeNoModelPopup}
+            class="no-model-dismiss"
+          >
+            Dismiss
+          </button>
         </div>
       </div>
     </div>
@@ -2061,21 +2197,33 @@ Reply with only the single word, lowercase, no punctuation.
     gap: 6px;
     min-width: 0;
   }
-  .tt-model-name {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  .tt-tier-name {
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 700;
+    letter-spacing: 0.05em;
     color: var(--text-primary);
   }
-  .tt-model-name-sm { font-size: 11px; font-weight: 500; }
+  .tt-tier-tag {
+    font-size: 10px;
+    color: var(--text-secondary, var(--text-muted));
+    opacity: 0.8;
+  }
   .tt-model-size {
     font-size: 11px;
     color: var(--text-muted);
+    flex-shrink: 0;
   }
   .tt-model-desc {
     font-size: 10.5px;
     color: var(--text-muted);
     margin-top: 1px;
+  }
+  .tt-model-id {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 9px;
+    color: var(--text-muted);
+    opacity: 0.5;
+    margin-top: 2px;
   }
   .tt-model-pct {
     flex-shrink: 0;
@@ -2269,4 +2417,95 @@ Reply with only the single word, lowercase, no punctuation.
     flex-shrink: 0;
   }
   /* .tt-btn-recording lives in src/app.css alongside the rest of the .tt-btn family. */
+
+  /* ── No-model red banner ─────────────────────────────────────────────── */
+  .tt-no-model-banner {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 9px 14px;
+    background: #dc2626;
+    color: #fff;
+    border: none;
+    border-top: 1px solid color-mix(in srgb, #000 25%, #dc2626);
+    border-bottom: 1px solid color-mix(in srgb, #000 25%, #dc2626);
+    cursor: pointer;
+    text-align: left;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    transition: background 0.15s ease;
+  }
+  .tt-no-model-banner:hover { background: #b91c1c; }
+  .tt-no-model-banner-icon {
+    flex-shrink: 0;
+    font-size: 14px;
+    line-height: 1;
+  }
+  .tt-no-model-banner-msg {
+    flex: 1;
+    line-height: 1.2;
+  }
+  .tt-no-model-banner-cta {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 500;
+    opacity: 0.9;
+  }
+
+  /* ── No-model yellow popup ───────────────────────────────────────────── */
+  .no-model-card {
+    width: 280px;
+    background: #facc15;
+    border: 2px solid #ca8a04;
+    color: #422006;
+    box-shadow: 0 24px 48px rgba(0,0,0,0.6), 0 4px 12px rgba(202,138,4,0.4);
+  }
+  .no-model-icon {
+    font-size: 32px;
+    line-height: 1;
+    color: #422006;
+  }
+  .no-model-title {
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    color: #422006;
+    text-align: center;
+  }
+  .no-model-body {
+    font-size: 12px;
+    line-height: 1.4;
+    color: #422006;
+    text-align: center;
+    margin-top: 2px;
+  }
+  .no-model-cta {
+    width: 100%;
+    padding: 8px 12px;
+    background: #422006;
+    color: #facc15;
+    border: none;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  .no-model-cta:hover { background: #1c1207; }
+  .no-model-dismiss {
+    width: 100%;
+    padding: 6px 12px;
+    background: transparent;
+    color: #422006;
+    border: 1px solid color-mix(in srgb, #422006 30%, transparent);
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  .no-model-dismiss:hover { background: color-mix(in srgb, #422006 10%, transparent); }
 </style>

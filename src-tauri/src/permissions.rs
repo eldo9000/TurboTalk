@@ -306,6 +306,46 @@ pub fn restart_app(app: tauri::AppHandle) {
     app.restart();
 }
 
+/// Reset the TCC permission entry for Turbo Talk so the onboarding wizard
+/// can clear stale entries left by a previous install. After this call the
+/// bundle is no longer in the Privacy list; the caller should immediately
+/// re-run the relevant registration path (IOHIDManager open for input
+/// monitoring, AXIsProcessTrustedWithOptions for accessibility) so macOS
+/// re-adds a fresh, correctly-bound entry.
+///
+/// `service` must be one of: "accessibility" | "input_monitoring"
+#[tauri::command]
+#[specta::specta]
+pub fn reset_tcc_entry(service: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let tcc_service = match service.as_str() {
+            "accessibility" => "Accessibility",
+            "input_monitoring" => "ListenEvent",
+            other => return Err(format!("unknown permission service: {other}")),
+        };
+        let status = std::process::Command::new("tccutil")
+            .arg("reset")
+            .arg(tcc_service)
+            .arg("io.librewin.turbotalk")
+            .status()
+            .map_err(|e| format!("tccutil failed to launch: {e}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "tccutil reset exited with code {}",
+                status.code().unwrap_or(-1)
+            ))
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = service;
+        Err("Permission reset only supported on macOS".into())
+    }
+}
+
 /// Trigger the native macOS Accessibility prompt. Side-effect: auto-adds
 /// the app to the Privacy & Security → Accessibility list (toggled off) so
 /// the user has something to enable. Called from the onboarding flow on
