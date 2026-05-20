@@ -285,8 +285,9 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgSaveHistory       = $state(true);
   let cfgShowOverlay       = $state(true);
   let cfgOverlayPosition   = $state('bottom');
-  let cfgTranscriptIndicator = $state(false);
-  let cfgCursorDotIndicator  = $state(false);
+  let cfgTranscriptIndicator  = $state(false);
+  let cfgLengthIndicatorUnit  = $state('lines'); // 'lines' | 'paragraphs'
+  let cfgCursorDotIndicator   = $state(false);
   let cfgSoundOnStart      = $state(false);
   let cfgSoundOnFinish     = $state(false);
   let cfgSoundOnCancel     = $state(false);
@@ -656,8 +657,9 @@ Reply with only the single word, lowercase, no punctuation.
     cfgSaveHistory       = cfg.save_history                    ?? true;
     cfgShowOverlay       = cfg.show_overlay                    ?? true;
     cfgOverlayPosition   = cfg.overlay_position                ?? 'bottom';
-    cfgTranscriptIndicator = cfg.transcript_size_indicator     ?? false;
-    cfgCursorDotIndicator  = cfg.cursor_dot_indicator          ?? false;
+    cfgTranscriptIndicator  = cfg.transcript_size_indicator     ?? false;
+    cfgLengthIndicatorUnit  = cfg.length_indicator_unit        ?? 'lines';
+    cfgCursorDotIndicator   = cfg.cursor_dot_indicator         ?? false;
     cfgSoundOnStart      = cfg.sound_on_start                  ?? false;
     cfgSoundOnFinish     = cfg.sound_on_finish                  ?? false;
     cfgSoundOnCancel     = cfg.sound_on_cancel                  ?? false;
@@ -684,6 +686,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfg.show_overlay                  = cfgShowOverlay;
     cfg.overlay_position              = cfgOverlayPosition;
     cfg.transcript_size_indicator     = cfgTranscriptIndicator;
+    cfg.length_indicator_unit         = cfgLengthIndicatorUnit;
     cfg.cursor_dot_indicator          = cfgCursorDotIndicator;
     cfg.sound_on_start                = cfgSoundOnStart;
     cfg.sound_on_finish               = cfgSoundOnFinish;
@@ -1557,7 +1560,20 @@ Reply with only the single word, lowercase, no punctuation.
               <button
                 onclick={() => { if (cfgShowOverlay) { cfgTranscriptIndicator = !cfgTranscriptIndicator; saveSettings(); } }}
                 class="tt-multi-btn" class:tt-multi-on={cfgTranscriptIndicator}
-                disabled={!cfgShowOverlay}>Recording Length</button>
+                disabled={!cfgShowOverlay}>Length Counter</button>
+            </div>
+          </div>
+          <div class="tt-row tt-row-field">
+            <span class="tt-lbl">Length Unit</span>
+            <div class="tt-multi">
+              <button
+                onclick={() => { if (cfgTranscriptIndicator && cfgShowOverlay) { cfgLengthIndicatorUnit = 'lines'; saveSettings(); } }}
+                class="tt-multi-btn" class:tt-multi-on={cfgLengthIndicatorUnit === 'lines'}
+                disabled={!cfgTranscriptIndicator || !cfgShowOverlay}>Lines</button>
+              <button
+                onclick={() => { if (cfgTranscriptIndicator && cfgShowOverlay) { cfgLengthIndicatorUnit = 'paragraphs'; saveSettings(); } }}
+                class="tt-multi-btn" class:tt-multi-on={cfgLengthIndicatorUnit === 'paragraphs'}
+                disabled={!cfgTranscriptIndicator || !cfgShowOverlay}>Paragraphs</button>
             </div>
           </div>
           <div class="tt-row tt-row-field">

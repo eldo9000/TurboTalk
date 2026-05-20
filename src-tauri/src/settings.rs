@@ -45,11 +45,14 @@ pub struct Config {
     /// Anything else is treated as "bottom" by the positioning code.
     #[serde(default = "default_overlay_position")]
     pub overlay_position: String,
-    /// Whether the recording overlay shows a transcript-size indicator (a visual
-    /// estimate of how long and how much talking the user has been doing — driven
-    /// by VAD voiced-frame counts, not real transcription). Defaults off.
+    /// Whether the recording overlay shows a length counter to the right of the
+    /// pill — a VAD-derived estimate of how much has been said. Defaults off.
     #[serde(default)]
     pub transcript_size_indicator: bool,
+    /// Unit for the length counter: "lines" (default, ~11 words/line) or
+    /// "paragraphs" (~80 words/paragraph).
+    #[serde(default = "default_length_indicator_unit")]
+    pub length_indicator_unit: String,
     /// Whether to show a small red dot near the cursor during recording.
     /// The dot follows the mouse pointer and appears bottom-right of the hotspot.
     /// Defaults off.
@@ -82,6 +85,9 @@ fn default_history_auto_delete() -> String {
 }
 fn default_overlay_position() -> String {
     "bottom".into()
+}
+fn default_length_indicator_unit() -> String {
+    "lines".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
@@ -247,6 +253,7 @@ impl Default for Config {
             show_overlay: true,
             overlay_position: default_overlay_position(),
             transcript_size_indicator: false,
+            length_indicator_unit: default_length_indicator_unit(),
             cursor_dot_indicator: false,
             sound_on_start: true,
             sound_on_finish: false,

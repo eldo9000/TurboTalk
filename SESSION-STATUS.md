@@ -1,7 +1,9 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-05-20
-**Current state:** TASK-54 (streaming chunked transcription) fully landed — all three parts committed and pushed. TASK-55 (elapsed-time ticker on overlay) and TASK-56 (flash-to-warn pulse animation) also landed. App now transcribes mid-recording silence-boundary segments concurrently while the user is still speaking, so only the tail WAV remains to transcribe at key-release. Overlay shows `~Nw · M:SS` ticker during recording and flashes the pill border amber (100 w) then red glow (300 w) to signal long recordings. 91/91 tests green.
+**Current state:** Length indicator redesigned (TASK-57). The lorem ipsum word pills were replaced with a lines/paragraphs counter badge positioned to the right of the recording overlay pill. The badge shows `— / N lines / N paragraphs` derived from VAD-estimated word count. Unit is user-configurable in Settings (Lines default, Paragraphs option). Feature is gated by the existing `transcript_size_indicator` config flag; a new `length_indicator_unit` config field was added.
+
+Previous state (2026-05-20): TASK-54 (streaming chunked transcription) fully landed — all three parts committed and pushed. TASK-55 (elapsed-time ticker on overlay) and TASK-56 (flash-to-warn pulse animation) also landed. App now transcribes mid-recording silence-boundary segments concurrently while the user is still speaking, so only the tail WAV remains to transcribe at key-release. Overlay shows `~Nw · M:SS` ticker during recording and flashes the pill border amber (100 w) then red glow (300 w) to signal long recordings. 91/91 tests green.
 
 Previous state (2026-05-19): Long-recording failure diagnosed and the immediate bug fixed. A ~3 min dictation (job 251, 175 s of dense speech) failed at exactly 30.047 s with `"error sending request"`. Root cause: reqwest's **blocking** client defaults to a 30 s total request timeout; `transcribe.rs` used `Client::new()` and inherited it silently. Fix shipped: explicit 120 s timeout on the transcribe client. TASK-54 plan filed.
 

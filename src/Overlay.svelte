@@ -51,32 +51,28 @@
   const SPEECH_THRESHOLD = 0.008;
   let speechFrames = 0;
 
-  // Transcript size indicator: lorem-ipsum-shaped pills that accumulate above
-  // the main pill while recording, giving a visual estimate of how much has
-  // been said. Driven by VAD-derived wordCount increments — no real
-  // transcription. Pills lay out inline (wrap to new rows) so the result reads
-  // as a paragraph rather than a stack of full-width bars.
+  // Length counter shown to the right of the pill during recording.
+  // VAD-derived wordCount drives the estimate — no real transcription.
   let indicatorEnabled = $state(false);
-  // Overlay placement on the screen: 'bottom' (default) or 'top'. Mirrors
-  // the Rust-side `overlay_position` setting. Drives indicator-pillbox CSS:
-  // bottom-anchored pill → pillbox grows upward (above pill);
-  // top-anchored pill → pillbox grows downward (below pill) so it doesn't
-  // disappear off the top of the screen.
-  let overlayPosition = $state('bottom');
-  let wordPills = $state([]); // [{id, w}] where w is pixel width
-  let nextPillId = 0;
+  let indicatorUnit    = $state('lines'); // 'lines' | 'paragraphs'
+  let overlayPosition  = $state('bottom');
 
-  // Empirical English-word length distribution, mapped to pixel widths.
-  // ~30% short (1–3 letters), ~45% medium (4–6), ~20% long (7–10), ~5% very
-  // long (11+). Width = letters × ~4 px, with mild jitter so identical-length
-  // shapes don't visually repeat.
-  function makePillWidth() {
-    const r = Math.random();
-    if (r < 0.30) return 8  + Math.random() * 7;   //  8–15 px (short)
-    if (r < 0.75) return 16 + Math.random() * 14;  // 16–30 px (medium)
-    if (r < 0.95) return 31 + Math.random() * 14;  // 31–45 px (long)
-    return 46 + Math.random() * 12;                // 46–58 px (very long)
-  }
+  const WORDS_PER_LINE = 11;
+  const WORDS_PER_PARA = 80;
+
+  let indicatorCount = $derived(
+    indicatorUnit === 'paragraphs'
+      ? Math.round(wordCount / WORDS_PER_PARA)
+      : Math.round(wordCount / WORDS_PER_LINE)
+  );
+
+  let indicatorLabel = $derived(
+    indicatorCount === 0
+      ? '—'
+      : indicatorUnit === 'paragraphs'
+        ? (indicatorCount === 1 ? '1 paragraph' : `${indicatorCount} paragraphs`)
+        : (indicatorCount === 1 ? '1 line' : `${indicatorCount} lines`)
+  );
 
   const CANVAS_W   = 140; // CSS pixels
   const CANVAS_H   = 28;
@@ -125,7 +121,8 @@
     try {
       const cfg = await commands.getConfig();
       indicatorEnabled = cfg.transcript_size_indicator ?? false;
-      overlayPosition = cfg.overlay_position ?? 'bottom';
+      indicatorUnit    = cfg.length_indicator_unit ?? 'lines';
+      overlayPosition  = cfg.overlay_position ?? 'bottom';
     } catch (_) { /* keep defaults */ }
 
     // Window placement is owned entirely by the Rust side — see
@@ -172,7 +169,6 @@
       levels = Array(HISTORY).fill(0);
       speechFrames = 0;
       wordCount = 0;
-      wordPills = [];
       startElapsed();
       mode = 'arming';
       draw();
@@ -191,7 +187,6 @@
       levels = Array(HISTORY).fill(0);
       speechFrames = 0;
       wordCount = 0;
-      wordPills = [];
       startElapsed();
       mode = 'recording';
       draw();
@@ -267,17 +262,6 @@
         speechFrames++;
         const newCount = Math.round(speechFrames * 0.05 * 140 / 60);
         if (newCount > wordCount) {
-          if (indicatorEnabled) {
-            // One pill per estimated word increment. Width drawn from an
-            // English-word-length distribution so rows wrap as paragraph-like
-            // text rather than identical full-width bars.
-            const delta = newCount - wordCount;
-            const newPills = [];
-            for (let i = 0; i < delta; i++) {
-              newPills.push({ id: nextPillId++, w: makePillWidth() });
-            }
-            wordPills = [...wordPills, ...newPills];
-          }
           wordCount = newCount;
         }
       }
@@ -285,10 +269,9 @@
     }).then(u => uns.push(u));
 
     listen('config-update', (e) => {
-      const next = e.payload?.transcript_size_indicator ?? false;
-      indicatorEnabled = next;
-      if (!next) wordPills = [];
-      overlayPosition = e.payload?.overlay_position ?? 'bottom';
+      indicatorEnabled = e.payload?.transcript_size_indicator ?? false;
+      indicatorUnit    = e.payload?.length_indicator_unit ?? 'lines';
+      overlayPosition  = e.payload?.overlay_position ?? 'bottom';
       // Rust repositions the window on save; refresh hoverZone so peek-
       // through detection picks up the new frame.
       setTimeout(() => { refreshHoverZone(); }, 200);
@@ -379,58 +362,26 @@
 
   canvas { display: block; }
 
-  /* Transcript size indicator: lorem-ipsum-style word shapes laid out inline,
-     wrapping to new rows. Absolutely positioned so growth is upward without
-     shifting the main pill. align-content: flex-end keeps the newest row
-     pinned to the bottom; older rows clip out the top via overflow hidden. */
-  .indicator-pillbox {
+  /* Length counter badge — sits to the right of the pill, vertically centred. */
+  .line-counter {
     position: absolute;
-    bottom: 100%;
-    left: 50%;
-    transform: translateX(-50%);
-    margin-bottom: 8px;
-    width: 240px;
-    max-height: 180px;
-    overflow: hidden;
+    left: calc(100% + 10px);
+    top: 50%;
+    transform: translateY(-50%);
+    white-space: nowrap;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    color: rgba(255, 255, 255, 0.65);
     background: rgba(16, 16, 16, 0.78);
     border: 1px solid rgba(255, 255, 255, 0.07);
-    border-radius: 12px;
-    padding: 5px 10px;
-    min-height: 14px;
-    display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-content: flex-end;
-    justify-content: flex-start;
-    column-gap: 3px;
-    row-gap: 4px;
-    opacity: 0;
-    transition: opacity 180ms ease-out;
-    pointer-events: none;
+    border-radius: 8px;
+    padding: 4px 9px;
     backdrop-filter: blur(12px) saturate(140%);
     -webkit-backdrop-filter: blur(12px) saturate(140%);
-    /* Soft fade at the top so clipped rows don't hard-cut. */
-    -webkit-mask-image: linear-gradient(to top, black 75%, transparent 100%);
-    mask-image: linear-gradient(to top, black 75%, transparent 100%);
-  }
-  /* Top-anchored overlay: flip the pillbox below the pill and grow downward,
-     so accumulating pills don't run off the top of the screen. The mask
-     direction inverts so the BOTTOM (overflow edge) fades out. */
-  .indicator-pillbox.top {
-    bottom: auto;
-    top: 100%;
-    margin-bottom: 0;
-    margin-top: 8px;
-    align-content: flex-start;
-    -webkit-mask-image: linear-gradient(to bottom, black 75%, transparent 100%);
-    mask-image: linear-gradient(to bottom, black 75%, transparent 100%);
-  }
-  .indicator-pillbox.show { opacity: 1; }
-  .word-line {
-    height: 5px;
-    background: rgba(255, 255, 255, 0.5);
-    border-radius: 2.5px;
-    flex-shrink: 0;
+    transition: opacity 180ms ease-out;
+    pointer-events: none;
+    user-select: none;
   }
 
 </style>
@@ -439,14 +390,10 @@
   <div class="relative">
   {#if indicatorEnabled}
     <div
-      class="indicator-pillbox"
-      class:show={mode === 'recording'}
-      class:top={overlayPosition === 'top'}
+      class="line-counter"
       style:opacity={mode === 'recording' ? (isPeeking ? 0.24 : 1) : 0}
     >
-      {#each wordPills as p (p.id)}
-        <div class="word-line" style="width: {p.w}px;"></div>
-      {/each}
+      {indicatorLabel}
     </div>
   {/if}
   <div
