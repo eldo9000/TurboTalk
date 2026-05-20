@@ -9,7 +9,7 @@
    *
    * Props:
    *   height  — Tailwind height class for the bar. Default: 'h-8'.
-   *             Use 'h-11' for apps with richer titlebar content (e.g. Ghost).
+   *             Use 'h-11' for apps with richer titlebar content.
    *
    * Usage:
    *   <Titlebar>
