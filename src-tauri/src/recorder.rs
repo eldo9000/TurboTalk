@@ -97,6 +97,15 @@ impl Recorder {
         self.capture.level()
     }
 
+    /// Take the segment receiver installed by `start()` so the caller can
+    /// hand it to `SegmentTranscriber::start()`. Returns `None` if already
+    /// taken or if recording hasn't started yet.
+    pub fn take_segment_receiver(
+        &self,
+    ) -> Option<crossbeam_channel::Receiver<crate::audio_finalizer::SegmentEmit>> {
+        self.capture.take_segment_receiver()
+    }
+
     /// Edge-triggered: true exactly once when the cpal error callback flagged
     /// the device as gone. The level-broadcast thread polls this every tick.
     pub fn device_lost(&self) -> bool {
