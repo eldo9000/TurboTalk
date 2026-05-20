@@ -15,6 +15,37 @@
   let transcribeTimer    = null;
   let transcribeTick     = $state(0); // incremented by timer to keep Svelte rendering during transcription
 
+  let recordingStart  = null;
+  let elapsedSecs     = $state(0);
+  let elapsedTimer    = null;
+
+  const WARN_SECS  = 120; // 2 min — faster pulse
+  const ALERT_SECS = 240; // 4 min — glow pulse
+
+  function fmtElapsed(s) {
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  function startElapsed() {
+    recordingStart = Date.now();
+    elapsedSecs = 0;
+    clearInterval(elapsedTimer);
+    elapsedTimer = setInterval(() => {
+      elapsedSecs = Math.floor((Date.now() - recordingStart) / 1000);
+    }, 1000);
+  }
+
+  function stopElapsed() {
+    clearInterval(elapsedTimer);
+    elapsedTimer = null;
+  }
+
+  function resetElapsed() {
+    stopElapsed();
+    elapsedSecs = 0;
+    recordingStart = null;
+  }
+
   // Each audio-level event = 50ms. Frames above threshold = speech time.
   // At 140 WPM: words ≈ speech_seconds * 140 / 60
   const SPEECH_THRESHOLD = 0.008;
@@ -142,6 +173,7 @@
       speechFrames = 0;
       wordCount = 0;
       wordPills = [];
+      startElapsed();
       mode = 'arming';
       draw();
       setTimeout(() => { refreshHoverZone(); }, 200);
@@ -149,6 +181,7 @@
 
     listen('ptt-arm-failed', () => {
       clearInterval(transcribeTimer);
+      resetElapsed();
       mode = 'error';
       draw();
       setTimeout(() => { mode = 'idle'; }, 2500);
@@ -159,6 +192,7 @@
       speechFrames = 0;
       wordCount = 0;
       wordPills = [];
+      startElapsed();
       mode = 'recording';
       draw();
       // Backend has just repositioned the window onto the cursor's monitor
@@ -170,6 +204,7 @@
 
     listen('ptt-up', () => {
       mode = 'transcribing';
+      stopElapsed(); // keep elapsedSecs visible as recording duration during transcription
       clearInterval(transcribeTimer);
       transcribeTimer = setInterval(() => { transcribeTick++; }, 50);
       draw();
@@ -177,11 +212,12 @@
 
     listen('transcript', () => {
       clearInterval(transcribeTimer);
-      setTimeout(() => { mode = 'idle'; }, 350);
+      setTimeout(() => { resetElapsed(); mode = 'idle'; }, 350);
     }).then(u => uns.push(u));
 
     listen('transcript-error', () => {
       clearInterval(transcribeTimer);
+      resetElapsed();
       mode = 'error';
       draw();
       setTimeout(() => { mode = 'idle'; }, 2500);
@@ -189,30 +225,35 @@
 
     listen('recording-discarded', () => {
       clearInterval(transcribeTimer);
+      resetElapsed();
       mode = 'idle';
       draw();
     }).then(u => uns.push(u));
 
     listen('recording-cancelled', () => {
       clearInterval(transcribeTimer);
+      resetElapsed();
       mode = 'idle';
       draw();
     }).then(u => uns.push(u));
 
     listen('recording-too-short', () => {
       clearInterval(transcribeTimer);
+      resetElapsed();
       mode = 'idle';
       draw();
     }).then(u => uns.push(u));
 
     listen('device-lost', () => {
       clearInterval(transcribeTimer);
+      resetElapsed();
       mode = 'idle';
       draw();
     }).then(u => uns.push(u));
 
     listen('paste-error', () => {
       clearInterval(transcribeTimer);
+      resetElapsed();
       mode = 'error';
       draw();
       setTimeout(() => { mode = 'idle'; }, 2500);
@@ -255,6 +296,7 @@
 
     return () => {
       clearInterval(cursorTimer);
+      clearInterval(elapsedTimer);
       uns.forEach(u => u());
     };
   });
@@ -273,6 +315,14 @@
   @keyframes pulse-red {
     0%, 100% { border-color: rgba(239, 68, 68, 0.15); }
     50%       { border-color: rgba(239, 68, 68, 1); }
+  }
+  @keyframes pulse-red-warn {
+    0%, 100% { border-color: rgba(239, 68, 68, 0.4); }
+    50%       { border-color: rgba(239, 68, 68, 1); }
+  }
+  @keyframes pulse-red-alert {
+    0%, 100% { border-color: rgba(251, 100, 36, 0.6); box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+    50%       { border-color: rgba(239, 68, 68, 1);   box-shadow: 0 0 8px 2px rgba(239,68,68,0.35); }
   }
   @keyframes pulse-yellow {
     0%, 100% { border-color: rgba(251, 191, 36, 0.15); }
@@ -300,6 +350,14 @@
   }
   .pill.recording {
     animation: pulse-red 10s ease-in-out infinite;
+  }
+  /* Past WARN_SECS: faster pulse, brighter floor */
+  .pill.recording.warn {
+    animation: pulse-red-warn 4s ease-in-out infinite;
+  }
+  /* Past ALERT_SECS: glow pulse, orange-red tint */
+  .pill.recording.alert {
+    animation: pulse-red-alert 2s ease-in-out infinite;
   }
   .pill.transcribing {
     animation: pulse-yellow 10s ease-in-out infinite;
@@ -397,6 +455,8 @@
     class:arming={mode === 'arming'}
     class:recording={mode === 'recording'}
     class:transcribing={mode === 'transcribing'}
+    class:warn={mode === 'recording' && elapsedSecs >= WARN_SECS && elapsedSecs < ALERT_SECS}
+    class:alert={mode === 'recording' && elapsedSecs >= ALERT_SECS}
     class:peek={isPeeking}
     style:background={isPeeking ? 'rgba(16,16,16,0.12)' : 'rgba(16,16,16,0.87)'}
     style:backdrop-filter={isPeeking ? 'blur(1px) saturate(100%)' : 'blur(18px) saturate(160%)'}
@@ -416,10 +476,14 @@
       >
         {mode === 'recording' ? 'Recording' : mode === 'error' ? 'Error' : 'Transcribing…'}
       </span>
-      {#if wordCount > 0}
+      {#if mode === 'recording' || (mode === 'transcribing' && elapsedSecs > 0)}
         <span class="text-[9px] tabular-nums select-none leading-tight"
-              style="color: rgba(255,255,255,0.4);">
-          ~{wordCount}w
+              style="color: {mode === 'recording' && elapsedSecs >= ALERT_SECS
+                ? 'rgba(239,100,68,0.85)'
+                : mode === 'recording' && elapsedSecs >= WARN_SECS
+                  ? 'rgba(251,191,36,0.75)'
+                  : 'rgba(255,255,255,0.4)'};">
+          {wordCount > 0 ? `~${wordCount}w · ` : ''}{fmtElapsed(elapsedSecs)}
         </span>
       {/if}
     </div>
