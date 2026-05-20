@@ -351,13 +351,13 @@
   .pill.recording {
     animation: pulse-red 10s ease-in-out infinite;
   }
-  /* Past WARN_SECS: faster pulse, brighter floor */
+  /* Past WARN_WORDS: faster pulse, brighter floor */
   .pill.recording.warn {
-    animation: pulse-red-warn 4s ease-in-out infinite;
+    animation: pulse-red-warn 2s ease-in-out infinite;
   }
-  /* Past ALERT_WORDS: hard glow pulse, 1.5s cycle */
+  /* Past ALERT_WORDS: hard glow pulse, 1s cycle */
   .pill.recording.alert {
-    animation: pulse-red-alert 1.5s ease-in-out infinite;
+    animation: pulse-red-alert 1s ease-in-out infinite;
   }
   .pill.transcribing {
     animation: pulse-yellow 10s ease-in-out infinite;
