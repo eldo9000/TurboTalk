@@ -47,17 +47,17 @@
   let fixAxError         = $state('');
 
   const RECOMMENDED = {
-    id: 'ggml-large-v3-turbo-q5_0',
-    label: 'Large v3 Turbo (q5_0)',
-    size: '574 MB',
-    description: 'Recommended starter · fast · lower RAM',
+    id: 'ggml-large-v3-turbo',
+    label: 'Large v3 Turbo',
+    size: '1.6 GB',
+    description: 'Recommended · best accuracy · multilingual',
   };
 
   const ALTERNATES = [
-    { id: 'ggml-large-v3-turbo', label: 'Large v3 Turbo',
-      size: '1.6 GB', description: 'Higher accuracy · multilingual · more RAM' },
+    { id: 'ggml-large-v3-turbo-q5_0', label: 'Large v3 Turbo (q5_0)',
+      size: '574 MB', description: 'Low RAM · slightly reduced accuracy' },
     { id: 'ggml-large-v3', label: 'Large v3',
-      size: '3.1 GB', description: 'Maximum accuracy · slowest' },
+      size: '3.1 GB', description: 'High accuracy · high RAM · slow' },
   ];
 
   const ALL_MODELS = [RECOMMENDED, ...ALTERNATES];

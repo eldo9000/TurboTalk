@@ -178,7 +178,7 @@ pub enum DiscardReason {
 /// Result of a `stop()` call. The `Wav` variant carries a `TempPath` whose
 /// `Drop` removes the on-disk WAV — callers don't need to clean up.
 pub enum StopOutcome {
-    Wav { path: TempPath },
+    Wav { path: TempPath, speech_detected: bool },
     Discard(DiscardReason),
 }
 
@@ -1090,7 +1090,7 @@ impl AudioCapture {
             "[audio] stage timings (ms): capture_clone={:.2} downmix={:.2} resample={:.2} vad={:.2} normalize={:.2} wav_write={:.2} total={:.2} (batch_fallback)",
             capture_clone_ms, downmix_ms, resample_ms, vad_ms, normalize_ms, wav_write_ms, total_ms
         );
-        Ok(StopOutcome::Wav { path: temp_path })
+        Ok(StopOutcome::Wav { path: temp_path, speech_detected: true })
     }
 
     /// Write the streaming finalizer's already-trimmed, already-
@@ -1160,7 +1160,7 @@ impl AudioCapture {
             result.vad_frames,
             result.resampled_total,
         );
-        Ok(StopOutcome::Wav { path: temp_path })
+        Ok(StopOutcome::Wav { path: temp_path, speech_detected: result.speech_detected })
     }
 
     /// Common WAV-write helper for both the streaming and batch paths.

@@ -32,6 +32,19 @@ pre-TASK-54 whole-file POST.
 
 Previously confirmed 2026-05-01 / 2026-05-03 with per-call `whisper-cli` spawn (M0–M5).
 
+## v0.9.0 status — 2026-05-20
+
+Version bumped to 0.9.0. Not yet tagged. Marks end of macOS feature development — v0.9 → v1.0 arc is Windows/Linux porting only.
+
+Bug fixes landed this session:
+- Onboarding bounce during model download on window focus (`recheckReadiness` download-in-flight guard)
+- Silent recording rejection / tail-empty segment-lost bug (`StopOutcome::Wav` speech_detected propagation)
+- Whisper hallucination on `speech_detected=false` (tail Whisper call gated on flag)
+- Overlay stuck in recording mode during seg-recovery Whisper wait (emit `ptt-up` before `join_segments()`)
+- New recording UI corrupted by delayed seg-recovery events (`CURRENT_JOB_ID` race check after join)
+
+Model lineup: Recommended = `ggml-large-v3-turbo` (1.6 GB) · Small = `ggml-large-v3-turbo-q5_0` (574 MB) · Large = `ggml-large-v3` (3.1 GB).
+
 ## v0.8 beta packaging status — updated 2026-05-11
 
 - `npm run package` builds the production frontend, release Rust binary,

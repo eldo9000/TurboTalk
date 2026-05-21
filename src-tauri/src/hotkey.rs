@@ -490,7 +490,7 @@ mod common {
             // to Transcribing and stays that way through Cleaning + Pasting.
             // Idle is restored exactly once at the end of the lifecycle.
             match rec.stop() {
-                Ok(StopOutcome::Wav { path }) => {
+                Ok(StopOutcome::Wav { path, speech_detected }) => {
                     // We are now in `FinalizingAudio` per recorder contract.
                     let _ = tray.set_icon(Some(tray::make_icon(TrayState::Transcribing)));
                     emit_critical(&app, "ptt-up", ());
@@ -511,6 +511,10 @@ mod common {
                         );
                         rec.finish();
                         let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                        // Must emit recording-discarded so the frontend clears
+                        // transcribing=true (set by ptt-up above). Without this
+                        // the overlay hangs until the next ptt-down resets it.
+                        emit_critical(&app, "recording-discarded", ());
                         if let Some(job_id) = job_id_opt {
                             emit_stage(&app, job_id, "ready");
                         }
@@ -523,7 +527,17 @@ mod common {
                     // Stage 1: transcribe the tail WAV (audio after the last
                     // segment cut, or the whole recording if no segments were
                     // emitted — identical to pre-TASK-54 batch behavior).
-                    let tail_result = crate::transcribe::run_raw(&path);
+                    // Skip Whisper when VAD detected no speech: Whisper
+                    // hallucinating on silence is worse than an empty result.
+                    let tail_result = if speech_detected {
+                        crate::transcribe::run_raw(&path)
+                    } else {
+                        tracing::info!(
+                            "[hotkey job_id={:?}] tail speech_detected=false — skipping Whisper",
+                            job_id_opt
+                        );
+                        Ok(String::new())
+                    };
 
                     // Stage 2: wait for any in-flight concurrent segment
                     // transcriptions (started at key-down) to finish, then
@@ -565,6 +579,7 @@ mod common {
                         // from under us (e.g. cancel). Bail cleanly.
                         rec.finish();
                         let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                        emit_critical(&app, "recording-discarded", ());
                         if let Some(job_id) = job_id_opt {
                             emit_stage(&app, job_id, "ready");
                         }
@@ -654,7 +669,8 @@ mod common {
                                     );
                                 }
                             }
-                            if let Err(e) = crate::paste::paste(&final_text) {
+                            let paste_text = format!("{} ", final_text);
+                            if let Err(e) = crate::paste::paste(&paste_text) {
                                 tracing::error!("[paste job_id={:?}] {:?}", job_id_opt, e);
                                 // Surface to UI so the user knows the transcript
                                 // was processed but never reached the focused app.
@@ -682,12 +698,94 @@ mod common {
                     // `path` drops here → WAV file deleted from /tmp.
                 }
                 Ok(StopOutcome::Discard(reason)) => {
-                    // `rec.stop()` already returned us to Ready on the discard arm.
-                    // Tell the frontend to clear its overlay — otherwise it stays
-                    // stuck on "Transcribing…". `recording-discarded` is the
-                    // catch-all the overlay listens to; `recording-too-short` is
-                    // the more specific subtype the main window uses to show a
-                    // duration-aware toast.
+                    // Tail-empty recovery: when a silence-boundary segment cut
+                    // takes all the audio just before stop(), the tail has 0
+                    // samples and stop() returns TooShort. The segment
+                    // transcription is still in flight — join it and, if it
+                    // produced text, treat it as the final result rather than
+                    // silently discarding a full recording.
+                    if matches!(reason, DiscardReason::TooShort { .. }) {
+                        if let Some(st) = seg_transcriber_opt {
+                            // Emit ptt-up NOW, before blocking on join_segments(),
+                            // so the overlay transitions to "Transcribing…"
+                            // immediately. Without this the overlay stays stuck in
+                            // "Recording" for the entire Whisper inference window
+                            // (1–3 s), making the user think recording is still live.
+                            let _ = tray.set_icon(Some(tray::make_icon(TrayState::Transcribing)));
+                            emit_critical(&app, "ptt-up", ());
+                            if let Some(job_id) = job_id_opt {
+                                emit_stage(&app, job_id, "transcribing");
+                            }
+
+                            let seg_text = st.join_segments(); // blocks; channel already closed by stop()
+
+                            // If the user pressed record again while we were
+                            // blocked, ptt-down already set the overlay back to
+                            // "Recording". Emitting transcript now would clear
+                            // recording=true and corrupt the new job's UI state.
+                            // Abandon the recovery silently — the new job takes
+                            // priority and the user explicitly started it.
+                            if CURRENT_JOB_ID.lock().is_some() {
+                                tracing::warn!(
+                                    "[hotkey job_id={:?}] seg-recovery: new job started during \
+                                     join_segments() — abandoning recovery to protect new job's UI",
+                                    job_id_opt
+                                );
+                                return;
+                            }
+
+                            if !seg_text.is_empty() {
+                                let final_text = crate::cleanup::process(&seg_text, &app);
+                                if final_text.is_empty() {
+                                    emit_critical(&app, "recording-discarded", "empty-final-text");
+                                    play_chime(ChimeEvent::Finish);
+                                } else {
+                                    emit_critical(&app, "transcript", final_text.clone());
+                                    if let Some(job_id) = job_id_opt {
+                                        emit_stage(&app, job_id, "pasting");
+                                    }
+                                    let focus_at_paste = crate::paste::frontmost_app();
+                                    tracing::info!(
+                                        "[paste job_id={:?}] (seg-recovery) focus_at_start={:?} focus_at_paste={:?}",
+                                        job_id_opt, focus_at_start, focus_at_paste
+                                    );
+                                    if let (Some(job_id), Some(start), Some(now)) =
+                                        (job_id_opt, focus_at_start.as_ref(), focus_at_paste.as_ref())
+                                    {
+                                        if start != now {
+                                            emit_critical(
+                                                &app,
+                                                "focus-changed-before-paste",
+                                                FocusChangedBeforePaste {
+                                                    job_id,
+                                                    focus_at_start: Some(start.clone()),
+                                                    focus_at_paste: Some(now.clone()),
+                                                },
+                                            );
+                                        }
+                                    }
+                                    let paste_text = format!("{} ", final_text);
+                                    if let Err(e) = crate::paste::paste(&paste_text) {
+                                        tracing::error!("[paste job_id={:?}] (seg-recovery) {:?}", job_id_opt, e);
+                                        emit_critical(&app, "paste-error", "Couldn't paste — check Accessibility permission".to_string());
+                                    } else {
+                                        play_chime(ChimeEvent::Finish);
+                                    }
+                                }
+                            } else {
+                                // Segments produced no text — normal discard.
+                                emit_critical(&app, "recording-discarded", ());
+                            }
+                            let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                            if let Some(job_id) = job_id_opt {
+                                emit_stage(&app, job_id, "ready");
+                            }
+                            return;
+                        }
+                    }
+                    // Normal discard path — `recording-discarded` is the catch-all
+                    // the overlay listens to; `recording-too-short` is the more
+                    // specific subtype the main window uses to show a toast.
                     let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
                     if let DiscardReason::TooShort { duration_ms } = reason {
                         emit_critical(&app, "recording-too-short", duration_ms);

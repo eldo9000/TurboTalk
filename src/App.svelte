@@ -48,7 +48,11 @@
       r.accessibility === 'unsupported'
         || r.input_monitoring === 'unsupported'
         || r.microphone === 'unsupported';
-    showOnboarding = (r.force_onboarding || !r.ready) && !(unsupportedPlatform && unsupportedPlatformDismissed);
+    // Don't eject to onboarding while a model download is in flight — the
+    // temp file isn't a .bin yet so model_present() returns false, but the
+    // user is already handling it via the download progress UI.
+    const downloading = Object.keys(downloadProgress).length > 0;
+    showOnboarding = (r.force_onboarding || (!r.ready && !downloading)) && !(unsupportedPlatform && unsupportedPlatformDismissed);
   }
 
   // Theme — override OS setting with user preference
@@ -407,29 +411,26 @@ Reply with only the single word, lowercase, no punctuation.
   // The default starter model. Surfaced in its own "Recommended" section
   // above the rest of the catalog so first-time users don't have to choose.
   const RECOMMENDED_MODEL = {
-    name: 'ggml-large-v3-turbo-q5_0',
-    tier: 'FAST',
-    tierTag: 'cheap',
-    size: '574 MB',
-    description: 'lower RAM',
-    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin',
+    name: 'ggml-large-v3-turbo',
+    tier: 'Recommended',
+    size: '1.6 GB',
+    description: 'multilingual, balanced',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin',
   };
 
   const MODEL_CATALOG = [
     {
-      name: 'ggml-large-v3-turbo',
-      tier: 'BALANCED',
-      tierTag: 'optimized',
-      size: '1.6 GB',
-      description: 'multilingual · more RAM',
-      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin',
+      name: 'ggml-large-v3-turbo-q5_0',
+      tier: 'Small',
+      size: '574 MB',
+      description: 'low RAM, english only, not bad',
+      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin',
     },
     {
       name: 'ggml-large-v3',
-      tier: 'SLOW',
-      tierTag: 'accurate',
+      tier: 'Large',
       size: '3.1 GB',
-      description: 'multilingual · slowest',
+      description: 'high accuracy, high RAM, slow',
       url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin',
     },
   ];
@@ -895,11 +896,15 @@ Reply with only the single word, lowercase, no punctuation.
       transcriptError = `Focus changed: pasted into ${now} (started in ${start}).`;
       setTimeout(() => { transcriptError = ''; }, 4000);
     }).then(u => unlisteners.push(u));
-    listen('recording-discarded', () => {
-      // Recording was too quiet/short — silently reset the overlay state.
-      // No banner: this is a normal outcome, not an error.
+    listen('recording-discarded', (e) => {
       recording = false;
       transcribing = false;
+      // empty-final-text: whisper produced only noise/annotations that were
+      // stripped. Surface a soft hint so the user knows why nothing was pasted.
+      if (e.payload === 'empty-final-text') {
+        transcriptError = 'Nothing to paste — try speaking more clearly.';
+        setTimeout(() => { transcriptError = ''; }, 3000);
+      }
     }).then(u => unlisteners.push(u));
     listen('recording-cancelled', () => {
       // User cancelled mid-recording (Esc, hold-to-cancel, UI cancel, tray
@@ -1146,10 +1151,9 @@ Reply with only the single word, lowercase, no punctuation.
       <div class="tt-row-info">
         <div class="tt-model-name-row">
           <span class="tt-tier-name">{m.tier}</span>
-          <span class="tt-tier-tag">{m.tierTag}</span>
-          <span class="tt-model-desc" class:tt-warn={m.warn}>{m.description}</span>
+          <span class="tt-model-name-pill">{m.name}</span>
         </div>
-        <span class="tt-model-id">{m.name}</span>
+        <span class="tt-model-desc" class:tt-warn={m.warn}>{m.description}</span>
       </div>
       <span class="tt-model-size">{m.size}</span>
       {#if isDownloading}
@@ -1190,10 +1194,9 @@ Reply with only the single word, lowercase, no punctuation.
               <div class="tt-row-info">
                 <div class="tt-model-name-row">
                   <span class="tt-tier-name">{RECOMMENDED_MODEL.tier}</span>
-                  <span class="tt-tier-tag">{RECOMMENDED_MODEL.tierTag}</span>
-                  <span class="tt-desc">{RECOMMENDED_MODEL.description}</span>
+                  <span class="tt-model-name-pill">{RECOMMENDED_MODEL.name}</span>
                 </div>
-                <span class="tt-model-id">{RECOMMENDED_MODEL.name}</span>
+                <span class="tt-desc">{RECOMMENDED_MODEL.description}</span>
               </div>
               <span class="tt-model-size">{RECOMMENDED_MODEL.size}</span>
               {#if rmIsDownloading}
@@ -2219,10 +2222,17 @@ Reply with only the single word, lowercase, no punctuation.
     letter-spacing: 0.05em;
     color: var(--text-primary);
   }
-  .tt-tier-tag {
-    font-size: 10px;
-    color: var(--text-secondary, var(--text-muted));
-    opacity: 0.8;
+  .tt-model-name-pill {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 9px;
+    color: color-mix(in srgb, var(--text-muted) 60%, var(--text-primary));
+    opacity: 0.7;
+    background: color-mix(in srgb, var(--text-muted) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--text-muted) 14%, transparent);
+    border-radius: 4px;
+    padding: 1px 5px;
+    white-space: nowrap;
+    align-self: center;
   }
   .tt-model-size {
     font-size: 11px;
@@ -2231,15 +2241,7 @@ Reply with only the single word, lowercase, no punctuation.
   }
   .tt-model-desc {
     font-size: 10.5px;
-    color: var(--text-muted);
-    margin-top: 1px;
-  }
-  .tt-model-id {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 9px;
-    color: var(--text-muted);
-    opacity: 0.5;
-    margin-top: 2px;
+    color: color-mix(in srgb, var(--text-muted) 60%, var(--text-primary));
   }
   .tt-model-pct {
     flex-shrink: 0;
