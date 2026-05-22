@@ -670,16 +670,19 @@ mod common {
                                 }
                             }
                             let paste_text = format!("{} ", final_text);
-                            let keep_on_fail = crate::settings::load().keep_clipboard_on_paste_fail;
-                            if let Err(e) = crate::paste::paste(&paste_text, keep_on_fail) {
-                                tracing::error!("[paste job_id={:?}] {:?}", job_id_opt, e);
-                                // Surface to UI so the user knows the transcript
-                                // was processed but never reached the focused app.
-                                let msg =
-                                    "Couldn't paste — check Accessibility permission".to_string();
-                                emit_critical(&app, "paste-error", msg);
-                            } else {
-                                play_chime(ChimeEvent::Finish);
+                            match crate::paste::paste(&paste_text) {
+                                Ok(true) => {
+                                    play_chime(ChimeEvent::Finish);
+                                }
+                                Ok(false) => {
+                                    tracing::warn!("[paste job_id={:?}] no focused text element — text left in clipboard", job_id_opt);
+                                    play_chime(ChimeEvent::Finish);
+                                    emit_critical(&app, "paste-miss", "Paste missed — text is in your clipboard".to_string());
+                                }
+                                Err(e) => {
+                                    tracing::error!("[paste job_id={:?}] {:?}", job_id_opt, e);
+                                    emit_critical(&app, "paste-error", "Couldn't paste — check Accessibility permission".to_string());
+                                }
                             }
                         }
                         Err(e) => {
@@ -766,12 +769,19 @@ mod common {
                                         }
                                     }
                                     let paste_text = format!("{} ", final_text);
-                                    let keep_on_fail = crate::settings::load().keep_clipboard_on_paste_fail;
-                                    if let Err(e) = crate::paste::paste(&paste_text, keep_on_fail) {
-                                        tracing::error!("[paste job_id={:?}] (seg-recovery) {:?}", job_id_opt, e);
-                                        emit_critical(&app, "paste-error", "Couldn't paste — check Accessibility permission".to_string());
-                                    } else {
-                                        play_chime(ChimeEvent::Finish);
+                                    match crate::paste::paste(&paste_text) {
+                                        Ok(true) => {
+                                            play_chime(ChimeEvent::Finish);
+                                        }
+                                        Ok(false) => {
+                                            tracing::warn!("[paste job_id={:?}] (seg-recovery) no focused text element — text left in clipboard", job_id_opt);
+                                            play_chime(ChimeEvent::Finish);
+                                            emit_critical(&app, "paste-miss", "Paste missed — text is in your clipboard".to_string());
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("[paste job_id={:?}] (seg-recovery) {:?}", job_id_opt, e);
+                                            emit_critical(&app, "paste-error", "Couldn't paste — check Accessibility permission".to_string());
+                                        }
                                     }
                                 }
                             } else {

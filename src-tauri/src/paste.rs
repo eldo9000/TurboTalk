@@ -18,6 +18,17 @@
 //
 // We deliberately do NOT block paste on a focus mismatch — see ARCHITECTURE.md
 // "Paste Target Policy". Future queueing work must revisit this rule.
+//
+// Clipboard / miss detection
+// ──────────────────────────
+// Before each paste, we query the macOS Accessibility API for the focused UI
+// element role of the frontmost application. If a text-input-capable element
+// is focused (AXTextField, AXTextArea, AXComboBox, AXSearchField) we restore
+// the original clipboard after paste lands. If no such element is detected —
+// either because focus is on a non-text surface or the app doesn't expose AX —
+// we leave the transcribed text in the clipboard and return `Ok(false)` so the
+// caller can surface a "text is in clipboard" hint. Cmd+V is always sent
+// regardless of the AX result.
 
 #[cfg(target_os = "macos")]
 use arboard::Clipboard;
@@ -65,12 +76,95 @@ pub fn frontmost_app() -> Option<String> {
     None
 }
 
+/// Queries the macOS Accessibility API for the role of the currently focused
+/// UI element in the frontmost application. Returns `None` if AX is
+/// unavailable, the process is not trusted for accessibility, or no element
+/// has focus.
 #[cfg(target_os = "macos")]
-pub fn paste(text: &str, keep_on_fail: bool) -> anyhow::Result<()> {
-    let mut cb = Clipboard::new()?;
+fn focused_ax_role() -> Option<String> {
+    use core_foundation::base::{CFRelease, CFTypeRef, TCFType};
+    use core_foundation::string::{CFString, CFStringRef};
+    use std::ptr;
 
-    // Save prior clipboard contents (best-effort — ignore if empty/non-text).
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXUIElementCreateSystemWide() -> CFTypeRef;
+        fn AXUIElementCopyAttributeValue(
+            element: CFTypeRef,
+            attribute: CFStringRef,
+            value: *mut CFTypeRef,
+        ) -> i32;
+    }
+
+    const AX_SUCCESS: i32 = 0;
+
+    unsafe {
+        let system = AXUIElementCreateSystemWide();
+        if system.is_null() {
+            return None;
+        }
+
+        let attr_focused = CFString::new("AXFocusedUIElement");
+        let mut focused: CFTypeRef = ptr::null();
+        let err = AXUIElementCopyAttributeValue(
+            system,
+            attr_focused.as_concrete_TypeRef(),
+            &mut focused,
+        );
+        CFRelease(system);
+
+        if err != AX_SUCCESS || focused.is_null() {
+            return None;
+        }
+
+        let attr_role = CFString::new("AXRole");
+        let mut role_ref: CFTypeRef = ptr::null();
+        let err2 = AXUIElementCopyAttributeValue(
+            focused,
+            attr_role.as_concrete_TypeRef(),
+            &mut role_ref,
+        );
+        CFRelease(focused);
+
+        if err2 != AX_SUCCESS || role_ref.is_null() {
+            return None;
+        }
+
+        // AXRole is always a CFString; wrap_under_create_rule takes the +1 retain.
+        let role = CFString::wrap_under_create_rule(role_ref as CFStringRef);
+        Some(role.to_string())
+    }
+}
+
+/// Returns `true` when the AX API reports a text-input-capable element has
+/// focus in the frontmost application. Returns `false` on any AX failure or
+/// when the focused element is not a text surface — the caller treats this as
+/// a probable miss and leaves the transcribed text in the clipboard.
+#[cfg(target_os = "macos")]
+fn has_focused_text_element() -> bool {
+    match focused_ax_role() {
+        None => false,
+        Some(role) => matches!(
+            role.as_str(),
+            "AXTextField" | "AXTextArea" | "AXComboBox" | "AXSearchField"
+        ),
+    }
+}
+
+/// Pastes `text` into the frontmost application.
+///
+/// Returns `Ok(true)` when a text-input element was detected and paste likely
+/// landed — original clipboard is restored. Returns `Ok(false)` when no
+/// text-input element was detected — Cmd+V was still sent but the transcribed
+/// text is left in the clipboard for manual recovery. Returns `Err` on a hard
+/// failure (osascript non-zero exit).
+#[cfg(target_os = "macos")]
+pub fn paste(text: &str) -> anyhow::Result<bool> {
+    let mut cb = Clipboard::new()?;
     let prior = cb.get_text().ok();
+
+    // AX check before clipboard write — determines clipboard restore behaviour.
+    let text_field_present = has_focused_text_element();
 
     cb.set_text(text)?;
 
@@ -85,46 +179,39 @@ pub fn paste(text: &str, keep_on_fail: bool) -> anyhow::Result<()> {
         .status()?;
 
     if !status.success() {
-        // When keep_on_fail is set, leave the transcribed text in the clipboard
-        // so the user can click into a field and manually paste. Otherwise
-        // restore the prior clipboard so the failure is transparent.
-        if !keep_on_fail {
-            if let Some(prev) = prior.as_ref() {
-                let _ = cb.set_text(prev.clone());
-            }
+        // Hard osascript failure — restore clipboard and bail.
+        if let Some(prev) = prior {
+            let _ = cb.set_text(prev);
         }
         anyhow::bail!("osascript keystroke failed: {}", status);
     }
 
-    // Restore prior clipboard after a short delay so Cmd+V has time to land.
-    // When keep_on_fail is set we skip this: osascript always returns success
-    // even when no text field was focused, so from the user's perspective paste
-    // can "miss" even on a successful keystroke. Leaving the transcribed text in
-    // the clipboard lets them click into a field and paste manually.
     std::thread::sleep(std::time::Duration::from_millis(150));
-    if !keep_on_fail {
+
+    if text_field_present {
+        // Paste likely landed — restore original clipboard.
         if let Some(prev) = prior {
             let _ = cb.set_text(prev);
         }
+        Ok(true)
+    } else {
+        // Paste likely missed — leave transcribed text in clipboard.
+        Ok(false)
     }
-
-    Ok(())
 }
 
 /// Windows + Linux/X11 paste implementation.
 ///
 /// Writes `text` to the system clipboard via `arboard`, synthesizes a native
-/// `Ctrl+V` via `enigo`, then restores the prior clipboard contents on a
-/// best-effort basis. The 50 ms / 150 ms sleeps mirror the macOS branch:
-/// 50 ms after the clipboard write so the target app sees the new contents,
-/// 150 ms after the keystroke so paste completes before we overwrite the
-/// clipboard with the prior value.
+/// `Ctrl+V` via `enigo`, then restores the prior clipboard contents. The
+/// 50 ms / 150 ms sleeps mirror the macOS branch. Always returns `Ok(true)`
+/// — AX-based miss detection is not available on non-macOS platforms.
 ///
 /// Wayland is not supported in the beta — under `XDG_SESSION_TYPE=wayland`
 /// we return an error containing the literal substring `unsupported platform`
 /// (the test in this file and the UI banner both grep for that token).
 #[cfg(not(target_os = "macos"))]
-pub fn paste(text: &str, _keep_on_fail: bool) -> anyhow::Result<()> {
+pub fn paste(text: &str) -> anyhow::Result<bool> {
     use arboard::Clipboard;
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
@@ -145,8 +232,6 @@ pub fn paste(text: &str, _keep_on_fail: bool) -> anyhow::Result<()> {
     }
 
     let mut cb = Clipboard::new()?;
-
-    // Save prior clipboard contents (best-effort — ignore if empty/non-text).
     let prior = cb.get_text().ok();
 
     cb.set_text(text)?;
@@ -161,8 +246,7 @@ pub fn paste(text: &str, _keep_on_fail: bool) -> anyhow::Result<()> {
         .key(Key::Control, Direction::Press)
         .map_err(|e| anyhow::anyhow!("enigo Ctrl press failed: {e}"))?;
     let click_res = enigo.key(Key::Unicode('v'), Direction::Click);
-    // Always release Ctrl, even if the 'v' click failed, so we don't leave a
-    // modifier stuck down on the user's keyboard.
+    // Always release Ctrl even if the 'v' click failed — don't leave modifier stuck.
     let release_res = enigo.key(Key::Control, Direction::Release);
 
     click_res.map_err(|e| anyhow::anyhow!("enigo 'v' click failed: {e}"))?;
@@ -174,7 +258,7 @@ pub fn paste(text: &str, _keep_on_fail: bool) -> anyhow::Result<()> {
         let _ = cb.set_text(prev);
     }
 
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]

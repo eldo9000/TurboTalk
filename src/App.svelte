@@ -328,7 +328,6 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgSoundOnFinish     = $state(false);
   let cfgSoundOnCancel     = $state(false);
   let cfgSoundVolume       = $state(0.7);
-  let cfgKeepClipboardOnPasteFail = $state(false);
   let volumeSaveTimer      = null;
   let showAdvanced         = $state(false);
   // Captured once from the Modes tab in Chaperone mode (two-column tall layout).
@@ -698,7 +697,6 @@ Reply with only the single word, lowercase, no punctuation.
     cfgSoundOnFinish     = cfg.sound_on_finish                  ?? false;
     cfgSoundOnCancel     = cfg.sound_on_cancel                  ?? false;
     cfgSoundVolume       = cfg.sound_volume                     ?? 0.7;
-    cfgKeepClipboardOnPasteFail = cfg.keep_clipboard_on_paste_fail ?? false;
     cfgLaunchLogin       = launch;
     audioDevices         = devs;
     settingsSaveMsg      = '';
@@ -727,7 +725,6 @@ Reply with only the single word, lowercase, no punctuation.
     cfg.sound_on_finish               = cfgSoundOnFinish;
     cfg.sound_on_cancel               = cfgSoundOnCancel;
     cfg.sound_volume                  = cfgSoundVolume;
-    cfg.keep_clipboard_on_paste_fail  = cfgKeepClipboardOnPasteFail;
     const saveRes = await commands.saveConfig(cfg);
     if (saveRes.status === 'error') {
       settingsSaveMsg = 'Error: ' + saveRes.error;
@@ -910,6 +907,12 @@ Reply with only the single word, lowercase, no punctuation.
       transcribing = false;
       transcriptError = e.payload || 'Transcription failed.';
       setTimeout(() => { transcriptError = ''; }, 5000);
+    }).then(u => unlisteners.push(u));
+    listen('paste-miss', (e) => {
+      recording = false;
+      transcribing = false;
+      transcriptError = e.payload || 'Paste missed — text is in your clipboard.';
+      setTimeout(() => { transcriptError = ''; }, 4000);
     }).then(u => unlisteners.push(u));
     listen('paste-error', (e) => {
       recording = false;
@@ -1664,15 +1667,6 @@ Reply with only the single word, lowercase, no punctuation.
                 onclick={() => { cfgSoundOnCancel = !cfgSoundOnCancel; saveSettings(); }}
                 class="tt-multi-btn" class:tt-multi-on={cfgSoundOnCancel}
                 data-tip="Play a chime when recording is cancelled">on Cancel</button>
-            </div>
-          </div>
-          <div class="tt-row tt-row-field" data-tip="Keep transcript in clipboard if paste misses a focused text field">
-            <span class="tt-lbl">Miss to Clipboard</span>
-            <div class="tt-multi">
-              <button
-                onclick={() => { cfgKeepClipboardOnPasteFail = !cfgKeepClipboardOnPasteFail; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgKeepClipboardOnPasteFail}
-                data-tip="Leave text in clipboard if direct paste fails">Keep on Fail</button>
             </div>
           </div>
           <div class="tt-row tt-row-field tt-row-col" data-tip="Volume for audio notification chimes">

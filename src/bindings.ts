@@ -243,13 +243,6 @@ export type Config = {
 	sound_on_cancel?: boolean,
 	// Volume for sound cues, 0.0–1.0.
 	sound_volume?: number,
-	/**
-	 *  When paste fails (no focused text field), keep the transcribed text in the
-	 *  clipboard instead of restoring the previous clipboard contents. Lets the
-	 *  user click into a text field and manually paste rather than losing the text.
-	 *  Default: false (restore prior clipboard on failure, existing behaviour).
-	 */
-	keep_clipboard_on_paste_fail?: boolean,
 };
 
 /**
