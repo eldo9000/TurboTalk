@@ -10,6 +10,12 @@ pub fn make_icon(state: TrayState) -> Image<'static> {
     let size = 44u32; // 44x44 → 22x22 logical at 2x retina
     let mut px = vec![0u8; (size * size * 4) as usize];
 
+    // Windows system tray doesn't composite alpha-0 pixels as transparent —
+    // they render as the tray background color (appears as a colored square).
+    // Fill a dark pill background so the white TT glyph is always visible.
+    #[cfg(target_os = "windows")]
+    fill_circle(&mut px, size, 50, 50, 50);
+
     match state {
         TrayState::Idle => draw_tt(&mut px, size),
         TrayState::Recording => {

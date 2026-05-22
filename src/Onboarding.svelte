@@ -381,7 +381,7 @@
       {#if unsupportedPlatform}
         <div class="flex flex-col gap-3 p-3.5 rounded-lg border border-yellow-500/30 bg-yellow-500/10">
           <div class="flex flex-col gap-1">
-            <h2 class="text-[13px] font-medium leading-tight text-yellow-200">Unsupported platform</h2>
+            <h2 class="text-[13px] font-medium leading-tight text-yellow-700 dark:text-yellow-200">Unsupported platform</h2>
             <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
               Turbo Talk's beta dictation loop currently depends on macOS Accessibility,
               Input Monitoring, microphone permission, and paste APIs. Those controls are unavailable here,
@@ -389,7 +389,7 @@
             </p>
           </div>
           <button onclick={() => onUnsupportedContinue?.()}
-            class="self-start px-3 py-1.5 rounded-md border border-yellow-500/40 text-[12px] font-medium text-yellow-100 hover:bg-yellow-500/15 transition-colors">
+            class="self-start px-3 py-1.5 rounded-md border border-yellow-600/50 dark:border-yellow-500/40 text-[12px] font-medium text-yellow-700 dark:text-yellow-100 hover:bg-yellow-500/15 transition-colors">
             Continue without dictation
           </button>
         </div>

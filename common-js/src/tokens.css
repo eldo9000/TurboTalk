@@ -57,6 +57,9 @@ html.dark {
   padding: 6px 10px;
   background: color-mix(in srgb, var(--surface-raised) 50%, #000);
 }
+html:not(.dark) .subsection-hd {
+  background: color-mix(in srgb, var(--border) 70%, var(--surface-raised) 30%);
+}
 .subsection-hd-title {
   flex: 1;
   font-size: 9px;

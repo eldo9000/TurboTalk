@@ -234,10 +234,14 @@ pub fn check_readiness() -> Readiness {
     let microphone = microphone_status();
     let model_present = model_present();
     let force_onboarding = FORCE_ONBOARDING.load(Ordering::SeqCst);
-    let ready = matches!(accessibility, PermissionStatus::Granted)
-        && matches!(input_monitoring, PermissionStatus::Granted)
-        && matches!(microphone, PermissionStatus::Granted)
-        && model_present;
+    // Unsupported means the permission is not applicable on this platform
+    // (e.g. all three return Unsupported on Windows). Treat it as non-blocking
+    // so `ready` reflects "can the app run" rather than "did every permission
+    // pass a macOS TCC check."
+    fn ok(s: PermissionStatus) -> bool {
+        matches!(s, PermissionStatus::Granted | PermissionStatus::Unsupported)
+    }
+    let ready = ok(accessibility) && ok(input_monitoring) && ok(microphone) && model_present;
     Readiness {
         accessibility,
         input_monitoring,
