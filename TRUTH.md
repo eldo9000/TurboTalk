@@ -32,9 +32,11 @@ pre-TASK-54 whole-file POST.
 
 Previously confirmed 2026-05-01 / 2026-05-03 with per-call `whisper-cli` spawn (M0–M5).
 
-## v0.9.0 status — 2026-05-20
+## v0.9.0 status — 2026-05-22
 
-Version bumped to 0.9.0. Not yet tagged. Marks end of macOS feature development — v0.9 → v1.0 arc is Windows/Linux porting only.
+**Released.** Tagged and published at commit `4269aff`. First release confidently shareable with other Mac users — no known bugs on macOS. Direct-download link live in README (`TurboTalk-macOS-arm64.dmg` stable asset).
+
+Marks end of macOS feature development. v0.9 → v1.0 arc is Windows/Linux porting only. No new features planned.
 
 Bug fixes landed this session:
 - Onboarding bounce during model download on window focus (`recheckReadiness` download-in-flight guard)
