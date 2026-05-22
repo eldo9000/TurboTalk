@@ -291,12 +291,14 @@ Reply with only the single word, lowercase, no punctuation.
   let _hideTimer = null;
 
   function _onIndicatorOver(e) {
-    const btn = e.target?.closest?.('.tt-multi-btn');
-    if (btn) {
+    // Priority: specific button tip > row-level tip
+    const btn = e.target?.closest?.('[data-tip]');
+    const target = btn ?? null;
+    if (target) {
       if (_hideTimer) { clearTimeout(_hideTimer); _hideTimer = null; }
-      if (btn !== _tipTarget) {
-        _tipTarget = btn;
-        tipText = btn.dataset.tip ?? '';
+      if (target !== _tipTarget) {
+        _tipTarget = target;
+        tipText = target.dataset.tip ?? '';
       }
     } else if (_tipTarget) {
       if (!_hideTimer) {
@@ -1477,12 +1479,16 @@ Reply with only the single word, lowercase, no punctuation.
   <!-- Settings tab -->
   {#if activeTab === 'settings'}
     <div class="flex-1 min-h-0 overflow-y-auto text-[12px]">
-      <div bind:this={settingsInnerEl} class="tt-set">
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <!-- svelte-ignore a11y_mouse_events_have_key_events -->
+      <div bind:this={settingsInnerEl} class="tt-set"
+        onmouseover={_onIndicatorOver}
+        onmouseleave={_onIndicatorLeave}>
 
         <!-- Hotkey -->
         <div class="tt-section">
           <div class="subsection-hd"><span class="subsection-hd-title">Hotkey</span></div>
-          <div class="tt-row tt-row-field">
+          <div class="tt-row tt-row-field" data-tip="Which modifier key triggers push-to-talk">
             <div class="tt-seg" class:tt-seg-dim={hotkeyKeyPart.startsWith('numpad_')}>
               {#each [['left','Left'],['right','Right']] as [v, lbl], i}
                 <button onclick={() => { hotkeySide = v; applyHotkeyKey(); }} class={seg(hotkeySide === v, i, 2)}>{lbl}</button>
@@ -1503,13 +1509,13 @@ Reply with only the single word, lowercase, no punctuation.
         <!-- Recording -->
         <div class="tt-section">
           <div class="subsection-hd"><span class="subsection-hd-title">Recording</span></div>
-          <div class="tt-row tt-row-field">
+          <div class="tt-row tt-row-field" data-tip="Hold: record while key is held. Toggle: press once to start, again to stop">
             <div class="tt-seg">
               {#each [['hold','Hold'],['toggle','Toggle']] as [v, lbl], i}
                 <button onclick={() => { cfgHotkeyMode = v; saveSettings(); }} class={seg(cfgHotkeyMode === v, i, 2)}>{lbl}</button>
               {/each}
             </div>
-            <div class="tt-key-sel">
+            <div class="tt-key-sel" data-tip="Microphone to record from">
               <Select
                 items={[
                   { value: 'default', label: 'System default' },
@@ -1527,15 +1533,17 @@ Reply with only the single word, lowercase, no punctuation.
         <!-- Cancel shortcuts -->
         <div class="tt-section">
           <div class="subsection-hd"><span class="subsection-hd-title">Cancel shortcuts</span></div>
-          <div class="tt-row tt-row-field">
+          <div class="tt-row tt-row-field" data-tip="How to abort a recording in progress">
             <span class="tt-lbl">Cancel on</span>
             <div class="tt-multi">
               <button
                 onclick={() => { cfgCancelOnEsc = !cfgCancelOnEsc; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgCancelOnEsc}>Escape</button>
+                class="tt-multi-btn" class:tt-multi-on={cfgCancelOnEsc}
+                data-tip="Press Escape to cancel the current recording">Escape</button>
               <button
                 onclick={() => { cfgCancelOnHold = !cfgCancelOnHold; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgCancelOnHold}>Hold key</button>
+                class="tt-multi-btn" class:tt-multi-on={cfgCancelOnHold}
+                data-tip="Hold the hotkey for ~1 second during recording to cancel">Hold key</button>
             </div>
           </div>
         </div>
@@ -1543,7 +1551,7 @@ Reply with only the single word, lowercase, no punctuation.
         <!-- Theme -->
         <div class="tt-section">
           <div class="subsection-hd"><span class="subsection-hd-title">Theme</span></div>
-          <div class="tt-row tt-row-field">
+          <div class="tt-row tt-row-field" data-tip="App color scheme — Auto follows your macOS appearance">
             <div class="tt-seg tt-seg-wide">
               {#each [['auto','Auto'],['light','Light'],['dark','Dark']] as [v, lbl], i}
                 <button onclick={() => { cfgTheme = v; saveSettings(); }} class={seg(cfgTheme === v, i, 3)}>{lbl}</button>
@@ -1555,7 +1563,7 @@ Reply with only the single word, lowercase, no punctuation.
         <!-- UI Zoom -->
         <div class="tt-section">
           <div class="subsection-hd"><span class="subsection-hd-title">UI Zoom</span></div>
-          <div class="tt-row tt-row-field">
+          <div class="tt-row tt-row-field" data-tip="Scale the app interface — also adjustable with − / + in the footer">
             <div class="tt-seg tt-seg-wide">
               {#each ZOOM_LEVELS as level, i}
                 <button onclick={() => { zoomIdx = i; }} class={seg(zoomIdx === i, i, ZOOM_LEVELS.length)}>{level}%</button>
@@ -1567,11 +1575,12 @@ Reply with only the single word, lowercase, no punctuation.
         <!-- History -->
         <div class="tt-section">
           <div class="subsection-hd"><span class="subsection-hd-title">History</span></div>
-          <div class="tt-row tt-row-field">
+          <div class="tt-row tt-row-field" data-tip="Save transcripts to disk and auto-delete after a set period">
             <button
               onclick={() => { cfgSaveHistory = !cfgSaveHistory; saveSettings(); }}
-              class="tt-multi-btn" class:tt-multi-on={cfgSaveHistory}>Save</button>
-            <div class="tt-key-sel">
+              class="tt-multi-btn" class:tt-multi-on={cfgSaveHistory}
+              data-tip="Save transcripts to disk between sessions">Save</button>
+            <div class="tt-key-sel" data-tip="Automatically delete saved transcripts older than this">
               <Select
                 items={HISTORY_AUTO_DELETE_ITEMS}
                 bind:value={cfgHistoryAutoDelete}
@@ -1585,13 +1594,9 @@ Reply with only the single word, lowercase, no punctuation.
         </div>
 
         <!-- Audio indicators (Volume embedded) -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <!-- svelte-ignore a11y_mouse_events_have_key_events -->
-        <div class="tt-section"
-          onmouseover={_onIndicatorOver}
-          onmouseleave={_onIndicatorLeave}>
+        <div class="tt-section">
           <div class="subsection-hd"><span class="subsection-hd-title">Indicators</span></div>
-          <div class="tt-row tt-row-field">
+          <div class="tt-row tt-row-field" data-tip="Floating pill that appears on screen while recording">
             <span class="tt-lbl">Visual Overlay</span>
             <div class="tt-multi">
               <button
@@ -1605,7 +1610,7 @@ Reply with only the single word, lowercase, no punctuation.
                 data-tip="Add a live transcript count to the overlay">Length Counter</button>
             </div>
           </div>
-          <div class="tt-row tt-row-field">
+          <div class="tt-row tt-row-field" data-tip="What the overlay counter tracks — lines or paragraph breaks">
             <span class="tt-lbl">Length Unit</span>
             <div class="tt-multi">
               <button
@@ -1620,7 +1625,7 @@ Reply with only the single word, lowercase, no punctuation.
                 data-tip="Count paragraph breaks in the transcript">Paragraphs</button>
             </div>
           </div>
-          <div class="tt-row tt-row-field">
+          <div class="tt-row tt-row-field" data-tip="Where the recording overlay anchors on screen">
             <span class="tt-lbl">Overlay Position</span>
             <div class="tt-multi">
               <button
@@ -1635,7 +1640,7 @@ Reply with only the single word, lowercase, no punctuation.
                 data-tip="Pin the overlay near the top of the screen">Top</button>
             </div>
           </div>
-          <div class="tt-row tt-row-field">
+          <div class="tt-row tt-row-field" data-tip="Colored dot that follows the cursor while recording is active">
             <span class="tt-lbl">Cursor Dot</span>
             <div class="tt-multi">
               <button
@@ -1644,7 +1649,7 @@ Reply with only the single word, lowercase, no punctuation.
                 data-tip="Track the cursor with a colored dot while recording">Follow Cursor</button>
             </div>
           </div>
-          <div class="tt-row tt-row-field">
+          <div class="tt-row tt-row-field" data-tip="Play audio chimes for recording events">
             <span class="tt-lbl">Audio Notify</span>
             <div class="tt-multi">
               <button
@@ -1661,7 +1666,7 @@ Reply with only the single word, lowercase, no punctuation.
                 data-tip="Play a chime when recording is cancelled">on Cancel</button>
             </div>
           </div>
-          <div class="tt-row tt-row-field">
+          <div class="tt-row tt-row-field" data-tip="Keep transcript in clipboard if paste misses a focused text field">
             <span class="tt-lbl">Miss to Clipboard</span>
             <div class="tt-multi">
               <button
@@ -1670,7 +1675,7 @@ Reply with only the single word, lowercase, no punctuation.
                 data-tip="Leave text in clipboard if direct paste fails">Keep on Fail</button>
             </div>
           </div>
-          <div class="tt-row tt-row-field tt-row-col">
+          <div class="tt-row tt-row-field tt-row-col" data-tip="Volume for audio notification chimes">
             <div class="tt-vol-hd">
               <span class="tt-lbl tt-lbl-fixed">Volume</span>
               <span class="tt-vol-val">{Math.round(cfgSoundVolume * 100)}%</span>
@@ -1689,12 +1694,12 @@ Reply with only the single word, lowercase, no punctuation.
         <!-- System -->
         <div class="tt-section tt-section-last">
           <div class="subsection-hd"><span class="subsection-hd-title">System</span></div>
-          <div class="tt-row tt-row-field justify-center">
+          <div class="tt-row tt-row-field justify-center" data-tip="Start TurboTalk automatically when you log in to macOS">
             <button
               onclick={() => { cfgLaunchLogin = !cfgLaunchLogin; saveSettings(); }}
               class="tt-multi-btn" class:tt-multi-on={cfgLaunchLogin}>Automatically launch TurboTalk at login</button>
           </div>
-          <div class="tt-row tt-row-field">
+          <div class="tt-row tt-row-field" data-tip="Reset settings and history, or check for a newer version">
             <div class="flex gap-2 w-full">
               <button
                 onclick={() => shiftHeld ? (commands.resetOnboarding(), recheckReadiness()) : (resetOpen = true, resetClosing = false, resetError = '')}
