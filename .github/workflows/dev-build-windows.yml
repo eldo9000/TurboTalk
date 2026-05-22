@@ -1,0 +1,86 @@
+# TurboTalk — Windows dev build
+#
+# Builds the Windows x64 NSIS installer from main on every push (or manual
+# trigger). Uploads the installer as a GitHub Actions artifact — no release
+# is created and no tag is required. Download from the Actions tab.
+#
+# Retention: 7 days. Re-run the workflow to get a fresh artifact.
+
+name: Dev Build (Windows)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  build-windows:
+    name: Build (windows-x64)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Configure git auth for private cargo deps
+        env:
+          LIBRE_APPS_TOKEN: ${{ secrets.LIBRE_APPS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LIBRE_APPS_TOKEN:-}" ]; then
+            echo "::error::LIBRE_APPS_TOKEN secret is not set."
+            exit 1
+          fi
+          git config --global \
+            "url.https://oauth2:${LIBRE_APPS_TOKEN}@github.com/.insteadOf" \
+            "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-dev-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            windows-dev-cargo-
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Fetch Whisper sidecars
+        run: npm run fetch-sidecars
+
+      - name: Build
+        run: npm run package
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: TurboTalk-windows-x64-dev
+          path: dist-artifacts/*
+          if-no-files-found: error
+          retention-days: 7
