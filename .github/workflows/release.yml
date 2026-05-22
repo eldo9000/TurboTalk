@@ -377,6 +377,11 @@ jobs:
           pattern: turbotalk-*
           merge-multiple: false
 
+      - name: Copy DMG with stable name for direct-download link
+        run: |
+          DMG=$(ls dist/turbotalk-darwin-aarch64/*.dmg | head -n1)
+          cp "$DMG" dist/turbotalk-darwin-aarch64/TurboTalk-macOS-arm64.dmg
+
       - name: Generate latest.json
         id: manifest
         env:
