@@ -66,7 +66,7 @@ pub fn frontmost_app() -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
-pub fn paste(text: &str) -> anyhow::Result<()> {
+pub fn paste(text: &str, keep_on_fail: bool) -> anyhow::Result<()> {
     let mut cb = Clipboard::new()?;
 
     // Save prior clipboard contents (best-effort — ignore if empty/non-text).
@@ -85,18 +85,27 @@ pub fn paste(text: &str) -> anyhow::Result<()> {
         .status()?;
 
     if !status.success() {
-        // Accessibility or Automation denial should not leave the user's
-        // clipboard overwritten with the dictated text.
-        if let Some(prev) = prior.as_ref() {
-            let _ = cb.set_text(prev.clone());
+        // When keep_on_fail is set, leave the transcribed text in the clipboard
+        // so the user can click into a field and manually paste. Otherwise
+        // restore the prior clipboard so the failure is transparent.
+        if !keep_on_fail {
+            if let Some(prev) = prior.as_ref() {
+                let _ = cb.set_text(prev.clone());
+            }
         }
         anyhow::bail!("osascript keystroke failed: {}", status);
     }
 
     // Restore prior clipboard after a short delay so Cmd+V has time to land.
+    // When keep_on_fail is set we skip this: osascript always returns success
+    // even when no text field was focused, so from the user's perspective paste
+    // can "miss" even on a successful keystroke. Leaving the transcribed text in
+    // the clipboard lets them click into a field and paste manually.
     std::thread::sleep(std::time::Duration::from_millis(150));
-    if let Some(prev) = prior {
-        let _ = cb.set_text(prev);
+    if !keep_on_fail {
+        if let Some(prev) = prior {
+            let _ = cb.set_text(prev);
+        }
     }
 
     Ok(())
@@ -115,7 +124,7 @@ pub fn paste(text: &str) -> anyhow::Result<()> {
 /// we return an error containing the literal substring `unsupported platform`
 /// (the test in this file and the UI banner both grep for that token).
 #[cfg(not(target_os = "macos"))]
-pub fn paste(text: &str) -> anyhow::Result<()> {
+pub fn paste(text: &str, _keep_on_fail: bool) -> anyhow::Result<()> {
     use arboard::Clipboard;
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 

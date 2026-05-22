@@ -71,6 +71,12 @@ pub struct Config {
     /// Volume for sound cues, 0.0–1.0.
     #[serde(default = "default_sound_volume")]
     pub sound_volume: f32,
+    /// When paste fails (no focused text field), keep the transcribed text in the
+    /// clipboard instead of restoring the previous clipboard contents. Lets the
+    /// user click into a text field and manually paste rather than losing the text.
+    /// Default: false (restore prior clipboard on failure, existing behaviour).
+    #[serde(default)]
+    pub keep_clipboard_on_paste_fail: bool,
 }
 
 fn default_sound_volume() -> f32 {
@@ -259,6 +265,7 @@ impl Default for Config {
             sound_on_finish: false,
             sound_on_cancel: true,
             sound_volume: 0.5,
+            keep_clipboard_on_paste_fail: false,
         }
     }
 }

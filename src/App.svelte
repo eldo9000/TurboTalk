@@ -285,6 +285,36 @@ Reply with only the single word, lowercase, no punctuation.
     return base + first + last + on;
   }
 
+  // Tooltip state — not reactive, only used in event handlers
+  let tipText = $state('');
+  let _tipTarget = null;
+  let _hideTimer = null;
+
+  function _onIndicatorOver(e) {
+    const btn = e.target?.closest?.('.tt-multi-btn');
+    if (btn) {
+      if (_hideTimer) { clearTimeout(_hideTimer); _hideTimer = null; }
+      if (btn !== _tipTarget) {
+        _tipTarget = btn;
+        tipText = btn.dataset.tip ?? '';
+      }
+    } else if (_tipTarget) {
+      if (!_hideTimer) {
+        _hideTimer = setTimeout(() => {
+          _tipTarget = null;
+          _hideTimer = null;
+          tipText = '';
+        }, 60);
+      }
+    }
+  }
+
+  function _onIndicatorLeave() {
+    if (_hideTimer) { clearTimeout(_hideTimer); _hideTimer = null; }
+    _tipTarget = null;
+    tipText = '';
+  }
+
   let cfgHistoryAutoDelete = $state('10d');
   let cfgSaveHistory       = $state(true);
   let cfgShowOverlay       = $state(true);
@@ -296,6 +326,7 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgSoundOnFinish     = $state(false);
   let cfgSoundOnCancel     = $state(false);
   let cfgSoundVolume       = $state(0.7);
+  let cfgKeepClipboardOnPasteFail = $state(false);
   let volumeSaveTimer      = null;
   let showAdvanced         = $state(false);
   // Captured once from the Modes tab in Chaperone mode (two-column tall layout).
@@ -665,6 +696,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfgSoundOnFinish     = cfg.sound_on_finish                  ?? false;
     cfgSoundOnCancel     = cfg.sound_on_cancel                  ?? false;
     cfgSoundVolume       = cfg.sound_volume                     ?? 0.7;
+    cfgKeepClipboardOnPasteFail = cfg.keep_clipboard_on_paste_fail ?? false;
     cfgLaunchLogin       = launch;
     audioDevices         = devs;
     settingsSaveMsg      = '';
@@ -693,6 +725,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfg.sound_on_finish               = cfgSoundOnFinish;
     cfg.sound_on_cancel               = cfgSoundOnCancel;
     cfg.sound_volume                  = cfgSoundVolume;
+    cfg.keep_clipboard_on_paste_fail  = cfgKeepClipboardOnPasteFail;
     const saveRes = await commands.saveConfig(cfg);
     if (saveRes.status === 'error') {
       settingsSaveMsg = 'Error: ' + saveRes.error;
@@ -1552,18 +1585,24 @@ Reply with only the single word, lowercase, no punctuation.
         </div>
 
         <!-- Audio indicators (Volume embedded) -->
-        <div class="tt-section">
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <!-- svelte-ignore a11y_mouse_events_have_key_events -->
+        <div class="tt-section"
+          onmouseover={_onIndicatorOver}
+          onmouseleave={_onIndicatorLeave}>
           <div class="subsection-hd"><span class="subsection-hd-title">Indicators</span></div>
           <div class="tt-row tt-row-field">
             <span class="tt-lbl">Visual Overlay</span>
             <div class="tt-multi">
               <button
                 onclick={() => { cfgShowOverlay = !cfgShowOverlay; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgShowOverlay}>Recording Active</button>
+                class="tt-multi-btn" class:tt-multi-on={cfgShowOverlay}
+                data-tip="Show the overlay pill while recording">Recording Active</button>
               <button
                 onclick={() => { if (cfgShowOverlay) { cfgTranscriptIndicator = !cfgTranscriptIndicator; saveSettings(); } }}
                 class="tt-multi-btn" class:tt-multi-on={cfgTranscriptIndicator}
-                disabled={!cfgShowOverlay}>Length Counter</button>
+                disabled={!cfgShowOverlay}
+                data-tip="Add a live transcript count to the overlay">Length Counter</button>
             </div>
           </div>
           <div class="tt-row tt-row-field">
@@ -1572,11 +1611,13 @@ Reply with only the single word, lowercase, no punctuation.
               <button
                 onclick={() => { if (cfgTranscriptIndicator && cfgShowOverlay) { cfgLengthIndicatorUnit = 'lines'; saveSettings(); } }}
                 class="tt-multi-btn" class:tt-multi-on={cfgLengthIndicatorUnit === 'lines'}
-                disabled={!cfgTranscriptIndicator || !cfgShowOverlay}>Lines</button>
+                disabled={!cfgTranscriptIndicator || !cfgShowOverlay}
+                data-tip="Count lines in the transcript">Lines</button>
               <button
                 onclick={() => { if (cfgTranscriptIndicator && cfgShowOverlay) { cfgLengthIndicatorUnit = 'paragraphs'; saveSettings(); } }}
                 class="tt-multi-btn" class:tt-multi-on={cfgLengthIndicatorUnit === 'paragraphs'}
-                disabled={!cfgTranscriptIndicator || !cfgShowOverlay}>Paragraphs</button>
+                disabled={!cfgTranscriptIndicator || !cfgShowOverlay}
+                data-tip="Count paragraph breaks in the transcript">Paragraphs</button>
             </div>
           </div>
           <div class="tt-row tt-row-field">
@@ -1585,11 +1626,13 @@ Reply with only the single word, lowercase, no punctuation.
               <button
                 onclick={() => { if (cfgShowOverlay) { cfgOverlayPosition = 'bottom'; saveSettings(); } }}
                 class="tt-multi-btn" class:tt-multi-on={cfgOverlayPosition === 'bottom'}
-                disabled={!cfgShowOverlay}>Bottom</button>
+                disabled={!cfgShowOverlay}
+                data-tip="Pin the overlay near the bottom of the screen">Bottom</button>
               <button
                 onclick={() => { if (cfgShowOverlay) { cfgOverlayPosition = 'top'; saveSettings(); } }}
                 class="tt-multi-btn" class:tt-multi-on={cfgOverlayPosition === 'top'}
-                disabled={!cfgShowOverlay}>Top</button>
+                disabled={!cfgShowOverlay}
+                data-tip="Pin the overlay near the top of the screen">Top</button>
             </div>
           </div>
           <div class="tt-row tt-row-field">
@@ -1597,7 +1640,8 @@ Reply with only the single word, lowercase, no punctuation.
             <div class="tt-multi">
               <button
                 onclick={() => { cfgCursorDotIndicator = !cfgCursorDotIndicator; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgCursorDotIndicator}>Follow Cursor</button>
+                class="tt-multi-btn" class:tt-multi-on={cfgCursorDotIndicator}
+                data-tip="Track the cursor with a colored dot while recording">Follow Cursor</button>
             </div>
           </div>
           <div class="tt-row tt-row-field">
@@ -1605,13 +1649,25 @@ Reply with only the single word, lowercase, no punctuation.
             <div class="tt-multi">
               <button
                 onclick={() => { cfgSoundOnStart = !cfgSoundOnStart; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnStart}>on Start</button>
+                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnStart}
+                data-tip="Play a chime when recording begins">on Start</button>
               <button
                 onclick={() => { cfgSoundOnFinish = !cfgSoundOnFinish; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnFinish}>on Finish</button>
+                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnFinish}
+                data-tip="Play a chime when transcription completes">on Finish</button>
               <button
                 onclick={() => { cfgSoundOnCancel = !cfgSoundOnCancel; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnCancel}>on Cancel</button>
+                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnCancel}
+                data-tip="Play a chime when recording is cancelled">on Cancel</button>
+            </div>
+          </div>
+          <div class="tt-row tt-row-field">
+            <span class="tt-lbl">Miss to Clipboard</span>
+            <div class="tt-multi">
+              <button
+                onclick={() => { cfgKeepClipboardOnPasteFail = !cfgKeepClipboardOnPasteFail; saveSettings(); }}
+                class="tt-multi-btn" class:tt-multi-on={cfgKeepClipboardOnPasteFail}
+                data-tip="Leave text in clipboard if direct paste fails">Keep on Fail</button>
             </div>
           </div>
           <div class="tt-row tt-row-field tt-row-col">
@@ -1817,9 +1873,9 @@ Reply with only the single word, lowercase, no punctuation.
     </div>
   {/if}
 
-  <!-- Bottom bar — zoom left, about right -->
+  <!-- Bottom bar — zoom left, about right; tooltip hint centered when hovering indicators -->
   <div bind:this={bottomBarEl} class="shrink-0 h-7 flex items-center justify-between px-2
-              select-none">
+              select-none relative">
     <div class="flex items-center gap-1">
       <button
         onclick={zoomOut}
@@ -1842,6 +1898,9 @@ Reply with only the single word, lowercase, no punctuation.
                disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
       >+</button>
     </div>
+    {#if tipText}
+      <span class="tt-footer-tip">{tipText}</span>
+    {/if}
     <button
       onclick={() => { aboutOpen = true; aboutClosing = false; }}
       class="text-[10px] text-[var(--text-tertiary,#666)] hover:text-[var(--text-secondary)]
@@ -2036,6 +2095,16 @@ Reply with only the single word, lowercase, no punctuation.
     border: 2px solid var(--surface);
     box-shadow: 0 0 0 1px var(--accent);
     cursor: pointer;
+  }
+
+  .tt-footer-tip {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: var(--text-tertiary, #888);
+    white-space: nowrap;
+    pointer-events: none;
   }
 
   .tt-update-row { padding-top: 10px; }

@@ -670,7 +670,8 @@ mod common {
                                 }
                             }
                             let paste_text = format!("{} ", final_text);
-                            if let Err(e) = crate::paste::paste(&paste_text) {
+                            let keep_on_fail = crate::settings::load().keep_clipboard_on_paste_fail;
+                            if let Err(e) = crate::paste::paste(&paste_text, keep_on_fail) {
                                 tracing::error!("[paste job_id={:?}] {:?}", job_id_opt, e);
                                 // Surface to UI so the user knows the transcript
                                 // was processed but never reached the focused app.
@@ -765,7 +766,8 @@ mod common {
                                         }
                                     }
                                     let paste_text = format!("{} ", final_text);
-                                    if let Err(e) = crate::paste::paste(&paste_text) {
+                                    let keep_on_fail = crate::settings::load().keep_clipboard_on_paste_fail;
+                                    if let Err(e) = crate::paste::paste(&paste_text, keep_on_fail) {
                                         tracing::error!("[paste job_id={:?}] (seg-recovery) {:?}", job_id_opt, e);
                                         emit_critical(&app, "paste-error", "Couldn't paste — check Accessibility permission".to_string());
                                     } else {

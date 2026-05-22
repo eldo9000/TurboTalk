@@ -848,6 +848,7 @@ fn position_main_window(app: &tauri::AppHandle, win: &tauri::WebviewWindow) {
     position_main_window_inner(app, win, ADV_WIN_W_BASE);
 }
 
+
 /// Called from the frontend after every `setSize`.
 /// `adv_width` is the *zoomed* advanced window width (e.g. 1100 at 125% zoom).
 /// Fixes x so the right edge stays flush regardless of zoom level.
@@ -1199,6 +1200,7 @@ pub fn run() {
             if let Some(dot) = app.get_webview_window("cursor-dot") {
                 let _ = dot.set_ignore_cursor_events(true);
             }
+
             // Pin the overlay to the cursor's monitor at startup so the very
             // first press doesn't have to fight a stale primary-monitor
             // placement from `center: true` in tauri.conf.json.
