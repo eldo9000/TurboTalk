@@ -486,14 +486,15 @@ pub trait TranscriptionBackend: Send + Sync {
 /// Backend selection is controlled by the `TT_BACKEND` environment variable:
 ///   `TT_BACKEND=whisper`   → WhisperBackend (default when unset)
 ///   `TT_BACKEND=moonshine` → MoonshineBackend (requires `moonshine` feature + ONNX model)
+///   `TT_BACKEND=parakeet`  → ParakeetBackend  (requires `parakeet`  feature + ONNX model)
 ///
-/// The `moonshine` feature gate must be enabled in Cargo.toml for Moonshine to
-/// compile (`cargo run --features moonshine`). When the feature is absent the
-/// `TT_BACKEND=moonshine` arm returns an error so the frontend surfaces a clear
-/// message rather than silently falling back to Whisper.
+/// The `moonshine` and `parakeet` feature gates must be enabled in Cargo.toml
+/// for those backends to compile. When the feature is absent the corresponding
+/// arm returns an error so the frontend surfaces a clear message rather than
+/// silently falling back to Whisper.
 ///
 /// A settings UI toggle lands in TASK-60. Until then, this env var is the
-/// only stable way to activate Moonshine for testing.
+/// only stable way to activate non-Whisper backends for testing.
 fn build_backend(cfg: &crate::settings::Config) -> anyhow::Result<std::sync::Arc<dyn TranscriptionBackend>> {
     let backend_name = std::env::var("TT_BACKEND")
         .unwrap_or_else(|_| "whisper".to_string());
@@ -511,6 +512,21 @@ fn build_backend(cfg: &crate::settings::Config) -> anyhow::Result<std::sync::Arc
                 anyhow::bail!(
                     "TT_BACKEND=moonshine requested but the `moonshine` feature is not compiled in. \
                      Rebuild with `cargo run --features moonshine` (or `npm run tauri dev -- -- --features moonshine`)."
+                )
+            }
+        }
+        "parakeet" => {
+            #[cfg(feature = "parakeet")]
+            {
+                tracing::info!("[transcribe] TT_BACKEND=parakeet — building ParakeetBackend");
+                let backend = crate::transcribe_backends::parakeet::ParakeetBackend::from_config(cfg)?;
+                Ok(std::sync::Arc::new(backend))
+            }
+            #[cfg(not(feature = "parakeet"))]
+            {
+                anyhow::bail!(
+                    "TT_BACKEND=parakeet requested but the `parakeet` feature is not compiled in. \
+                     Rebuild with `cargo run --features parakeet` (or `npm run tauri dev -- -- --features parakeet`)."
                 )
             }
         }

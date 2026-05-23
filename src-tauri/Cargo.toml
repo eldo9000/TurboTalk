@@ -30,6 +30,11 @@ default = []
 # Once unblocked, uncomment the transcribe-rs dep below and change this to:
 #   moonshine = ["dep:transcribe-rs"]
 moonshine = []
+# `parakeet` activates ParakeetBackend in transcribe_backends/parakeet.rs.
+# Same ort-version-conflict gate as `moonshine` — both backends depend on
+# transcribe-rs 0.3.x. Once the ort conflict with vad-rs is resolved, change to:
+#   parakeet = ["dep:transcribe-rs"]
+parakeet = []
 
 [lib]
 name = "turbotalk_lib"

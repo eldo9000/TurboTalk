@@ -23,6 +23,8 @@ transcription ran longer than 30 s (≈ 3 min of dense speech) silently failed
 with `"error sending request"` because the transcribe HTTP client inherited
 reqwest's blocking-client default 30 s timeout. Now set to an explicit 120 s.
 
+**Parakeet backend scaffold — landed 2026-05-23 (TASK-59):** `ParakeetBackend` struct, `TranscriptionBackend` impl, path validation, and `download_parakeet_model` tauri command are in place. `build_backend()` routes `TT_BACKEND=parakeet` to `ParakeetBackend`. `parakeet = []` feature in Cargo.toml. Currently a documented stub — same ort conflict blocker as Moonshine. Model source: `https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2`. Storage: `~/.config/librewin/turbotalk/models/parakeet/tdt-0.6b-v2/`.
+
 **Moonshine backend scaffold — landed 2026-05-23 (TASK-58):** `MoonshineBackend` struct, `TranscriptionBackend` impl, path validation, and `download_moonshine_model` tauri command are in place. `build_backend()` reads `TT_BACKEND=moonshine` at startup. ONNX runtime dylib placeholder committed, bundle.resources wired. Currently a documented stub — live inference blocked by `ort` version conflict between `transcribe-rs` (rc.12) and `vad-rs` (rc.9). Unblock: wait for vad-rs to update ort pin, then uncomment `transcribe-rs` in Cargo.toml.
 
 **Silero VAD pre-filter — wired 2026-05-23 (TASK-56):** `whisper.vad_enabled` (default true) passes `--vad --vad-model ggml-silero-v5.1.2.bin` to whisper-server so silent regions are skipped before decoding. Settings toggle in Modes tab → Whisper section. VAD model placeholder in `src-tauri/binaries/` — replace with the real 2 MB model from `https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin`. If absent, server starts without VAD (graceful fallback).

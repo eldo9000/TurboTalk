@@ -6,12 +6,15 @@
 //
 // Module layout:
 //   moonshine  — Moonshine ONNX backend via transcribe-rs (TASK-58)
-//   parakeet   — Parakeet ONNX backend via transcribe-rs (TASK-59, TODO)
+//   parakeet   — Parakeet TDT ONNX backend via transcribe-rs (TASK-59)
 //
-// Feature gate: the `moonshine` feature must be enabled in Cargo.toml for
-// the Moonshine impl to compile. This keeps `transcribe-rs` (which pins
-// `ort = "=2.0.0-rc.12"`) from conflicting with `vad-rs` (which pins
+// Feature gate: the `moonshine` and `parakeet` features must be enabled in
+// Cargo.toml for those impls to compile. This keeps `transcribe-rs` (which
+// pins `ort = "=2.0.0-rc.12"`) from conflicting with `vad-rs` (which pins
 // `ort = "=2.0.0-rc.9"`) in the default/dev build.
 
 #[cfg(feature = "moonshine")]
 pub mod moonshine;
+
+#[cfg(feature = "parakeet")]
+pub mod parakeet;
