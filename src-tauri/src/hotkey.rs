@@ -536,7 +536,7 @@ mod common {
                             "[hotkey job_id={:?}] tail speech_detected=false — skipping Whisper",
                             job_id_opt
                         );
-                        Ok(String::new())
+                        Ok(crate::transcribe::TranscriptOutcome { text: String::new(), rejection: None })
                     };
 
                     // Stage 2: wait for any in-flight concurrent segment
@@ -547,13 +547,17 @@ mod common {
                         .map(|st| st.join_segments())
                         .unwrap_or_default();
 
-                    let transcribe_result: anyhow::Result<String> = match tail_result {
-                        Ok(tail) => {
-                            let parts: Vec<&str> = [seg_text.as_str(), tail.as_str()]
+                    // TASK-55: the assembled transcript carries the tail's
+                    // rejection status. Segment rejections are not checked
+                    // per-segment (see transcribe_one_segment comment); only
+                    // the tail's detect_garbage result is propagated here.
+                    let transcribe_result: anyhow::Result<(String, Option<crate::transcribe::RejectReason>)> = match tail_result {
+                        Ok(outcome) => {
+                            let parts: Vec<&str> = [seg_text.as_str(), outcome.text.as_str()]
                                 .into_iter()
                                 .filter(|s| !s.is_empty())
                                 .collect();
-                            Ok(parts.join(" "))
+                            Ok((parts.join(" "), outcome.rejection))
                         }
                         Err(e) => {
                             if !seg_text.is_empty() {
@@ -564,7 +568,7 @@ mod common {
                                     seg_text.chars().count(),
                                     e
                                 );
-                                Ok(seg_text)
+                                Ok((seg_text, None))
                             } else {
                                 Err(e)
                             }
@@ -590,12 +594,38 @@ mod common {
                     }
 
                     match transcribe_result {
-                        Ok(raw_text) => {
+                        Ok((raw_text, rejection)) => {
                             tracing::info!(
                                 "[transcribe job_id={:?}] raw transcript received ({} chars)",
                                 job_id_opt,
                                 raw_text.chars().count()
                             );
+
+                            // TASK-55: if the transcript was flagged as a
+                            // hallucination, emit `transcription-rejected` and
+                            // skip paste entirely. The frontend displays the
+                            // text in the main window with a "⚠ filtered" badge.
+                            if let Some(reason) = rejection {
+                                tracing::warn!(
+                                    "[cleanup job_id={:?}] transcript rejected ({:?}) — skipping paste",
+                                    job_id_opt,
+                                    reason
+                                );
+                                emit_critical(
+                                    &app,
+                                    "transcription-rejected",
+                                    serde_json::json!({
+                                        "text": raw_text,
+                                        "reason": reason.description(),
+                                    }),
+                                );
+                                rec.finish();
+                                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                                if let Some(job_id) = job_id_opt {
+                                    emit_stage(&app, job_id, "ready");
+                                }
+                                return;
+                            }
 
                             // Stage 2: cleanup as its own explicit call site.
                             let final_text = crate::cleanup::process(&raw_text, &app);

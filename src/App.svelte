@@ -145,6 +145,12 @@
   let copiedTs        = $state(null);
   let transcriptError = $state('');
 
+  // TASK-55: hallucination-rejected transcript. When the backend detects a
+  // garbage transcript and emits `transcription-rejected`, we show the text
+  // here with a "⚠ filtered" badge instead of adding it to history or pasting.
+  // Cleared when the user dismisses or a new recording starts.
+  let filteredEntry = $state(/** @type {{ text: string, reason: string } | null} */(null));
+
   // Unified backend error channel. Any `ui-error` event arriving from Rust is
   // pushed here and rendered in a small dismissible toast stack. Auto-dismisses
   // after 5s; click to dismiss early.
@@ -859,6 +865,7 @@ Reply with only the single word, lowercase, no punctuation.
     listen('ptt-down',         () => {
       recording = true;
       transcribing = false;
+      filteredEntry = null; // clear any previous filtered-entry badge
     }).then(u => unlisteners.push(u));
     listen('ptt-up',           () => {
       recording = false;
@@ -901,6 +908,25 @@ Reply with only the single word, lowercase, no punctuation.
       setTimeout(() => {
         uiErrors = uiErrors.filter(x => x.id !== id);
       }, 5000);
+    }).then(u => unlisteners.push(u));
+    // TASK-55: hallucination rejection. Show the text in the main window with
+    // a "⚠ filtered" badge; emit a toast with the reason. Paste is skipped
+    // by the backend — we only observe the result here.
+    listen('transcription-rejected', (e) => {
+      recording = false;
+      transcribing = false;
+      const p = e.payload || {};
+      filteredEntry = { text: p.text || '', reason: p.reason || 'Hallucination detected' };
+      const id = ++uiErrorId;
+      uiErrors = [...uiErrors, {
+        id,
+        kind: 'transcription-rejected',
+        message: `⚠ Filtered: ${p.reason || 'Hallucination detected'} — nothing was pasted.`,
+        recoverable: true,
+      }];
+      setTimeout(() => {
+        uiErrors = uiErrors.filter(x => x.id !== id);
+      }, 8000);
     }).then(u => unlisteners.push(u));
     listen('transcript-error', (e) => {
       recording = false;
@@ -1119,6 +1145,18 @@ Reply with only the single word, lowercase, no punctuation.
         <div class="tt-banner-error">
           <span class="tt-banner-error-msg">{transcriptError}</span>
           <button onclick={() => { transcriptError = ''; }} class="tt-banner-close">×</button>
+        </div>
+      {/if}
+      <!-- TASK-55: hallucination-rejected transcript. Displayed with a warning
+           badge inline so the user can see what was filtered and why. Not added
+           to history (it was never pasted). Dismiss clears the entry. -->
+      {#if filteredEntry}
+        <div class="tt-banner-error" style="border-color: var(--warning, #c97d00); background: var(--warning-bg, #fff8e0);">
+          <div style="flex: 1; min-width: 0;">
+            <span style="font-size: 0.68rem; font-weight: 600; color: var(--warning, #c97d00); margin-right: 4px;">⚠ filtered</span>
+            <span class="tt-banner-error-msg" style="font-size: 0.78rem; opacity: 0.8;">{filteredEntry.text}</span>
+          </div>
+          <button onclick={() => { filteredEntry = null; }} class="tt-banner-close">×</button>
         </div>
       {/if}
       {#if history.length === 0}

@@ -23,6 +23,8 @@ transcription ran longer than 30 s (≈ 3 min of dense speech) silently failed
 with `"error sending request"` because the transcribe HTTP client inherited
 reqwest's blocking-client default 30 s timeout. Now set to an explicit 120 s.
 
+**Hallucination detection filter — landed 2026-05-23 (TASK-55):** three post-hoc signals (gzip compression ratio < 0.35, trigram repetition > 3×, non-letter ratio > 0.30) suppress Whisper garbage on silence; rejected transcripts shown with "⚠ filtered" badge, paste skipped.
+
 **Streaming chunked transcription — landed 2026-05-20 (TASK-54):** silence-boundary
 segments emitted during recording are transcribed concurrently via `SegmentTranscriber`
 so that by key-release only the final tail remains. Segments and tail assembled in

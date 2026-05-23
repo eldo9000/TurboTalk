@@ -74,6 +74,7 @@ tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tempfile        = "3"
+flate2          = "1"
 
 # Typed Rust↔TS config contract. `specta::Type` is derived on every type
 # crossing the Tauri IPC boundary; `tauri-specta` wraps the commands with
