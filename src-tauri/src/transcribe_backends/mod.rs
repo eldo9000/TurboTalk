@@ -2,7 +2,9 @@
 //
 // Each sub-module implements `crate::transcribe::TranscriptionBackend`.
 // The active backend is selected at startup by `build_backend()` in
-// `transcribe.rs` via the `TT_BACKEND` env var or a compile-time const.
+// `transcribe.rs` via the `BackendFamily` enum stored in `settings.Config.backend`
+// (persisted as "whisper" / "moonshine" / "parakeet" in config.toml).
+// The old TT_BACKEND env var was removed in TASK-60.
 //
 // Module layout:
 //   moonshine  — Moonshine ONNX backend via transcribe-rs (TASK-58)

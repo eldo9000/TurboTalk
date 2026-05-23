@@ -483,64 +483,65 @@ pub trait TranscriptionBackend: Send + Sync {
 
 /// Construct the active backend from a settings snapshot.
 ///
-/// Backend selection is controlled by the `TT_BACKEND` environment variable:
-///   `TT_BACKEND=whisper`   → WhisperBackend (default when unset)
-///   `TT_BACKEND=moonshine` → MoonshineBackend (requires `moonshine` feature + ONNX model)
-///   `TT_BACKEND=parakeet`  → ParakeetBackend  (requires `parakeet`  feature + ONNX model)
+/// Backend selection is driven by `cfg.backend` (a `BackendFamily` enum persisted
+/// in `config.toml`). The `TT_BACKEND` environment variable has been removed — use
+/// the Settings UI or edit `config.toml` directly to switch backends.
 ///
-/// The `moonshine` and `parakeet` feature gates must be enabled in Cargo.toml
-/// for those backends to compile. When the feature is absent the corresponding
-/// arm returns an error so the frontend surfaces a clear message rather than
-/// silently falling back to Whisper.
+/// Fallback behaviour when a feature flag is off (TASK-60):
+///   Moonshine or Parakeet selected but their feature gate is disabled (ort conflict
+///   between transcribe-rs rc.12 and vad-rs rc.9) → falls back to Whisper with a
+///   log warning. The fallback is intentional and documented: the backend field is
+///   wired end-to-end now so activation is just a recompile once the conflict resolves.
 ///
-/// A settings UI toggle lands in TASK-60. Until then, this env var is the
-/// only stable way to activate non-Whisper backends for testing.
+/// Note on VAD (TASK-56) and hallucination filter (TASK-55):
+///   The Silero VAD pre-filter is whisper-server-specific; Moonshine/Parakeet have
+///   their own silence handling. The post-hoc hallucination filter runs on all
+///   backends (no harm, family-agnostic). The Chaperone cleanup (cleanup.rs) runs
+///   on the output of all backends — also family-agnostic.
 fn build_backend(cfg: &crate::settings::Config) -> anyhow::Result<std::sync::Arc<dyn TranscriptionBackend>> {
-    let backend_name = std::env::var("TT_BACKEND")
-        .unwrap_or_else(|_| "whisper".to_string());
+    use crate::settings::BackendFamily;
 
-    match backend_name.to_lowercase().as_str() {
-        "moonshine" => {
+    match cfg.backend {
+        BackendFamily::Moonshine => {
             #[cfg(feature = "moonshine")]
             {
-                tracing::info!("[transcribe] TT_BACKEND=moonshine — building MoonshineBackend");
+                tracing::info!("[transcribe] backend=moonshine — building MoonshineBackend");
                 let backend = crate::transcribe_backends::moonshine::MoonshineBackend::from_config(cfg)?;
-                Ok(std::sync::Arc::new(backend))
+                return Ok(std::sync::Arc::new(backend));
             }
             #[cfg(not(feature = "moonshine"))]
             {
-                anyhow::bail!(
-                    "TT_BACKEND=moonshine requested but the `moonshine` feature is not compiled in. \
-                     Rebuild with `cargo run --features moonshine` (or `npm run tauri dev -- -- --features moonshine`)."
-                )
+                tracing::warn!(
+                    "[transcribe] backend=moonshine requested but `moonshine` feature is not compiled in \
+                     (ort version conflict — see TASK-58). Falling back to Whisper."
+                );
+                // Fall through to Whisper below.
             }
         }
-        "parakeet" => {
+        BackendFamily::Parakeet => {
             #[cfg(feature = "parakeet")]
             {
-                tracing::info!("[transcribe] TT_BACKEND=parakeet — building ParakeetBackend");
+                tracing::info!("[transcribe] backend=parakeet — building ParakeetBackend");
                 let backend = crate::transcribe_backends::parakeet::ParakeetBackend::from_config(cfg)?;
-                Ok(std::sync::Arc::new(backend))
+                return Ok(std::sync::Arc::new(backend));
             }
             #[cfg(not(feature = "parakeet"))]
             {
-                anyhow::bail!(
-                    "TT_BACKEND=parakeet requested but the `parakeet` feature is not compiled in. \
-                     Rebuild with `cargo run --features parakeet` (or `npm run tauri dev -- -- --features parakeet`)."
-                )
+                tracing::warn!(
+                    "[transcribe] backend=parakeet requested but `parakeet` feature is not compiled in \
+                     (ort version conflict — see TASK-59). Falling back to Whisper."
+                );
+                // Fall through to Whisper below.
             }
         }
-        // "whisper" | "" | anything else → Whisper
-        _ => {
-            if backend_name != "whisper" {
-                tracing::warn!(
-                    "[transcribe] unknown TT_BACKEND={:?} — falling back to whisper",
-                    backend_name
-                );
-            }
-            Ok(std::sync::Arc::new(WhisperBackend::from_config(cfg)?))
+        BackendFamily::Whisper => {
+            // Explicit Whisper selection — handled below.
         }
     }
+
+    // Default / fallback path: Whisper.
+    tracing::info!("[transcribe] using WhisperBackend");
+    Ok(std::sync::Arc::new(WhisperBackend::from_config(cfg)?))
 }
 
 // ── WhisperBackend ────────────────────────────────────────────────────────────

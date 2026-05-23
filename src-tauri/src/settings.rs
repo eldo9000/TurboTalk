@@ -71,6 +71,12 @@ pub struct Config {
     /// Volume for sound cues, 0.0–1.0.
     #[serde(default = "default_sound_volume")]
     pub sound_volume: f32,
+    /// Which transcription backend family to use. Default: Whisper.
+    /// Moonshine and Parakeet are wired but inactive — they fall back to
+    /// Whisper with a warning until the ort version conflict (TASK-58/59) is
+    /// resolved and their feature flags are enabled.
+    #[serde(default)]
+    pub backend: BackendFamily,
 }
 
 fn default_sound_volume() -> f32 {
@@ -102,6 +108,23 @@ pub struct WhisperConfig {
     /// Toggle off if a quiet speaking voice triggers false negatives.
     #[serde(default = "default_true")]
     pub vad_enabled: bool,
+}
+
+/// Which transcription backend family to use.
+///
+/// Persisted as lowercase ("whisper" / "moonshine" / "parakeet").
+/// Whisper is the default and the only fully-functional backend for now —
+/// Moonshine and Parakeet are documented scaffolds blocked on an ort version
+/// conflict (transcribe-rs rc.12 vs vad-rs rc.9). The enum is wired end-to-end
+/// so the UI and settings round-trip correctly today; activation will work
+/// automatically once the conflict resolves.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum BackendFamily {
+    #[default]
+    Whisper,
+    Moonshine,
+    Parakeet,
 }
 
 /// Cleanup mode. Persisted as lowercase ("off" / "regex" / "chaperone").
@@ -266,6 +289,7 @@ impl Default for Config {
             sound_on_finish: false,
             sound_on_cancel: true,
             sound_volume: 0.5,
+            backend: BackendFamily::default(),
         }
     }
 }

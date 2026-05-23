@@ -12,6 +12,19 @@ export const commands = {
 	saveConfig: (cfg: Config) => typedError<null, string>(__TAURI_INVOKE("save_config", { cfg })),
 	prewarmModel: () => typedError<null, string>(__TAURI_INVOKE("prewarm_model")),
 	scanModelsDir: () => __TAURI_INVOKE<string[]>("scan_models_dir"),
+	/**
+	 *  Return the available models for a given backend family.
+	 * 
+	 *  - Whisper: returns the three models in the existing catalog (same IDs as
+	 *    `download_model` accepts). The UI should show installed vs. not-installed
+	 *    state by cross-referencing with `scan_models_dir`.
+	 *  - Moonshine: returns "tiny" and "base" ONNX variants from the onnx-community repo.
+	 *  - Parakeet: returns the single "tdt-0.6b-v2" variant.
+	 * 
+	 *  `family` is a lowercase string: "whisper" | "moonshine" | "parakeet".
+	 *  Unknown values are treated as "whisper".
+	 */
+	listModelsForFamily: (family: string) => __TAURI_INVOKE<ModelDescriptor[]>("list_models_for_family", { family }),
 	getLaunchAtLogin: () => __TAURI_INVOKE<boolean>("get_launch_at_login"),
 	setLaunchAtLogin: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_launch_at_login", { enabled })),
 	resetTurbotalk: (deleteModels: boolean) => typedError<null, string>(__TAURI_INVOKE("reset_turbotalk", { deleteModels })),
@@ -41,6 +54,21 @@ export const commands = {
 	 *  `"moonshine-<variant>"` so the frontend can show a per-variant progress bar.
 	 */
 	downloadMoonshineModel: (variant: string) => typedError<null, string>(__TAURI_INVOKE("download_moonshine_model", { variant })),
+	/**
+	 *  Download a Parakeet TDT ONNX model bundle from HuggingFace.
+	 * 
+	 *  Model source: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2
+	 *  (ONNX export — community ONNX fork or converted from the upstream checkpoint)
+	 * 
+	 *  Files downloaded per variant:
+	 *    model.onnx
+	 *    tokenizer.json
+	 * 
+	 *  Each file is downloaded separately. Progress ticks are per-file (pct within
+	 *  the overall set). The download key used in progress events is
+	 *  `"parakeet-<variant>"` so the frontend can show a per-variant progress bar.
+	 */
+	downloadParakeetModel: (variant: string) => typedError<null, string>(__TAURI_INVOKE("download_parakeet_model", { variant })),
 	/**
 	 *  Best-effort delete of a model `.bin` file from the canonical models
 	 *  directory. Returns `Ok(true)` if the file was actually deleted,
@@ -185,6 +213,18 @@ export type AudioConfig = {
 	idle_timeout_secs?: number,
 };
 
+/**
+ *  Which transcription backend family to use.
+ * 
+ *  Persisted as lowercase ("whisper" / "moonshine" / "parakeet").
+ *  Whisper is the default and the only fully-functional backend for now —
+ *  Moonshine and Parakeet are documented scaffolds blocked on an ort version
+ *  conflict (transcribe-rs rc.12 vs vad-rs rc.9). The enum is wired end-to-end
+ *  so the UI and settings round-trip correctly today; activation will work
+ *  automatically once the conflict resolves.
+ */
+export type BackendFamily = "whisper" | "moonshine" | "parakeet";
+
 export type CleanupConfig = {
 	mode: CleanupMode,
 	ollama_url: string,
@@ -266,6 +306,13 @@ export type Config = {
 	sound_on_cancel?: boolean,
 	// Volume for sound cues, 0.0–1.0.
 	sound_volume?: number,
+	/**
+	 *  Which transcription backend family to use. Default: Whisper.
+	 *  Moonshine and Parakeet are wired but inactive — they fall back to
+	 *  Whisper with a warning until the ort version conflict (TASK-58/59) is
+	 *  resolved and their feature flags are enabled.
+	 */
+	backend?: BackendFamily,
 };
 
 /**
@@ -331,6 +378,24 @@ export type HotkeyConfig = {
 	 *  Transcribing. Lets the user abort without reaching for Escape.
 	 */
 	cancel_on_hold?: boolean,
+};
+
+/**
+ *  A model descriptor returned by `list_models_for_family`.
+ *  The `id` is a stable short identifier used as a download key and
+ *  in progress events. The `label`, `description`, and `size` fields
+ *  are display strings for the UI. `download_url` is the canonical
+ *  HuggingFace URL (empty string if not directly downloadable via the
+ *  existing `download_model` command). `path_hint` is the expected
+ *  on-disk path after download (empty for Whisper — those use `scan_models_dir`).
+ */
+export type ModelDescriptor = {
+	id: string,
+	label: string,
+	description: string,
+	size: string,
+	download_url: string,
+	path_hint: string,
 };
 
 export type PermissionStatus = "granted" | "denied" | "not_determined" | "unsupported";

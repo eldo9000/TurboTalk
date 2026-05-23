@@ -335,6 +335,7 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgSoundOnCancel     = $state(false);
   let cfgSoundVolume       = $state(0.7);
   let cfgVadEnabled        = $state(true);
+  let cfgBackend           = $state('whisper'); // 'whisper' | 'moonshine' | 'parakeet'
   let volumeSaveTimer      = null;
   let showAdvanced         = $state(false);
   // Captured once from the Modes tab in Chaperone mode (two-column tall layout).
@@ -705,6 +706,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfgSoundOnCancel     = cfg.sound_on_cancel                  ?? false;
     cfgSoundVolume       = cfg.sound_volume                     ?? 0.7;
     cfgVadEnabled        = cfg.whisper?.vad_enabled             ?? true;
+    cfgBackend           = cfg.backend                          ?? 'whisper';
     cfgLaunchLogin       = launch;
     audioDevices         = devs;
     settingsSaveMsg      = '';
@@ -734,6 +736,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfg.sound_on_cancel               = cfgSoundOnCancel;
     cfg.sound_volume                  = cfgSoundVolume;
     cfg.whisper.vad_enabled           = cfgVadEnabled;
+    cfg.backend                       = cfgBackend;
     const saveRes = await commands.saveConfig(cfg);
     if (saveRes.status === 'error') {
       settingsSaveMsg = 'Error: ' + saveRes.error;
@@ -1599,6 +1602,25 @@ Reply with only the single word, lowercase, no punctuation.
                 data-tip="Hold the hotkey for ~1 second during recording to cancel">Hold key</button>
             </div>
           </div>
+        </div>
+
+        <!-- Transcription Engine -->
+        <div class="tt-section">
+          <div class="subsection-hd"><span class="subsection-hd-title">Transcription Engine</span></div>
+          <div class="tt-row tt-row-field" data-tip="Which local transcription engine to use. Moonshine and Parakeet are wired but inactive — they activate automatically once the ort version conflict (TASK-58/59) is resolved.">
+            <div class="tt-seg tt-seg-wide">
+              {#each [['whisper','Whisper'],['moonshine','Moonshine'],['parakeet','Parakeet']] as [v, lbl], i}
+                <button onclick={() => { cfgBackend = v; saveSettings(); }} class={seg(cfgBackend === v, i, 3)}>{lbl}</button>
+              {/each}
+            </div>
+          </div>
+          {#if cfgBackend === 'moonshine'}
+            <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">English-only · low hallucination on silence. Not yet active — falling back to Whisper until the ort conflict resolves.</p>
+          {:else if cfgBackend === 'parakeet'}
+            <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">English-only · fastest. Not yet active — falling back to Whisper until the ort conflict resolves.</p>
+          {:else}
+            <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">Multilingual · most accurate. Model managed in the Models tab.</p>
+          {/if}
         </div>
 
         <!-- Theme -->

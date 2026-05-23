@@ -46,6 +46,18 @@
   let fixImError         = $state('');
   let fixAxError         = $state('');
 
+  // Backend family selection — shown in the model step before picking a model.
+  // Whisper is the default and the only fully-functional backend. Moonshine and
+  // Parakeet are documented stubs (ort conflict, TASK-58/59); the setting is
+  // persisted so activation is a recompile once the conflict resolves.
+  let selectedBackend = $state('whisper'); // 'whisper' | 'moonshine' | 'parakeet'
+
+  const BACKEND_EXPLAINERS = {
+    whisper:   'Multilingual · most accurate. Runs via whisper-server — the default.',
+    moonshine: 'English-only · low hallucination on silence. (Not yet active — activates automatically once the ort conflict resolves.)',
+    parakeet:  'English-only · fastest. (Not yet active — activates automatically once the ort conflict resolves.)',
+  };
+
   const RECOMMENDED = {
     id: 'ggml-large-v3-turbo',
     label: 'Large v3 Turbo',
@@ -61,6 +73,19 @@
   ];
 
   const ALL_MODELS = [RECOMMENDED, ...ALTERNATES];
+
+  // Models to display for non-Whisper families (stubs — shown for awareness).
+  const MOONSHINE_MODELS = [
+    { id: 'moonshine-tiny', label: 'Moonshine Tiny', size: '~65 MB',
+      description: 'English-only · fastest Moonshine variant' },
+    { id: 'moonshine-base', label: 'Moonshine Base', size: '~250 MB',
+      description: 'English-only · more accurate than Tiny' },
+  ];
+
+  const PARAKEET_MODELS = [
+    { id: 'parakeet-tdt-0.6b-v2', label: 'Parakeet TDT 0.6B v2', size: '~1.2 GB',
+      description: 'English-only · NVIDIA NeMo · fastest' },
+  ];
   const WINDOW_W = 440;
   const WINDOW_SIZE_SLACK = 18;
 
@@ -131,8 +156,19 @@
     axOpenedSettings;
     fixImError;
     fixAxError;
+    selectedBackend;
     scheduleResize();
   });
+
+  async function saveBackendToConfig(family) {
+    try {
+      const cfg = await commands.getConfig();
+      cfg.backend = family;
+      await commands.saveConfig(cfg);
+    } catch (e) {
+      // Non-fatal: backend choice is cosmetic until the ort conflict resolves.
+    }
+  }
 
   async function refresh() {
     const [nextReadiness, nextLaunchAtLogin, cfg, scannedModels] = await Promise.all([
@@ -148,6 +184,10 @@
     launchAtLogin = nextLaunchAtLogin;
     cfgModel = nextCfgModel;
     cfgModels = nextCfgModels;
+    // Restore backend selection from persisted config (e.g. if user reopens onboarding).
+    if (cfg.backend && cfg.backend !== selectedBackend) {
+      selectedBackend = cfg.backend;
+    }
     if (
       nextReadiness.accessibility === 'granted'
       && nextReadiness.input_monitoring === 'granted'
@@ -547,19 +587,34 @@
         <!-- Connector 3 → 4 -->
         <div class="h-3.5 ml-[23px] w-1 rounded-full {connectorClass(stepStates.accessibility === 'done')}"></div>
 
-        <!-- Step 4: Model -->
+        <!-- Step 4: Model (includes backend family picker) -->
         <div class="flex gap-3 p-3.5 rounded-lg border {stepClass(stepStates.model)}">
           <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.model)}">
             {stepStates.model === 'done' ? '✓' : '4'}
           </div>
           <div class="flex flex-col gap-2 min-w-0 flex-1">
             <div class="flex flex-col gap-0.5">
-              <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Download a transcription model</h2>
+              <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Choose an engine and download a model</h2>
               <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-                Whisper runs locally on your Mac. Pick a model — the recommended one fits most users.
+                All engines run fully locally on your Mac. Whisper is recommended for most users.
               </p>
             </div>
             {#if stepStates.model === 'active' || stepStates.model === 'done'}
+              <!-- Backend family picker -->
+              <div class="flex gap-1.5">
+                {#each [['whisper','Whisper'],['moonshine','Moonshine'],['parakeet','Parakeet']] as [v, lbl]}
+                  <button
+                    onclick={async () => { selectedBackend = v; await saveBackendToConfig(v); }}
+                    class="px-2.5 py-1 rounded-md border text-[11px] font-medium transition-colors
+                           {selectedBackend === v
+                             ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--text-primary)]'
+                             : 'border-[var(--border,#2a2a2a)] text-[var(--text-secondary)] hover:bg-white/5'}">
+                    {lbl}
+                  </button>
+                {/each}
+              </div>
+              <p class="text-[10px] text-[var(--text-secondary)] leading-snug -mt-1">{BACKEND_EXPLAINERS[selectedBackend]}</p>
+
               {#if downloadingModel}
                 <div class="flex flex-col gap-1.5">
                   <div class="flex items-center justify-between text-[11px]">
@@ -570,7 +625,8 @@
                     <div class="h-full bg-[var(--accent)] transition-all" style="width: {downloadPct}%"></div>
                   </div>
                 </div>
-              {:else}
+              {:else if selectedBackend === 'whisper'}
+                <!-- Whisper model list — downloadable and selectable -->
                 {#each ALL_MODELS as model, idx (model.id)}
                   {@const path = installedPath(model.id)}
                   {@const isSelected = path && path === cfgModel}
@@ -601,9 +657,38 @@
                     </div>
                   </div>
                 {/each}
-                {#if downloadError}
-                  <p class="text-[11px] text-red-400 leading-snug">{downloadError}</p>
-                {/if}
+              {:else if selectedBackend === 'moonshine'}
+                <!-- Moonshine stub — not yet downloadable, shown for awareness -->
+                {#each MOONSHINE_MODELS as model (model.id)}
+                  <div class="flex items-start justify-between gap-2 p-2 rounded-md border border-[var(--border,#2a2a2a)] opacity-60">
+                    <div class="flex flex-col gap-0.5 min-w-0">
+                      <span class="text-[12px] font-medium text-[var(--text-primary)] truncate">{model.label}</span>
+                      <span class="text-[11px] text-[var(--text-secondary)] leading-snug">{model.description}</span>
+                    </div>
+                    <span class="text-[11px] font-mono text-[var(--text-secondary)] shrink-0">{model.size}</span>
+                  </div>
+                {/each}
+                <p class="text-[10px] text-amber-400/90 leading-snug">
+                  Moonshine is not yet active. Select Whisper above to download a model and complete setup.
+                </p>
+              {:else if selectedBackend === 'parakeet'}
+                <!-- Parakeet stub — not yet downloadable, shown for awareness -->
+                {#each PARAKEET_MODELS as model (model.id)}
+                  <div class="flex items-start justify-between gap-2 p-2 rounded-md border border-[var(--border,#2a2a2a)] opacity-60">
+                    <div class="flex flex-col gap-0.5 min-w-0">
+                      <span class="text-[12px] font-medium text-[var(--text-primary)] truncate">{model.label}</span>
+                      <span class="text-[11px] text-[var(--text-secondary)] leading-snug">{model.description}</span>
+                    </div>
+                    <span class="text-[11px] font-mono text-[var(--text-secondary)] shrink-0">{model.size}</span>
+                  </div>
+                {/each}
+                <p class="text-[10px] text-amber-400/90 leading-snug">
+                  Parakeet is not yet active. Select Whisper above to download a model and complete setup.
+                </p>
+              {/if}
+
+              {#if downloadError}
+                <p class="text-[11px] text-red-400 leading-snug">{downloadError}</p>
               {/if}
             {/if}
           </div>

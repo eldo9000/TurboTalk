@@ -1,9 +1,9 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-05-23
-**Current state:** TASK-59 landed — `ParakeetBackend` struct, `TranscriptionBackend` impl, path helpers, and `download_parakeet_model` tauri command added. `build_backend()` now routes `TT_BACKEND=parakeet` to `ParakeetBackend`. `parakeet = []` feature declared in Cargo.toml. Pattern mirrors TASK-58 Moonshine exactly. 97/97 tests green. Same ort version conflict blocker applies — Parakeet backend is a documented stub gated on `parakeet` feature flag.
+**Current state:** TASK-60 landed — Backend selector wired end-to-end. `BackendFamily` enum (Whisper/Moonshine/Parakeet) added to `settings.rs`; `backend` field persists as lowercase string in `config.toml`. `build_backend()` now reads `cfg.backend` instead of the `TT_BACKEND` env var (removed). Moonshine/Parakeet fall back to Whisper with a log warning when their feature flags are off (ort conflict still blocks actual inference — unchanged). `list_models_for_family` Tauri command added. Settings tab has a Transcription Engine segmented picker. Onboarding Step 4 shows the engine picker before the model list. `cargo test` 97/97 green. `npm run build` clean.
 
-BLOCKER (shared with Moonshine): `transcribe-rs 0.3.11` pins `ort = "=2.0.0-rc.12"`. `vad-rs 0.1.5` pins `ort = "=2.0.0-rc.9"`. Both the `moonshine` and `parakeet` features are documented stubs until this conflict resolves. Unblock paths documented in `src-tauri/src/transcribe_backends/parakeet.rs` and `src-tauri/Cargo.toml`.
+BLOCKER (shared with Moonshine and Parakeet): `transcribe-rs 0.3.11` pins `ort = "=2.0.0-rc.12"`. `vad-rs 0.1.5` pins `ort = "=2.0.0-rc.9"`. Both the `moonshine` and `parakeet` features are documented stubs until this conflict resolves. Unblock paths documented in `src-tauri/src/transcribe_backends/parakeet.rs` and `src-tauri/Cargo.toml`.
 
 Previous state: TASK-58 landed (partial) — `MoonshineBackend` struct, `TranscriptionBackend` impl, and all path/download infrastructure are in place. `build_backend()` reads `TT_BACKEND` env var and routes to Moonshine when set. `download_moonshine_model` tauri command exists with the progress-event pattern. `libonnxruntime.dylib` placeholder committed; bundle.resources wired in `tauri.macos.conf.json`. 97/97 tests green, clippy clean.
 

@@ -1126,6 +1126,95 @@ async fn download_parakeet_model(
     Ok(())
 }
 
+/// A model descriptor returned by `list_models_for_family`.
+/// The `id` is a stable short identifier used as a download key and
+/// in progress events. The `label`, `description`, and `size` fields
+/// are display strings for the UI. `download_url` is the canonical
+/// HuggingFace URL (empty string if not directly downloadable via the
+/// existing `download_model` command). `path_hint` is the expected
+/// on-disk path after download (empty for Whisper — those use `scan_models_dir`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct ModelDescriptor {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub size: String,
+    pub download_url: String,
+    pub path_hint: String,
+}
+
+/// Return the available models for a given backend family.
+///
+/// - Whisper: returns the three models in the existing catalog (same IDs as
+///   `download_model` accepts). The UI should show installed vs. not-installed
+///   state by cross-referencing with `scan_models_dir`.
+/// - Moonshine: returns "tiny" and "base" ONNX variants from the onnx-community repo.
+/// - Parakeet: returns the single "tdt-0.6b-v2" variant.
+///
+/// `family` is a lowercase string: "whisper" | "moonshine" | "parakeet".
+/// Unknown values are treated as "whisper".
+#[tauri::command]
+#[specta::specta]
+fn list_models_for_family(family: String) -> Vec<ModelDescriptor> {
+    match family.to_lowercase().as_str() {
+        "moonshine" => vec![
+            ModelDescriptor {
+                id: "moonshine-tiny".to_string(),
+                label: "Moonshine Tiny".to_string(),
+                description: "English-only · low hallucination on silence · fastest".to_string(),
+                size: "~65 MB".to_string(),
+                download_url: "https://huggingface.co/onnx-community/moonshine-tiny-ONNX".to_string(),
+                path_hint: ".config/librewin/turbotalk/models/moonshine/tiny/".to_string(),
+            },
+            ModelDescriptor {
+                id: "moonshine-base".to_string(),
+                label: "Moonshine Base".to_string(),
+                description: "English-only · low hallucination on silence · more accurate than tiny".to_string(),
+                size: "~250 MB".to_string(),
+                download_url: "https://huggingface.co/onnx-community/moonshine-base-ONNX".to_string(),
+                path_hint: ".config/librewin/turbotalk/models/moonshine/base/".to_string(),
+            },
+        ],
+        "parakeet" => vec![
+            ModelDescriptor {
+                id: "parakeet-tdt-0.6b-v2".to_string(),
+                label: "Parakeet TDT 0.6B v2".to_string(),
+                description: "English-only · fastest · NVIDIA NeMo".to_string(),
+                size: "~1.2 GB".to_string(),
+                download_url: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2".to_string(),
+                path_hint: ".config/librewin/turbotalk/models/parakeet/tdt-0.6b-v2/".to_string(),
+            },
+        ],
+        // "whisper" or anything else
+        _ => vec![
+            ModelDescriptor {
+                id: "ggml-large-v3-turbo".to_string(),
+                label: "Large v3 Turbo".to_string(),
+                description: "Recommended · best accuracy · multilingual".to_string(),
+                size: "1.6 GB".to_string(),
+                download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin".to_string(),
+                path_hint: String::new(),
+            },
+            ModelDescriptor {
+                id: "ggml-large-v3-turbo-q5_0".to_string(),
+                label: "Large v3 Turbo (q5_0)".to_string(),
+                description: "Low RAM · slightly reduced accuracy".to_string(),
+                size: "574 MB".to_string(),
+                download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin".to_string(),
+                path_hint: String::new(),
+            },
+            ModelDescriptor {
+                id: "ggml-large-v3".to_string(),
+                label: "Large v3".to_string(),
+                description: "High accuracy · high RAM · slow".to_string(),
+                size: "3.1 GB".to_string(),
+                download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin".to_string(),
+                path_hint: String::new(),
+            },
+        ],
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 fn list_audio_devices() -> Vec<String> {
@@ -1334,6 +1423,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         save_config,
         prewarm_model,
         scan_models_dir,
+        list_models_for_family,
         get_launch_at_login,
         set_launch_at_login,
         reset_turbotalk,
@@ -1418,6 +1508,7 @@ pub fn run() {
             save_config,
             prewarm_model,
             scan_models_dir,
+            list_models_for_family,
             get_launch_at_login,
             set_launch_at_login,
             reset_turbotalk,
