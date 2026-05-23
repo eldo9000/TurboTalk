@@ -456,17 +456,53 @@ fn normalize_whisper_text(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Lifecycle owner for whisper transcription. TASK-47: this struct spawns a
-/// long-lived `whisper-server` process at construction time and reuses it for
-/// all subsequent `transcribe` calls — keeping the model warm across
-/// dictations and eliminating the per-call model-reload latency.
+// ── TranscriptionBackend trait (TASK-57) ─────────────────────────────────────
+
+/// Common interface for all transcription backends. Implementations must be
+/// `Send + Sync` so they can live behind `Arc<dyn TranscriptionBackend>` and be
+/// shared across the hotkey, abort, and prewarm threads.
+///
+/// The trait is intentionally minimal. All Whisper-specific concerns
+/// (audio_ctx tuning, vocabulary prompt, subprocess lifecycle) stay inside
+/// `WhisperBackend`. Only the three cross-backend verbs are exposed.
+pub trait TranscriptionBackend: Send + Sync {
+    /// POST `wav` to the backend and return the cleaned transcript text.
+    /// Callers inspect `TranscriptOutcome.rejection` to decide whether to paste.
+    fn transcribe(&self, wav: &Path) -> anyhow::Result<TranscriptOutcome>;
+
+    /// Kill any in-flight work. After `abort()` the backend is in a broken
+    /// state — the caller must call `invalidate_worker()` and let the next
+    /// `run_raw` rebuild.
+    fn abort(&self);
+
+    /// A stable string that uniquely identifies the loaded model (typically
+    /// its canonicalized path). Used by `worker_for` to decide whether the
+    /// cached backend is still valid for the current settings.
+    fn model_identity(&self) -> String;
+}
+
+/// Construct the active backend from a settings snapshot. Today this always
+/// returns a `WhisperBackend`. TASK-58/59 will add a Moonshine/Parakeet arm.
+fn build_backend(cfg: &crate::settings::Config) -> anyhow::Result<std::sync::Arc<dyn TranscriptionBackend>> {
+    Ok(std::sync::Arc::new(WhisperBackend::from_config(cfg)?))
+}
+
+// ── WhisperBackend ────────────────────────────────────────────────────────────
+
+/// Concrete `TranscriptionBackend` backed by a long-lived `whisper-server`
+/// subprocess. TASK-47 introduced this pattern; TASK-57 promotes it behind
+/// the `TranscriptionBackend` trait so future backends can be swapped in.
 ///
 /// The internal `spawn_lock` enforces the one-in-flight invariant from
 /// TASK-14: any second concurrent caller blocks here rather than racing the
 /// HTTP POST. `server_child` is protected by a separate `parking_lot::Mutex`
 /// so `abort()` can kill the server from another thread without taking the
 /// coarser `spawn_lock`.
-pub struct TranscriptionWorker {
+///
+/// `TranscriptionWorker` is a deprecated type alias kept for any tests or
+/// comments that still reference the old name. New code should use
+/// `WhisperBackend` directly.
+pub struct WhisperBackend {
     /// whisper-server binary path. Validated at construction.
     #[allow(dead_code)]
     bin: PathBuf,
@@ -491,7 +527,12 @@ pub struct TranscriptionWorker {
     audio_ctx: u32,
 }
 
-impl TranscriptionWorker {
+/// Deprecated alias for `WhisperBackend`. Used only in legacy doc comments and
+/// the single test that constructs a bare struct literal (see `abort_noop_when_idle`).
+#[allow(dead_code)]
+pub type TranscriptionWorker = WhisperBackend;
+
+impl WhisperBackend {
     /// Build a worker from a snapshot of the current settings. Validates the
     /// binary path and the model path eagerly, then spawns `whisper-server`
     /// and waits for it to become ready.
@@ -746,7 +787,7 @@ impl TranscriptionWorker {
     ///
     /// After `abort()` the worker is in a broken state — the caller must
     /// rebuild. `abort_active()` calls `invalidate_worker()` after this.
-    pub fn abort(&self) {
+    pub fn abort_inner(&self) {
         let mut slot = self.server_child.lock();
         if let Some(mut child) = slot.take() {
             if let Err(e) = child.kill() {
@@ -759,7 +800,24 @@ impl TranscriptionWorker {
     }
 }
 
-impl Drop for TranscriptionWorker {
+impl TranscriptionBackend for WhisperBackend {
+    fn transcribe(&self, wav: &Path) -> anyhow::Result<TranscriptOutcome> {
+        WhisperBackend::transcribe(self, wav)
+    }
+
+    fn abort(&self) {
+        self.abort_inner();
+    }
+
+    fn model_identity(&self) -> String {
+        self.model
+            .to_str()
+            .unwrap_or("")
+            .to_string()
+    }
+}
+
+impl Drop for WhisperBackend {
     fn drop(&mut self) {
         let mut slot = self.server_child.lock();
         if let Some(mut child) = slot.take() {
@@ -770,14 +828,18 @@ impl Drop for TranscriptionWorker {
     }
 }
 
-/// Process-wide handle to the active worker. `None` on cold start and after
+/// Process-wide handle to the active backend. `None` on cold start and after
 /// model invalidation; rebuilt lazily by `run_raw`.
 ///
 /// The outer `Mutex` is the sequencing point — it serializes `take` /
 /// `replace` / read accesses across the recorder, settings, and any future
 /// app-shutdown drop site. The inner `Option` represents "worker not yet
 /// built (or invalidated)".
-static WORKER: Mutex<Option<std::sync::Arc<TranscriptionWorker>>> = Mutex::new(None);
+///
+/// `Arc<dyn TranscriptionBackend>` is used (rather than `Box<dyn …>`) so the
+/// abort path and the spawn path can each clone the Arc and release the outer
+/// mutex before the (potentially long) HTTP POST or kill() call.
+static WORKER: Mutex<Option<std::sync::Arc<dyn TranscriptionBackend>>> = Mutex::new(None);
 
 /// Abort the in-flight whisper-server subprocess. Called by `Recorder::cancel()`
 /// when a cancel is triggered while in `Transcribing` state (TASK-23).
@@ -810,23 +872,26 @@ pub fn invalidate_worker() {
     PREWARM_IN_FLIGHT.store(false, Ordering::Release);
 }
 
-/// Get-or-build the worker against the current settings snapshot. If the
-/// cached worker's model differs from the current `cfg.whisper.model`, it is
-/// dropped and rebuilt. Returns an `Arc` so the spawn call can drop the outer
-/// mutex before the (potentially long) HTTP POST.
+/// Get-or-build the backend against the current settings snapshot. If the
+/// cached backend's `model_identity()` differs from the current
+/// `cfg.whisper.model` (canonicalized), it is dropped and rebuilt. Returns an
+/// `Arc<dyn TranscriptionBackend>` so the spawn call can drop the outer mutex
+/// before the (potentially long) HTTP POST.
 fn worker_for(
     cfg: &crate::settings::Config,
-) -> anyhow::Result<std::sync::Arc<TranscriptionWorker>> {
+) -> anyhow::Result<std::sync::Arc<dyn TranscriptionBackend>> {
     let mut slot = WORKER.lock().unwrap_or_else(|e| e.into_inner());
 
-    // Cheap cache-validity check: compare canonicalized model paths.
+    // Cache-validity check: compare model_identity() strings. The identity is
+    // the canonicalized model path as a String; same string = same backend.
     // canonicalize() may fail if the file was deleted out from under us —
     // treat that as "rebuild and let the build error surface".
-    let configured_canon = std::path::PathBuf::from(&cfg.whisper.model)
+    let configured_identity = std::path::PathBuf::from(&cfg.whisper.model)
         .canonicalize()
-        .ok();
-    let cached_matches = match (&*slot, configured_canon.as_ref()) {
-        (Some(w), Some(c)) => w.model_path() == c.as_path(),
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()));
+    let cached_matches = match (&*slot, configured_identity.as_ref()) {
+        (Some(w), Some(c)) => w.model_identity() == *c,
         _ => false,
     };
 
@@ -834,14 +899,14 @@ fn worker_for(
         return Ok(slot.as_ref().unwrap().clone());
     }
 
-    let fresh = std::sync::Arc::new(TranscriptionWorker::from_config(cfg)?);
+    let fresh = build_backend(cfg)?;
+    tracing::info!(
+        "[transcribe] backend built — model identity: {}",
+        fresh.model_identity()
+    );
     *slot = Some(fresh.clone());
     READY.store(true, Ordering::Release);
     PREWARM_FAILED.store(false, Ordering::Release);
-    tracing::info!(
-        "[transcribe] worker built for model {:?}",
-        fresh.model_path()
-    );
     Ok(fresh)
 }
 
