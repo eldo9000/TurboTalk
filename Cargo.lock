@@ -5510,6 +5510,7 @@ dependencies = [
  "crossbeam-channel",
  "dirs 5.0.1",
  "enigo",
+ "flate2",
  "hound",
  "librewin-common",
  "objc2 0.6.4",

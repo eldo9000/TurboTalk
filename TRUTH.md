@@ -23,6 +23,8 @@ transcription ran longer than 30 s (≈ 3 min of dense speech) silently failed
 with `"error sending request"` because the transcribe HTTP client inherited
 reqwest's blocking-client default 30 s timeout. Now set to an explicit 120 s.
 
+**Moonshine backend scaffold — landed 2026-05-23 (TASK-58):** `MoonshineBackend` struct, `TranscriptionBackend` impl, path validation, and `download_moonshine_model` tauri command are in place. `build_backend()` reads `TT_BACKEND=moonshine` at startup. ONNX runtime dylib placeholder committed, bundle.resources wired. Currently a documented stub — live inference blocked by `ort` version conflict between `transcribe-rs` (rc.12) and `vad-rs` (rc.9). Unblock: wait for vad-rs to update ort pin, then uncomment `transcribe-rs` in Cargo.toml.
+
 **Silero VAD pre-filter — wired 2026-05-23 (TASK-56):** `whisper.vad_enabled` (default true) passes `--vad --vad-model ggml-silero-v5.1.2.bin` to whisper-server so silent regions are skipped before decoding. Settings toggle in Modes tab → Whisper section. VAD model placeholder in `src-tauri/binaries/` — replace with the real 2 MB model from `https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin`. If absent, server starts without VAD (graceful fallback).
 
 **Hallucination detection filter — landed 2026-05-23 (TASK-55):** three post-hoc signals (gzip compression ratio < 0.35, trigram repetition > 3×, non-letter ratio > 0.30) suppress Whisper garbage on silence; rejected transcripts shown with "⚠ filtered" badge, paste skipped.

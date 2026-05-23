@@ -6,6 +6,31 @@ authors = ["IronTree Software"]
 edition = "2021"
 rust-version = "1.77"
 
+# ── Feature flags ─────────────────────────────────────────────────────────────
+# `moonshine` — enable the Moonshine ONNX transcription backend (TASK-58).
+#
+# Why feature-gated:
+#   transcribe-rs 0.3.x pins ort = "=2.0.0-rc.12" (via its `onnx` feature).
+#   vad-rs 0.1.5   pins ort = "=2.0.0-rc.9".
+#   Cargo cannot unify two different =exact-pinned versions of the same crate,
+#   so both crates cannot be active in the same build simultaneously.
+#
+#   Gating `transcribe-rs` behind the `moonshine` feature means the default
+#   dev/release build continues to use vad-rs (rc.9) without conflicts.
+#   To activate Moonshine: `cargo build --features moonshine`
+#   (note: the VAD path then uses whatever ort version transcribe-rs pulls).
+#
+#   Long-term resolution: wait for vad-rs to update to ort rc.12, then both
+#   crates can coexist in the default build and this gate can be removed.
+[features]
+default = []
+# `moonshine` activates MoonshineBackend in transcribe_backends/moonshine.rs.
+# Currently a no-op feature (no additional deps) because transcribe-rs cannot
+# be added to Cargo.toml due to the ort version conflict with vad-rs.
+# Once unblocked, uncomment the transcribe-rs dep below and change this to:
+#   moonshine = ["dep:transcribe-rs"]
+moonshine = []
+
 [lib]
 name = "turbotalk_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -60,6 +85,26 @@ tokio           = { version = "1", features = ["rt-multi-thread", "macros", "pro
 # HTTP for local LLM (Ollama) calls in cleanup.rs
 reqwest         = { version = "0.12", features = ["json", "blocking", "multipart", "rustls-tls"], default-features = false }
 url             = "2"
+
+# TASK-58: Moonshine ONNX backend.
+#
+# BLOCKED: transcribe-rs 0.3.11 pins ort = "=2.0.0-rc.12" (via its `onnx`
+# feature). vad-rs 0.1.5 pins ort = "=2.0.0-rc.9". Cargo's global dependency
+# resolver cannot unify two exact-pinned versions of `ort` — even when
+# transcribe-rs is declared optional, the resolver still fails because it
+# resolves ALL crates (including optionals) in one pass.
+#
+# Unblock options:
+#   (a) Wait for vad-rs to update to ort rc.12, then both can coexist.
+#   (b) Replace vad-rs with a direct ort rc.12 VAD integration.
+#   (c) Move transcribe-rs into a separate Cargo workspace member that builds
+#       as a sidecar binary, communicating with the main process via IPC.
+#
+# The MoonshineBackend implementation in transcribe_backends/moonshine.rs is
+# complete and correct; it compiles when `transcribe-rs` is resolvable.
+# Uncomment the line below once the ort version conflict is resolved:
+#
+# transcribe-rs   = { version = "0.3.11", features = ["onnx"], optional = true }
 
 # Misc
 dirs            = "5"

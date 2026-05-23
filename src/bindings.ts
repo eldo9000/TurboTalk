@@ -19,6 +19,29 @@ export const commands = {
 	downloadModel: (modelId: string) => typedError<string, string>(__TAURI_INVOKE("download_model", { modelId })),
 	cancelDownload: (modelId: string) => __TAURI_INVOKE<void>("cancel_download", { modelId }),
 	/**
+	 *  Download a Moonshine ONNX model bundle from HuggingFace (TASK-58).
+	 * 
+	 *  `variant` must be "tiny" or "base". Files are stored under:
+	 *    `~/.config/librewin/turbotalk/models/moonshine/<variant>/`
+	 * 
+	 *  Progress events match the Whisper `download-progress` pattern:
+	 *    `{ "name": "moonshine-<variant>", "pct": 0..100 }`
+	 * 
+	 *  The HuggingFace ONNX community repo for each variant:
+	 *    tiny: https://huggingface.co/onnx-community/moonshine-tiny-ONNX
+	 *    base: https://huggingface.co/onnx-community/moonshine-base-ONNX
+	 * 
+	 *  The three required files per variant are:
+	 *    encoder_model.onnx
+	 *    decoder_model_merged.onnx
+	 *    tokenizer.json
+	 * 
+	 *  Each file is downloaded separately. Progress ticks are per-file (pct within
+	 *  the overall set). The download key used in progress events is
+	 *  `"moonshine-<variant>"` so the frontend can show a per-variant progress bar.
+	 */
+	downloadMoonshineModel: (variant: string) => typedError<null, string>(__TAURI_INVOKE("download_moonshine_model", { variant })),
+	/**
 	 *  Best-effort delete of a model `.bin` file from the canonical models
 	 *  directory. Returns `Ok(true)` if the file was actually deleted,
 	 *  `Ok(false)` for safe skips (file gone, custom path outside the models
@@ -343,6 +366,13 @@ export type WhisperConfig = {
 	bin: string,
 	model: string,
 	models?: string[],
+	/**
+	 *  Enable Silero VAD pre-filter in whisper-server. When true, the server
+	 *  skips silent regions before the decoder runs, preventing hallucination
+	 *  on silence and speeding up transcription of recordings with long pauses.
+	 *  Toggle off if a quiet speaking voice triggers false negatives.
+	 */
+	vad_enabled?: boolean,
 };
 
 /* Tauri Specta runtime */

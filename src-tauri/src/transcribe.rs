@@ -481,10 +481,50 @@ pub trait TranscriptionBackend: Send + Sync {
     fn model_identity(&self) -> String;
 }
 
-/// Construct the active backend from a settings snapshot. Today this always
-/// returns a `WhisperBackend`. TASK-58/59 will add a Moonshine/Parakeet arm.
+/// Construct the active backend from a settings snapshot.
+///
+/// Backend selection is controlled by the `TT_BACKEND` environment variable:
+///   `TT_BACKEND=whisper`   → WhisperBackend (default when unset)
+///   `TT_BACKEND=moonshine` → MoonshineBackend (requires `moonshine` feature + ONNX model)
+///
+/// The `moonshine` feature gate must be enabled in Cargo.toml for Moonshine to
+/// compile (`cargo run --features moonshine`). When the feature is absent the
+/// `TT_BACKEND=moonshine` arm returns an error so the frontend surfaces a clear
+/// message rather than silently falling back to Whisper.
+///
+/// A settings UI toggle lands in TASK-60. Until then, this env var is the
+/// only stable way to activate Moonshine for testing.
 fn build_backend(cfg: &crate::settings::Config) -> anyhow::Result<std::sync::Arc<dyn TranscriptionBackend>> {
-    Ok(std::sync::Arc::new(WhisperBackend::from_config(cfg)?))
+    let backend_name = std::env::var("TT_BACKEND")
+        .unwrap_or_else(|_| "whisper".to_string());
+
+    match backend_name.to_lowercase().as_str() {
+        "moonshine" => {
+            #[cfg(feature = "moonshine")]
+            {
+                tracing::info!("[transcribe] TT_BACKEND=moonshine — building MoonshineBackend");
+                let backend = crate::transcribe_backends::moonshine::MoonshineBackend::from_config(cfg)?;
+                Ok(std::sync::Arc::new(backend))
+            }
+            #[cfg(not(feature = "moonshine"))]
+            {
+                anyhow::bail!(
+                    "TT_BACKEND=moonshine requested but the `moonshine` feature is not compiled in. \
+                     Rebuild with `cargo run --features moonshine` (or `npm run tauri dev -- -- --features moonshine`)."
+                )
+            }
+        }
+        // "whisper" | "" | anything else → Whisper
+        _ => {
+            if backend_name != "whisper" {
+                tracing::warn!(
+                    "[transcribe] unknown TT_BACKEND={:?} — falling back to whisper",
+                    backend_name
+                );
+            }
+            Ok(std::sync::Arc::new(WhisperBackend::from_config(cfg)?))
+        }
+    }
 }
 
 // ── WhisperBackend ────────────────────────────────────────────────────────────

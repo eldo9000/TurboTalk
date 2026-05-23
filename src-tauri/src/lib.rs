@@ -22,6 +22,7 @@ pub mod recorder;
 pub mod settings;
 pub mod theme;
 pub mod transcribe;
+pub mod transcribe_backends;
 pub mod tray;
 pub mod vad;
 
@@ -671,6 +672,237 @@ fn cancel_download(model_id: String, cancel_set: tauri::State<'_, DownloadCancel
     cancel_set.lock().insert(model_id);
 }
 
+/// Download a Moonshine ONNX model bundle from HuggingFace (TASK-58).
+///
+/// `variant` must be "tiny" or "base". Files are stored under:
+///   `~/.config/librewin/turbotalk/models/moonshine/<variant>/`
+///
+/// Progress events match the Whisper `download-progress` pattern:
+///   `{ "name": "moonshine-<variant>", "pct": 0..100 }`
+///
+/// The HuggingFace ONNX community repo for each variant:
+///   tiny: https://huggingface.co/onnx-community/moonshine-tiny-ONNX
+///   base: https://huggingface.co/onnx-community/moonshine-base-ONNX
+///
+/// The three required files per variant are:
+///   encoder_model.onnx
+///   decoder_model_merged.onnx
+///   tokenizer.json
+///
+/// Each file is downloaded separately. Progress ticks are per-file (pct within
+/// the overall set). The download key used in progress events is
+/// `"moonshine-<variant>"` so the frontend can show a per-variant progress bar.
+#[tauri::command]
+#[specta::specta]
+async fn download_moonshine_model(
+    variant: String,
+    app: tauri::AppHandle,
+    cancel_set: tauri::State<'_, DownloadCancelSet>,
+) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+
+    // Validate variant name early so we fail fast.
+    if !matches!(variant.as_str(), "tiny" | "base") {
+        return Err(format!(
+            "unknown Moonshine variant {:?} — expected \"tiny\" or \"base\"",
+            variant
+        ));
+    }
+
+    let repo = match variant.as_str() {
+        "tiny" => "onnx-community/moonshine-tiny-ONNX",
+        "base" => "onnx-community/moonshine-base-ONNX",
+        _ => unreachable!(),
+    };
+
+    // Files to download. Each is fetched from the HuggingFace model hub.
+    // ONNX int8 quantized variants are available but the default (fp32) is
+    // what transcribe-rs's `Quantization::default()` resolves to.
+    let files: &[&str] = &[
+        "encoder_model.onnx",
+        "decoder_model_merged.onnx",
+        "tokenizer.json",
+    ];
+
+    // Build destination directory.
+    let mut dest_dir =
+        dirs::home_dir().ok_or_else(|| "Could not locate home directory".to_string())?;
+    dest_dir.push(".config/librewin/turbotalk/models/moonshine");
+    dest_dir.push(&variant);
+    tokio::fs::create_dir_all(&dest_dir)
+        .await
+        .map_err(|e| format!("Failed to create model directory: {}", e))?;
+    let canon_dir = dest_dir
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize model directory: {}", e))?;
+
+    // Verify destination is inside the expected moonshine models dir.
+    {
+        let mut expected_base =
+            dirs::home_dir().ok_or_else(|| "Could not locate home directory".to_string())?;
+        expected_base.push(".config/librewin/turbotalk/models/moonshine");
+        if let Ok(canon_base) = expected_base.canonicalize() {
+            if !canon_dir.starts_with(&canon_base) {
+                return Err("Download destination is outside the allowed directory".to_string());
+            }
+        }
+    }
+
+    let event_name = format!("moonshine-{}", variant);
+    let client = reqwest::Client::builder()
+        .user_agent("TurboTalk/0.0.1")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let _ = app.emit(
+        "download-progress",
+        serde_json::json!({ "name": &event_name, "pct": 0u8 }),
+    );
+
+    for (file_idx, filename) in files.iter().enumerate() {
+        let download_key = format!("{}-{}", event_name, filename);
+
+        // Check for cancellation before starting each file.
+        if cancel_set.lock().remove(&event_name) {
+            return Err("cancelled".into());
+        }
+
+        let url = format!(
+            "https://huggingface.co/{}/resolve/main/{}",
+            repo, filename
+        );
+
+        // Validate URL shape — must be huggingface.co.
+        {
+            let parsed = url::Url::parse(&url).map_err(|e| format!("invalid URL: {}", e))?;
+            if parsed.scheme() != "https" || parsed.host_str() != Some("huggingface.co") {
+                return Err("model downloads must use https://huggingface.co".to_string());
+            }
+        }
+
+        // Reject path traversal in filename.
+        if filename.contains(std::path::MAIN_SEPARATOR) || filename.contains("..") {
+            return Err(format!("invalid filename: {}", filename));
+        }
+        let dest_path = canon_dir.join(filename);
+        if !dest_path.starts_with(&canon_dir) {
+            return Err("download destination escaped model directory".to_string());
+        }
+
+        // Skip if already downloaded (idempotent re-runs).
+        if dest_path.exists() {
+            tracing::info!("[moonshine-dl] {} already present — skipping", filename);
+            // Still emit progress for the file.
+            let base_pct = ((file_idx + 1) * 100 / files.len()).min(99) as u8;
+            let _ = app.emit(
+                "download-progress",
+                serde_json::json!({ "name": &event_name, "pct": base_pct }),
+            );
+            continue;
+        }
+
+        tracing::info!("[moonshine-dl] downloading {} from {}", filename, url);
+
+        let mut resp = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Request failed for {}: {}", filename, e))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("HTTP {} downloading {}", resp.status(), filename));
+        }
+
+        let total = resp.content_length();
+        let mut downloaded: u64 = 0;
+
+        let temp_path = tempfile::Builder::new()
+            .prefix("turbotalk-moonshine-")
+            .suffix(".download")
+            .tempfile_in(&canon_dir)
+            .map_err(|e| format!("Failed to create temp file: {}", e))?
+            .into_temp_path();
+        let temp_file_path = temp_path.to_path_buf();
+        let mut file = tokio::fs::File::create(&temp_file_path)
+            .await
+            .map_err(|e| format!("Failed to create file: {}", e))?;
+
+        loop {
+            if cancel_set.lock().remove(&event_name) {
+                drop(file);
+                let _ = tokio::fs::remove_file(&temp_file_path).await;
+                return Err("cancelled".into());
+            }
+            // Also check per-file cancel key.
+            if cancel_set.lock().remove(&download_key) {
+                drop(file);
+                let _ = tokio::fs::remove_file(&temp_file_path).await;
+                return Err("cancelled".into());
+            }
+            match resp.chunk().await {
+                Ok(Some(chunk)) => {
+                    downloaded += chunk.len() as u64;
+                    if let Err(e) = file.write_all(&chunk).await {
+                        drop(file);
+                        let _ = tokio::fs::remove_file(&temp_file_path).await;
+                        return Err(format!("Write failed for {}: {}", filename, e));
+                    }
+                    // Progress: blend per-file progress with overall file index.
+                    // Each file contributes an equal fraction of 0..99%.
+                    let file_pct = total
+                        .filter(|&t| t > 0)
+                        .map(|t| (downloaded * 100 / t).min(100) as u8)
+                        .unwrap_or(50u8);
+                    let overall_pct = ((file_idx as u32 * 100
+                        + file_pct as u32)
+                        / files.len() as u32)
+                        .min(99) as u8;
+                    let _ = app.emit(
+                        "download-progress",
+                        serde_json::json!({ "name": &event_name, "pct": overall_pct }),
+                    );
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    drop(file);
+                    let _ = tokio::fs::remove_file(&temp_file_path).await;
+                    return Err(format!("Download interrupted for {}: {}", filename, e));
+                }
+            }
+        }
+
+        file.flush().await.map_err(|e| e.to_string())?;
+        drop(file);
+
+        tokio::fs::rename(&temp_file_path, &dest_path)
+            .await
+            .map_err(|e| format!("Rename failed for {}: {}", filename, e))?;
+
+        // Verify the final path is still within canon_dir (rename target check).
+        if let Ok(canon_dest) = dest_path.canonicalize() {
+            if !canon_dest.starts_with(&canon_dir) {
+                let _ = tokio::fs::remove_file(&dest_path).await;
+                return Err("downloaded file escaped model directory".to_string());
+            }
+        }
+
+        tracing::info!("[moonshine-dl] {} complete", filename);
+    }
+
+    let _ = app.emit(
+        "download-progress",
+        serde_json::json!({ "name": &event_name, "pct": 100u8 }),
+    );
+
+    tracing::info!(
+        "[moonshine-dl] all files for variant {:?} downloaded to {}",
+        variant,
+        canon_dir.display()
+    );
+
+    Ok(())
+}
+
 #[tauri::command]
 #[specta::specta]
 fn list_audio_devices() -> Vec<String> {
@@ -885,6 +1117,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         list_audio_devices,
         download_model,
         cancel_download,
+        download_moonshine_model,
         delete_model_file,
         load_history,
         save_history,
@@ -967,6 +1200,7 @@ pub fn run() {
             list_audio_devices,
             download_model,
             cancel_download,
+            download_moonshine_model,
             delete_model_file,
             load_history,
             save_history,
