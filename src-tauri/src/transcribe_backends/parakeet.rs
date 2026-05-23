@@ -12,30 +12,16 @@
 //   - No autoregressive hallucination on silence (structural fix, not a filter)
 //   - Full WAV in, transcript out — no streaming; SegmentTranscriber stays Whisper
 //
-// ── DEPENDENCY CONFLICT (currently unresolved) ───────────────────────────────
-//
-// `transcribe-rs 0.3.11` (needed for Parakeet) pins `ort = "=2.0.0-rc.12"`.
-// `vad-rs 0.1.5`          (used for in-process VAD) pins `ort = "=2.0.0-rc.9"`.
-// Cargo cannot resolve two exact-pinned versions of the same crate, even when
-// one is declared optional. This means `transcribe-rs` cannot be added to
-// Cargo.toml at all until one of these unblocking paths is taken:
-//
-//   (a) vad-rs upgrades to ort rc.12 — simplest, wait for upstream.
-//   (b) Replace vad-rs with a direct ort rc.12 VAD integration.
-//   (c) Move transcribe-rs into a separate Cargo workspace member / sidecar.
-//
-// Until unblocked, this file is guarded by `#[cfg(feature = "parakeet")]` so
-// it does not affect the default build. The `parakeet` feature is declared in
-// Cargo.toml but has no dep attached yet (see the comment there).
-//
 // ── Model storage ────────────────────────────────────────────────────────────
 //
 // Model files (ONNX bundle) are stored under:
 //   ~/.config/librewin/turbotalk/models/parakeet/<variant>/
 //
-// Required files per variant (Parakeet TDT):
-//   model.onnx        (the CTC/TDT graph)
-//   tokenizer.json
+// Required files per variant (Parakeet TDT, as expected by transcribe-rs):
+//   encoder-model.onnx     (the CTC/TDT encoder)
+//   decoder_joint-model.onnx
+//   nemo128.onnx           (mel spectrogram preprocessor)
+//   vocab.txt              (sentencepiece vocab)
 //
 // Source: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2
 // (ONNX export — look for the ONNX community fork or the export script in the
@@ -50,24 +36,26 @@
 //
 // ── Activation ───────────────────────────────────────────────────────────────
 //
-// Set TT_BACKEND=parakeet at runtime to route through this backend.
-// Once the dep conflict is resolved:
-//   1. Uncomment `transcribe-rs` in Cargo.toml.
-//   2. Build with `cargo build --features parakeet`.
-//   3. Set TT_BACKEND=parakeet, download a Parakeet model via
-//      `download_parakeet_model`, and hold PTT to test.
+// The `parakeet` Cargo feature activates this backend. It is enabled by
+// default. Set TT_BACKEND=parakeet at runtime (or set backend in config)
+// to route through this backend. Download a Parakeet model via
+// `download_parakeet_model` before use.
 //
 // TODO (TASK-60): wire a settings UI toggle so users can pick Parakeet vs Whisper.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use transcribe_rs::onnx::parakeet::ParakeetModel;
+use transcribe_rs::onnx::Quantization;
+use transcribe_rs::{SpeechModel, TranscribeOptions};
+
 use crate::transcribe::{TranscriptOutcome, TranscriptionBackend};
 
 // ── Variant type ─────────────────────────────────────────────────────────────
 //
-// We define our own variant enum rather than re-exporting from transcribe-rs
-// so the enum is available for path helpers even before the dep is unblocked.
+// We define our own variant enum so the enum is available for path helpers
+// independently of the transcribe-rs import.
 
 /// Parakeet model variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,11 +112,10 @@ pub fn variant_dir(variant_name_str: &str) -> Option<PathBuf> {
 }
 
 /// Validate that a Parakeet model directory exists and contains the required
-/// files: `model.onnx`, `tokenizer.json`. Returns `Ok(canonicalized_path)`.
+/// files as expected by `transcribe-rs`:
+///   `encoder-model.onnx`, `decoder_joint-model.onnx`, `nemo128.onnx`, `vocab.txt`.
 ///
-/// Mirrors `validate_moonshine_model_dir` in moonshine.rs but for Parakeet's
-/// file set (CTC models use a single graph file rather than separate
-/// encoder/decoder).
+/// Returns `Ok(canonicalized_path)` on success.
 pub fn validate_parakeet_model_dir(dir: &Path) -> anyhow::Result<PathBuf> {
     let canon = dir.canonicalize().map_err(|_| {
         anyhow::anyhow!(
@@ -150,8 +137,8 @@ pub fn validate_parakeet_model_dir(dir: &Path) -> anyhow::Result<PathBuf> {
         }
     }
 
-    // Check required files.
-    for filename in &["model.onnx", "tokenizer.json"] {
+    // Check required files (as expected by transcribe-rs ParakeetModel::load).
+    for filename in &["encoder-model.onnx", "decoder_joint-model.onnx", "nemo128.onnx", "vocab.txt"] {
         let f = canon.join(filename);
         if !f.exists() {
             anyhow::bail!(
@@ -190,12 +177,6 @@ pub fn validate_parakeet_model_dir(dir: &Path) -> anyhow::Result<PathBuf> {
 /// interrupt an in-flight ONNX session. The `abort_flag` is set and checked
 /// at the transcription entry point — a cancel takes effect between recordings
 /// but not mid-inference. In-flight inference completes naturally.
-///
-/// # Build status
-///
-/// This struct requires the `parakeet` feature AND the `transcribe-rs` dep.
-/// Until the ort version conflict is resolved, this compiles as a stub that
-/// returns a clear error at construction time rather than silently failing.
 pub struct ParakeetBackend {
     /// Canonicalized model directory, used as the `model_identity()` string.
     model_dir: PathBuf,
@@ -203,18 +184,12 @@ pub struct ParakeetBackend {
     variant: ParakeetVariant,
     /// Set by `abort()` — checked at transcription entry.
     abort_flag: std::sync::atomic::AtomicBool,
-    /// Model handle. The inner type depends on the resolved `transcribe-rs` dep.
-    /// When `transcribe-rs` is available this holds `Mutex<transcribe_rs::onnx::parakeet::ParakeetModel>`.
-    /// Until the dep is unblocked this is a `Mutex<()>` placeholder that returns an error on transcription.
-    #[allow(dead_code)]
-    _model: Mutex<()>,
+    /// Loaded Parakeet model wrapped in a Mutex for Sync.
+    model: Mutex<ParakeetModel>,
 }
 
 impl ParakeetBackend {
     /// Load a Parakeet model from the given directory.
-    ///
-    /// Returns `Err` with a clear "dep not available" message until the
-    /// `transcribe-rs` dep conflict is resolved and the dep is re-added.
     pub fn from_variant_dir(
         model_dir: &Path,
         variant_str: &str,
@@ -228,27 +203,28 @@ impl ParakeetBackend {
 
         let canon_dir = validate_parakeet_model_dir(model_dir)?;
 
-        tracing::warn!(
-            "[parakeet] ParakeetBackend::from_variant_dir called for {} at {} — \
-             transcribe-rs dep is not yet active (ort version conflict with vad-rs). \
-             See src/transcribe_backends/parakeet.rs for unblock instructions.",
-            variant.name(),
+        tracing::info!(
+            "[parakeet] loading {} model from {}",
+            variant.display_name(),
             canon_dir.display()
         );
 
-        // TODO: once transcribe-rs is unblocked, replace this stub with:
-        //   let model = transcribe_rs::onnx::parakeet::ParakeetModel::load(
-        //       &canon_dir,
-        //       map_variant(variant),
-        //       &transcribe_rs::onnx::Quantization::default(),
-        //   ).map_err(|e| anyhow::anyhow!("Parakeet model load failed: {}", e))?;
-        //   _model: Mutex::new(model),
-
-        anyhow::bail!(
-            "Parakeet backend is not yet active — the `transcribe-rs` dependency has an ort \
-             version conflict with `vad-rs`. See src-tauri/src/transcribe_backends/parakeet.rs \
-             for the resolution path. Set TT_BACKEND=whisper (or unset it) to continue with Whisper."
+        // Note: ParakeetModel::load does NOT take a variant parameter — the
+        // variant is implicit in the model files present in the directory.
+        let model = ParakeetModel::load(
+            &canon_dir,
+            &Quantization::default(),
         )
+        .map_err(|e| anyhow::anyhow!("Parakeet model load failed: {e}"))?;
+
+        tracing::info!("[parakeet] model loaded successfully");
+
+        Ok(Self {
+            model_dir: canon_dir,
+            variant,
+            abort_flag: std::sync::atomic::AtomicBool::new(false),
+            model: Mutex::new(model),
+        })
     }
 
     /// Build a backend from the current settings.
@@ -266,7 +242,7 @@ impl ParakeetBackend {
 }
 
 impl TranscriptionBackend for ParakeetBackend {
-    fn transcribe(&self, _wav: &Path) -> anyhow::Result<TranscriptOutcome> {
+    fn transcribe(&self, wav: &Path) -> anyhow::Result<TranscriptOutcome> {
         use std::sync::atomic::Ordering;
 
         if self.abort_flag.load(Ordering::Acquire) {
@@ -276,28 +252,30 @@ impl TranscriptionBackend for ParakeetBackend {
             });
         }
 
-        // TODO: replace stub with actual transcribe-rs inference once unblocked:
-        //
-        //   let mut model = self._model.lock().unwrap_or_else(|e| e.into_inner());
-        //   let result = model
-        //       .transcribe_file(_wav, &transcribe_rs::TranscribeOptions::default())
-        //       .map_err(|e| anyhow::anyhow!("Parakeet transcription failed: {}", e))?;
-        //   // Parakeet CTC output is typically lowercase/unpunctuated — pass through
-        //   // Chaperone cleanup which normalizes it. detect_garbage still applies.
-        //   let text = result.text.trim().to_string();
-        //   let rejection = crate::transcribe::detect_garbage(&text);
-        //   Ok(TranscriptOutcome { text, rejection })
+        let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
 
-        anyhow::bail!(
-            "ParakeetBackend.transcribe() called on a stub instance — \
-             construction should have failed before reaching here"
-        )
+        let result = model
+            .transcribe_file(wav, &TranscribeOptions::default())
+            .map_err(|e| anyhow::anyhow!("Parakeet transcription failed: {e}"))?;
+
+        // Parakeet CTC output is typically lowercase/unpunctuated — pass through
+        // Chaperone cleanup which normalizes it. detect_garbage still applies.
+        let text = result.text.trim().to_string();
+        let rejection = crate::transcribe::detect_garbage(&text);
+
+        tracing::info!(
+            "[parakeet] transcribed: {:?} (rejection={:?})",
+            text,
+            rejection
+        );
+
+        Ok(TranscriptOutcome { text, rejection })
     }
 
     fn abort(&self) {
         use std::sync::atomic::Ordering;
         self.abort_flag.store(true, Ordering::Release);
-        tracing::info!("[parakeet] abort requested (stub backend)");
+        tracing::info!("[parakeet] abort requested");
     }
 
     fn model_identity(&self) -> String {
@@ -355,10 +333,12 @@ mod tests {
             // Model not downloaded — skip this test in CI.
             return;
         }
-        // Only run the full validation if both required files are present.
-        let has_model = variant_dir.join("model.onnx").exists();
-        let has_tokenizer = variant_dir.join("tokenizer.json").exists();
-        if !has_model || !has_tokenizer {
+        // Only run the full validation if all required files are present.
+        let has_encoder = variant_dir.join("encoder-model.onnx").exists();
+        let has_decoder = variant_dir.join("decoder_joint-model.onnx").exists();
+        let has_nemo = variant_dir.join("nemo128.onnx").exists();
+        let has_vocab = variant_dir.join("vocab.txt").exists();
+        if !has_encoder || !has_decoder || !has_nemo || !has_vocab {
             return;
         }
         let result = validate_parakeet_model_dir(&variant_dir);
@@ -393,25 +373,26 @@ mod tests {
         }
     }
 
-    /// Create a fake bundle inside a temp dir to confirm the file-check logic
-    /// works (path-traversal guard skipped because we use validate directly).
+    /// A tmp dir outside the expected base must always be rejected — either by
+    /// the path-traversal guard (when the base dir exists) or by the missing-
+    /// files check (when the base dir doesn't exist yet). The test asserts that
+    /// an error is always returned for an out-of-tree directory regardless of
+    /// which guard fires.
     #[test]
     fn validate_parakeet_model_dir_file_check_logic() {
-        // Directly test the file-presence check by temporarily bypassing the
-        // path-traversal guard (which requires the real home dir structure).
-        // We do this by checking the error message is about missing files
-        // when the dir exists but is empty.
-        // Since the tmp dir is outside ~/.config, the path-traversal guard
-        // fires first — verify the error is meaningful.
+        // We do NOT write all required files here — the intent is to confirm
+        // that an out-of-tree dir is always rejected. The path-traversal guard
+        // fires when ~/.config/…/parakeet exists; otherwise the missing-files
+        // check catches it (since the dir is empty).
         let tmp = tempdir().expect("tempdir");
-        fs::write(tmp.path().join("model.onnx"), b"fake onnx").expect("write");
-        fs::write(tmp.path().join("tokenizer.json"), b"{}").expect("write");
+        // Write only some files — so even if path-traversal is skipped (base
+        // dir doesn't exist yet), the missing-files check fires.
+        fs::write(tmp.path().join("encoder-model.onnx"), b"fake onnx").expect("write");
         let result = validate_parakeet_model_dir(tmp.path());
-        // Expect error: path is outside the allowed base.
-        assert!(result.is_err());
+        assert!(result.is_err(), "out-of-tree dir must always be rejected");
         let msg = result.unwrap_err().to_string();
         assert!(
-            msg.contains("outside") || msg.contains("not found"),
+            msg.contains("outside") || msg.contains("not found") || msg.contains("missing"),
             "unexpected error: {}",
             msg
         );

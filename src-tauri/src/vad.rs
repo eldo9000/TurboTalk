@@ -27,33 +27,37 @@
 // init + 100×compute together as a single `vad=` number — fine for
 // pipeline debugging, useless for deciding whether to cache.
 //
-// The upstream `vad_rs::Vad` exposes a `reset()` method that zeros only
-// the LSTM hidden/cell tensors (`h_tensor`, `c_tensor`) — the per-stream
-// state. The ONNX `Session` itself is stateless across calls. So caching
-// one `Vad` for the process and `reset()`-ing it before each recording
-// is safe: prior audio cannot influence the next call. The smoothing
-// state (`in_speech`, `onset_counter`, `hangover_counter`,
-// `speech_start_frame`, `speech_end_frame`) lives in the per-call
-// `SmoothedVad` wrapper and is dropped between calls, so there is no
-// state leak path there either.
+// The `Vad` struct exposes a `reset()` method that zeros only the LSTM
+// hidden/cell tensors — the per-stream state. The ONNX `Session` itself
+// is stateless across calls. So caching one `Vad` for the process and
+// `reset()`-ing it before each recording is safe: prior audio cannot
+// influence the next call. The smoothing state (`in_speech`, `onset_counter`,
+// `hangover_counter`, `speech_start_frame`, `speech_end_frame`) lives in the
+// per-call `SmoothedVad` wrapper and is dropped between calls, so there is
+// no state leak path there either.
 //
 // We intentionally use one cached `Vad` behind a `Mutex` rather than a
-// pool — TurboTalk runs one in-flight dictation job at a time
-// (TASK-14), so there is never contention.
+// pool — TurboTalk runs one in-flight dictation job at a time (TASK-14),
+// so there is never contention.
+//
+// TASK-62: vad-rs replaced with direct ort rc.12 integration so ort version
+// unifies with the transcribe-rs dep. We avoid the `ndarray` feature of ort
+// entirely by using the `(shape, &[T])` tuple form to create input tensors
+// and `try_extract_tensor` (which returns `(&Shape, &[T])`) for outputs.
+// This keeps us free of ndarray version-matching issues.
 
-use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Instant;
 
+use ort::session::Session;
+use ort::value::TensorRef;
 use parking_lot::Mutex;
-use vad_rs::Vad;
 
 /// Embedded Silero v4 ONNX model (~2 MB). Bundling it into the binary keeps
 /// installs self-contained — no extra resource files to chase at runtime.
 static MODEL_BYTES: &[u8] = include_bytes!("../resources/silero_vad.onnx");
 
 /// 16 kHz sample rate × 30 ms frame = 480 samples per Silero v4 inference.
-const SAMPLE_RATE: usize = 16_000;
 const FRAME_SAMPLES: usize = 480;
 
 const THRESHOLD: f32 = 0.3;
@@ -61,37 +65,137 @@ const PREFILL_FRAMES: usize = 15;
 const ONSET_FRAMES: usize = 2;
 const HANGOVER_FRAMES: usize = 15;
 
-/// Path to the on-disk copy of `MODEL_BYTES`. `vad-rs::Vad::new` only accepts
-/// a path, so we materialize the bytes to a temp file once per process and
-/// reuse the path. Held in a `OnceLock` so concurrent first-callers
-/// coordinate without a race.
-static MODEL_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+/// LSTM state size: [2, 1, 64] = 128 elements.
+const LSTM_STATE_LEN: usize = 2 * 1 * 64;
+
+/// Silero v4 VAD backed directly by `ort` rc.12.
+///
+/// Mirrors the interface of the old `vad_rs::Vad`:
+///   - `new(model_bytes)` — build from in-memory bytes (no temp file).
+///   - `compute(frame)` — run one frame, update LSTM state, return prob.
+///   - `reset()` — zero LSTM h/c state between recordings.
+///
+/// Tensor I/O uses the `(shape, &[T])` tuple form to avoid ndarray
+/// version-matching issues (ort rc.12 uses ndarray 0.17 for its `ndarray`
+/// feature; our crate uses ndarray 0.15; they are semver-incompatible).
+pub struct Vad {
+    session: Session,
+    /// LSTM hidden state: flat [2, 1, 64] = 128 f32 values.
+    h_state: Vec<f32>,
+    /// LSTM cell state: flat [2, 1, 64] = 128 f32 values.
+    c_state: Vec<f32>,
+}
+
+impl Vad {
+    /// Build a VAD session from raw ONNX bytes.
+    /// Uses `ort::Session::builder().commit_from_memory()` — no disk write.
+    pub fn new(model_bytes: &[u8]) -> anyhow::Result<Self> {
+        let session = Session::builder()
+            .map_err(|e| anyhow::anyhow!("ort SessionBuilder failed: {e}"))?
+            .commit_from_memory(model_bytes)
+            .map_err(|e| anyhow::anyhow!("ort commit_from_memory failed: {e}"))?;
+        Ok(Self {
+            session,
+            h_state: vec![0.0f32; LSTM_STATE_LEN],
+            c_state: vec![0.0f32; LSTM_STATE_LEN],
+        })
+    }
+
+    /// Zero the LSTM h/c state so prior audio cannot influence the next
+    /// recording. Mirrors `vad_rs::Vad::reset()`.
+    pub fn reset(&mut self) {
+        self.h_state.fill(0.0);
+        self.c_state.fill(0.0);
+    }
+
+    /// Run one frame of Silero v4 inference. Returns a `VadResult` with the
+    /// speech probability. The LSTM h/c state is updated in-place.
+    ///
+    /// `frame` must be a 480-sample slice (30 ms at 16 kHz). Shorter slices
+    /// are accepted (the caller zero-pads trailing partial frames before
+    /// calling here), but the slice length must be > 0.
+    pub fn compute(&mut self, frame: &[f32]) -> anyhow::Result<VadResult> {
+        // Build input tensors using the (shape, &[T]) tuple form — no ndarray.
+        // Silero input: "input" => [1, N] f32
+        let input_shape = [1usize, frame.len()];
+        let t_input =
+            TensorRef::from_array_view((&input_shape[..], frame))
+                .map_err(|e| anyhow::anyhow!("build 'input' tensor failed: {e}"))?;
+
+        // "sr" => [1] i64 (scalar sample-rate)
+        let sr_val = [16_000i64];
+        let sr_shape = [1usize];
+        let t_sr =
+            TensorRef::from_array_view((&sr_shape[..], &sr_val[..]))
+                .map_err(|e| anyhow::anyhow!("build 'sr' tensor failed: {e}"))?;
+
+        // "h" => [2, 1, 64] f32
+        let h_shape = [2usize, 1, 64];
+        let t_h =
+            TensorRef::from_array_view((&h_shape[..], &self.h_state[..]))
+                .map_err(|e| anyhow::anyhow!("build 'h' tensor failed: {e}"))?;
+
+        // "c" => [2, 1, 64] f32
+        let c_shape = [2usize, 1, 64];
+        let t_c =
+            TensorRef::from_array_view((&c_shape[..], &self.c_state[..]))
+                .map_err(|e| anyhow::anyhow!("build 'c' tensor failed: {e}"))?;
+
+        let outputs = self
+            .session
+            .run(ort::inputs![
+                "input" => t_input,
+                "sr"    => t_sr,
+                "h"     => t_h,
+                "c"     => t_c
+            ])
+            .map_err(|e| anyhow::anyhow!("session.run failed: {e}"))?;
+
+        // Update LSTM state from the output hn/cn tensors.
+        // `try_extract_tensor` returns `Result<(&Shape, &[T])>`.
+        let (_shape_hn, hn_slice) = outputs
+            .get("hn")
+            .ok_or_else(|| anyhow::anyhow!("missing output 'hn'"))?
+            .try_extract_tensor::<f32>()
+            .map_err(|e| anyhow::anyhow!("extract 'hn' failed: {e}"))?;
+        self.h_state.copy_from_slice(hn_slice);
+
+        let (_shape_cn, cn_slice) = outputs
+            .get("cn")
+            .ok_or_else(|| anyhow::anyhow!("missing output 'cn'"))?
+            .try_extract_tensor::<f32>()
+            .map_err(|e| anyhow::anyhow!("extract 'cn' failed: {e}"))?;
+        self.c_state.copy_from_slice(cn_slice);
+
+        let (_shape_out, out_slice) = outputs
+            .get("output")
+            .ok_or_else(|| anyhow::anyhow!("missing output 'output'"))?
+            .try_extract_tensor::<f32>()
+            .map_err(|e| anyhow::anyhow!("extract 'output' failed: {e}"))?;
+        let prob = out_slice
+            .first()
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("'output' tensor was empty"))?;
+
+        Ok(VadResult { prob })
+    }
+}
+
+/// Result of a single Silero v4 frame inference.
+pub struct VadResult {
+    /// Speech probability in [0, 1].
+    pub prob: f32,
+}
 
 /// Cached process-lifetime `Vad`. The heavy cost is `Vad::new` (ONNX
 /// session construction); `compute()` is cheap. We pay init exactly once
 /// per process and call `reset()` before each `trim()` to zero the LSTM
-/// h/c tensors so prior audio cannot influence the next recording. See
-/// the module-level reuse note for the safety argument.
+/// state so prior audio cannot influence the next recording.
 ///
 /// `None` until first init. If `Vad::new` ever fails, we leave the cell
 /// `None` and fall back to "no trimming" via `trim()`'s graceful path —
 /// we do not poison the cache or panic.
 static VAD_CACHE: OnceLock<Mutex<Option<Vad>>> = OnceLock::new();
-
-fn ensure_model_on_disk() -> anyhow::Result<PathBuf> {
-    let cell = MODEL_PATH.get_or_init(|| Mutex::new(None));
-    let mut guard = cell.lock();
-    if let Some(p) = guard.as_ref() {
-        if p.exists() {
-            return Ok(p.clone());
-        }
-    }
-    let mut path = std::env::temp_dir();
-    path.push(format!("turbotalk-silero-vad-{}.onnx", std::process::id()));
-    std::fs::write(&path, MODEL_BYTES)?;
-    *guard = Some(path.clone());
-    Ok(path)
-}
 
 /// Smoothed Silero VAD over a finite buffer.
 ///
@@ -186,23 +290,15 @@ impl<'a> SmoothedVad<'a> {
 /// initializes on first call (mirroring `trim()`'s init path) so we
 /// don't pay init twice.
 ///
-/// Returns `None` only if the model bytes can't be materialized to disk
-/// or `Vad::new` fails — same graceful-fallback contract as `trim()`.
-/// On success, the caller must call `inner.reset()` before pushing
-/// frames so prior audio can't influence the new stream.
+/// Returns `None` only if `Vad::new` fails — same graceful-fallback
+/// contract as `trim()`. On success, the caller must call `inner.reset()`
+/// before pushing frames so prior audio can't influence the new stream.
 pub fn cached_vad_for_streaming() -> Option<&'static Mutex<Option<Vad>>> {
     let cell = VAD_CACHE.get_or_init(|| Mutex::new(None));
     {
         let mut guard = cell.lock();
         if guard.is_none() {
-            let path = match ensure_model_on_disk() {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::warn!("[vad] failed to materialize Silero model for streaming: {e}");
-                    return None;
-                }
-            };
-            match Vad::new(&path, SAMPLE_RATE) {
+            match Vad::new(MODEL_BYTES) {
                 Ok(v) => *guard = Some(v),
                 Err(e) => {
                     tracing::warn!("[vad] failed to initialize Silero for streaming: {e}");
@@ -246,14 +342,7 @@ pub fn trim(samples: &[f32]) -> (usize, usize) {
     let init_ms: f32;
     if guard.is_none() {
         let t_init = Instant::now();
-        let path = match ensure_model_on_disk() {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!("[vad] failed to materialize Silero model — skipping trim: {e}");
-                return (0, samples.len());
-            }
-        };
-        match Vad::new(&path, SAMPLE_RATE) {
+        match Vad::new(MODEL_BYTES) {
             Ok(v) => {
                 init_ms = t_init.elapsed().as_secs_f32() * 1000.0;
                 *guard = Some(v);
@@ -268,10 +357,9 @@ pub fn trim(samples: &[f32]) -> (usize, usize) {
     }
     let inner = guard.as_mut().expect("vad cache populated above");
 
-    // Zero the LSTM h/c tensors so prior audio cannot influence this
-    // recording. This is the documented `reset()` semantics in
-    // `vad-rs::Vad`. Reset is O(state-size), not O(model-size), so it's
-    // ~free compared to init.
+    // Zero the LSTM state so prior audio cannot influence this recording.
+    // Reset is O(state-size), not O(model-size), so it's ~free compared
+    // to init.
     let t_reset = Instant::now();
     inner.reset();
     let reset_ms = t_reset.elapsed().as_secs_f32() * 1000.0;

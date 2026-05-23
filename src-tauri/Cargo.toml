@@ -8,33 +8,21 @@ rust-version = "1.77"
 
 # ── Feature flags ─────────────────────────────────────────────────────────────
 # `moonshine` — enable the Moonshine ONNX transcription backend (TASK-58).
+# `parakeet`  — enable the Parakeet TDT ONNX transcription backend (TASK-59).
 #
-# Why feature-gated:
-#   transcribe-rs 0.3.x pins ort = "=2.0.0-rc.12" (via its `onnx` feature).
-#   vad-rs 0.1.5   pins ort = "=2.0.0-rc.9".
-#   Cargo cannot unify two different =exact-pinned versions of the same crate,
-#   so both crates cannot be active in the same build simultaneously.
+# Both backends depend on `transcribe-rs`, which pins ort = "=2.0.0-rc.12".
+# The old `vad-rs` dep pinned ort = "=2.0.0-rc.9" and blocked this.
+# Resolution (TASK-62): vad-rs replaced with a direct ort rc.12 VAD in vad.rs.
+# Now both VAD and the ONNX backends share the same ort pin — Cargo can unify.
 #
-#   Gating `transcribe-rs` behind the `moonshine` feature means the default
-#   dev/release build continues to use vad-rs (rc.9) without conflicts.
-#   To activate Moonshine: `cargo build --features moonshine`
-#   (note: the VAD path then uses whatever ort version transcribe-rs pulls).
-#
-#   Long-term resolution: wait for vad-rs to update to ort rc.12, then both
-#   crates can coexist in the default build and this gate can be removed.
+# `transcribe-rs` is optional so users can still build without Moonshine/Parakeet
+# by omitting those features. The dev build enables both by default.
 [features]
-default = []
+default = ["moonshine", "parakeet"]
 # `moonshine` activates MoonshineBackend in transcribe_backends/moonshine.rs.
-# Currently a no-op feature (no additional deps) because transcribe-rs cannot
-# be added to Cargo.toml due to the ort version conflict with vad-rs.
-# Once unblocked, uncomment the transcribe-rs dep below and change this to:
-#   moonshine = ["dep:transcribe-rs"]
-moonshine = []
+moonshine = ["dep:transcribe-rs"]
 # `parakeet` activates ParakeetBackend in transcribe_backends/parakeet.rs.
-# Same ort-version-conflict gate as `moonshine` — both backends depend on
-# transcribe-rs 0.3.x. Once the ort conflict with vad-rs is resolved, change to:
-#   parakeet = ["dep:transcribe-rs"]
-parakeet = []
+parakeet  = ["dep:transcribe-rs"]
 
 [lib]
 name = "turbotalk_lib"
@@ -65,20 +53,14 @@ rubato          = "0.15"
 # through cpal, declaring it directly pins the API surface we depend on.
 crossbeam-channel = "0.5"
 
-# VAD: Silero v4 ONNX model wrapped via vad-rs. The transitive `ort` crate pulls
-# the onnxruntime native lib at build time via its `download-binaries` default
-# feature, so the resulting binary is self-contained — no system onnxruntime
-# install required. We disable vad-rs's `helpers` feature (ebur128 + samplerate)
-# because we already do our own resampling/normalization in audio.rs.
-#
-# `ort-sys` is pinned to the same rc.9 release as `ort` (vad-rs's transitive
-# `=2.0.0-rc.9` constraint). Cargo's default resolver prefers the newest
-# semver-compatible ort-sys, which lands on rc.12 — but rc.12 introduced a
-# mandatory TLS-feature compile_error! that the old rc.9 ort wrapper can't
-# satisfy. Pinning ort-sys to rc.9 here keeps the build self-contained and
-# the ABI matched with ort's expectations.
-vad-rs          = { version = "0.1.5", default-features = false }
-ort-sys         = "=2.0.0-rc.9"
+# VAD: Silero v4 ONNX model run directly via `ort` rc.12. The `download-binaries`
+# default feature pulls the onnxruntime native lib at build time — no system
+# onnxruntime install required. vad-rs (which pinned ort rc.9) has been replaced
+# by a direct ort rc.12 integration in vad.rs so both the VAD and the Moonshine/
+# Parakeet ONNX backends share a single ort pin. We use ort's raw (shape, slice)
+# tensor API to avoid ndarray version conflicts — transcribe-rs uses ndarray 0.17
+# while a direct `ndarray` dep here would pull in 0.15 as a separate crate.
+ort             = { version = "=2.0.0-rc.12", features = ["download-binaries"] }
 
 # Clipboard / paste injection
 arboard         = "3"
@@ -91,25 +73,10 @@ tokio           = { version = "1", features = ["rt-multi-thread", "macros", "pro
 reqwest         = { version = "0.12", features = ["json", "blocking", "multipart", "rustls-tls"], default-features = false }
 url             = "2"
 
-# TASK-58: Moonshine ONNX backend.
-#
-# BLOCKED: transcribe-rs 0.3.11 pins ort = "=2.0.0-rc.12" (via its `onnx`
-# feature). vad-rs 0.1.5 pins ort = "=2.0.0-rc.9". Cargo's global dependency
-# resolver cannot unify two exact-pinned versions of `ort` — even when
-# transcribe-rs is declared optional, the resolver still fails because it
-# resolves ALL crates (including optionals) in one pass.
-#
-# Unblock options:
-#   (a) Wait for vad-rs to update to ort rc.12, then both can coexist.
-#   (b) Replace vad-rs with a direct ort rc.12 VAD integration.
-#   (c) Move transcribe-rs into a separate Cargo workspace member that builds
-#       as a sidecar binary, communicating with the main process via IPC.
-#
-# The MoonshineBackend implementation in transcribe_backends/moonshine.rs is
-# complete and correct; it compiles when `transcribe-rs` is resolvable.
-# Uncomment the line below once the ort version conflict is resolved:
-#
-# transcribe-rs   = { version = "0.3.11", features = ["onnx"], optional = true }
+# TASK-58/59: Moonshine + Parakeet ONNX backends via transcribe-rs.
+# Conflict resolved in TASK-62: vad-rs replaced with direct ort rc.12 in vad.rs.
+# Both ort rc.12 (above) and transcribe-rs (below) now unify on the same pin.
+transcribe-rs   = { version = "0.3.11", features = ["onnx"], optional = true }
 
 # Misc
 dirs            = "5"

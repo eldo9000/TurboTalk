@@ -77,7 +77,7 @@ use parking_lot::Mutex;
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use vad_rs::Vad;
+use crate::vad::Vad;
 
 /// Target sample rate for the resampled stream and Silero input. Mirrors
 /// `audio::TARGET_SAMPLE_RATE` — kept as a private const here so this

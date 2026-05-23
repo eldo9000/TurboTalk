@@ -6,22 +6,6 @@
 // silence the way Whisper does, making it a structural fix for what TASK-55/56
 // patched around.
 //
-// ── DEPENDENCY CONFLICT (currently unresolved) ───────────────────────────────
-//
-// `transcribe-rs 0.3.11` (needed for Moonshine) pins `ort = "=2.0.0-rc.12"`.
-// `vad-rs 0.1.5`          (used for in-process VAD) pins `ort = "=2.0.0-rc.9"`.
-// Cargo cannot resolve two exact-pinned versions of the same crate, even when
-// one is declared optional. This means `transcribe-rs` cannot be added to
-// Cargo.toml at all until one of these unblocking paths is taken:
-//
-//   (a) vad-rs upgrades to ort rc.12 — simplest, wait for upstream.
-//   (b) Replace vad-rs with a direct ort rc.12 VAD integration.
-//   (c) Move transcribe-rs into a separate Cargo workspace member / sidecar.
-//
-// Until unblocked, this file is guarded by `#[cfg(feature = "moonshine")]` so
-// it does not affect the default build. The `moonshine` feature is declared in
-// Cargo.toml but has no dep attached yet (see the comment there).
-//
 // ── Model storage ────────────────────────────────────────────────────────────
 //
 // Model files (ONNX bundle + tokenizer) are stored under:
@@ -45,24 +29,26 @@
 //
 // ── Activation ───────────────────────────────────────────────────────────────
 //
-// Set TT_BACKEND=moonshine at runtime to route through this backend.
-// Once the dep conflict is resolved:
-//   1. Uncomment `transcribe-rs` in Cargo.toml.
-//   2. Build with `cargo build --features moonshine`.
-//   3. Set TT_BACKEND=moonshine, download a Moonshine model via
-//      `download_moonshine_model`, and hold PTT to test.
+// The `moonshine` Cargo feature activates this backend. It is enabled by
+// default. Set TT_BACKEND=moonshine at runtime (or set backend in config)
+// to route through this backend. Download a Moonshine model via
+// `download_moonshine_model` before use.
 //
 // TODO (TASK-60): wire a settings UI toggle so users can pick Moonshine vs Whisper.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use transcribe_rs::onnx::moonshine::{MoonshineModel, MoonshineVariant as TrsMoonshineVariant};
+use transcribe_rs::onnx::Quantization;
+use transcribe_rs::{SpeechModel, TranscribeOptions};
+
 use crate::transcribe::{TranscriptOutcome, TranscriptionBackend};
 
 // ── Variant type ─────────────────────────────────────────────────────────────
 //
-// We define our own variant enum rather than re-exporting from transcribe-rs
-// so the enum is available for path helpers even before the dep is unblocked.
+// We define our own variant enum so the enum is available for path helpers
+// independently of the transcribe-rs import.
 
 /// Moonshine model size variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +66,14 @@ impl MoonshineVariant {
             MoonshineVariant::Tiny => "tiny",
             MoonshineVariant::Base => "base",
         }
+    }
+}
+
+/// Map our variant enum to the transcribe-rs variant enum.
+fn to_trs_variant(v: MoonshineVariant) -> TrsMoonshineVariant {
+    match v {
+        MoonshineVariant::Tiny => TrsMoonshineVariant::Tiny,
+        MoonshineVariant::Base => TrsMoonshineVariant::Base,
     }
 }
 
@@ -174,13 +168,6 @@ pub fn validate_moonshine_model_dir(dir: &Path) -> anyhow::Result<PathBuf> {
 /// interrupt an in-flight ONNX session. The `abort_flag` is set and checked
 /// at the transcription entry point — a cancel takes effect between recordings
 /// but not mid-inference. In-flight inference completes naturally (<1 s for Tiny/Base).
-///
-/// # Build status
-///
-/// This struct is present in the module tree but requires the `moonshine`
-/// feature AND the `transcribe-rs` dep to be active. Until the ort version
-/// conflict is resolved, the `moonshine` feature compiles a stub that
-/// panics at construction time with a clear error message.
 pub struct MoonshineBackend {
     /// Canonicalized model directory, used as the `model_identity()` string.
     model_dir: PathBuf,
@@ -188,18 +175,12 @@ pub struct MoonshineBackend {
     variant: MoonshineVariant,
     /// Set by `abort()` — checked at transcription entry.
     abort_flag: std::sync::atomic::AtomicBool,
-    /// Model handle. The inner type depends on the resolved `transcribe-rs` dep.
-    /// When `transcribe-rs` is available this holds `Mutex<transcribe_rs::onnx::moonshine::MoonshineModel>`.
-    /// Until the dep is unblocked this is a `Mutex<()>` placeholder that returns an error on transcription.
-    #[allow(dead_code)]
-    _model: Mutex<()>,
+    /// Loaded Moonshine model wrapped in a Mutex for Sync.
+    model: Mutex<MoonshineModel>,
 }
 
 impl MoonshineBackend {
     /// Load a Moonshine model from the given directory.
-    ///
-    /// Returns `Err` with a clear "dep not available" message until the
-    /// `transcribe-rs` dep conflict is resolved and the dep is re-added.
     pub fn from_variant_dir(
         model_dir: &Path,
         variant_str: &str,
@@ -213,27 +194,27 @@ impl MoonshineBackend {
 
         let canon_dir = validate_moonshine_model_dir(model_dir)?;
 
-        tracing::warn!(
-            "[moonshine] MoonshineBackend::from_variant_dir called for {} at {} — \
-             transcribe-rs dep is not yet active (ort version conflict with vad-rs). \
-             See src/transcribe_backends/moonshine.rs for unblock instructions.",
+        tracing::info!(
+            "[moonshine] loading {} model from {}",
             variant.name(),
             canon_dir.display()
         );
 
-        // TODO: once transcribe-rs is unblocked, replace this stub with:
-        //   let model = transcribe_rs::onnx::moonshine::MoonshineModel::load(
-        //       &canon_dir,
-        //       map_variant(variant),
-        //       &transcribe_rs::onnx::Quantization::default(),
-        //   ).map_err(|e| anyhow::anyhow!("Moonshine model load failed: {}", e))?;
-        //   _model: Mutex::new(model),
-
-        anyhow::bail!(
-            "Moonshine backend is not yet active — the `transcribe-rs` dependency has an ort \
-             version conflict with `vad-rs`. See src-tauri/src/transcribe_backends/moonshine.rs \
-             for the resolution path. Set TT_BACKEND=whisper (or unset it) to continue with Whisper."
+        let model = MoonshineModel::load(
+            &canon_dir,
+            to_trs_variant(variant),
+            &Quantization::default(),
         )
+        .map_err(|e| anyhow::anyhow!("Moonshine model load failed: {e}"))?;
+
+        tracing::info!("[moonshine] model loaded successfully");
+
+        Ok(Self {
+            model_dir: canon_dir,
+            variant,
+            abort_flag: std::sync::atomic::AtomicBool::new(false),
+            model: Mutex::new(model),
+        })
     }
 
     /// Build a backend from the current settings.
@@ -251,7 +232,7 @@ impl MoonshineBackend {
 }
 
 impl TranscriptionBackend for MoonshineBackend {
-    fn transcribe(&self, _wav: &Path) -> anyhow::Result<TranscriptOutcome> {
+    fn transcribe(&self, wav: &Path) -> anyhow::Result<TranscriptOutcome> {
         use std::sync::atomic::Ordering;
 
         if self.abort_flag.load(Ordering::Acquire) {
@@ -261,26 +242,28 @@ impl TranscriptionBackend for MoonshineBackend {
             });
         }
 
-        // TODO: replace stub with actual transcribe-rs inference once unblocked:
-        //
-        //   let mut model = self._model.lock().unwrap_or_else(|e| e.into_inner());
-        //   let result = model
-        //       .transcribe_file(_wav, &transcribe_rs::TranscribeOptions::default())
-        //       .map_err(|e| anyhow::anyhow!("Moonshine transcription failed: {}", e))?;
-        //   let text = result.text.trim().to_string();
-        //   let rejection = crate::transcribe::detect_garbage(&text);
-        //   Ok(TranscriptOutcome { text, rejection })
+        let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
 
-        anyhow::bail!(
-            "MoonshineBackend.transcribe() called on a stub instance — \
-             construction should have failed before reaching here"
-        )
+        let result = model
+            .transcribe_file(wav, &TranscribeOptions::default())
+            .map_err(|e| anyhow::anyhow!("Moonshine transcription failed: {e}"))?;
+
+        let text = result.text.trim().to_string();
+        let rejection = crate::transcribe::detect_garbage(&text);
+
+        tracing::info!(
+            "[moonshine] transcribed: {:?} (rejection={:?})",
+            text,
+            rejection
+        );
+
+        Ok(TranscriptOutcome { text, rejection })
     }
 
     fn abort(&self) {
         use std::sync::atomic::Ordering;
         self.abort_flag.store(true, Ordering::Release);
-        tracing::info!("[moonshine] abort requested (stub backend)");
+        tracing::info!("[moonshine] abort requested");
     }
 
     fn model_identity(&self) -> String {
