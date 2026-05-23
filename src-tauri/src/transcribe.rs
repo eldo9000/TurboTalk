@@ -338,6 +338,56 @@ fn find_whisper_server(configured_bin: &str) -> anyhow::Result<PathBuf> {
     Ok(configured)
 }
 
+/// Build the list of candidate filenames for the Silero VAD model, in priority
+/// order. Mirrors `server_sidecar_candidates()` for consistent path resolution.
+fn vad_model_candidates() -> Vec<String> {
+    // The canonical filename shipped in src-tauri/binaries/. A single
+    // platform-independent name is used since this is a data file, not a binary.
+    vec!["ggml-silero-v5.1.2.bin".to_string()]
+}
+
+/// Locate the Silero VAD model file for whisper-server.
+/// Priority:
+/// - debug: dev binaries dir → current executable dir
+/// - release: current executable dir
+///
+/// Returns `None` if the model is not found in any candidate location. The
+/// caller must treat `None` as "VAD unavailable" and skip the VAD flags rather
+/// than failing the transcription — VAD is a best-effort acceleration layer.
+fn find_vad_model() -> Option<PathBuf> {
+    let candidates = vad_model_candidates();
+
+    // Dev mode: check src-tauri/binaries/ first (same priority logic as
+    // find_whisper_server — keeps dev symlinks consistent).
+    #[cfg(debug_assertions)]
+    {
+        for candidate in &candidates {
+            let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("binaries")
+                .join(candidate);
+            if dev.exists() {
+                tracing::debug!("[transcribe] using dev VAD model: {:?}", dev);
+                return Some(dev);
+            }
+        }
+    }
+
+    // Release bundle: VAD model placed next to the main executable.
+    if let Ok(exe) = std::env::current_exe() {
+        let parent = exe.parent().unwrap_or_else(|| Path::new("."));
+        for candidate in &candidates {
+            let p = parent.join(candidate);
+            if p.exists() {
+                tracing::debug!("[transcribe] using bundled VAD model: {:?}", p);
+                return Some(p);
+            }
+        }
+    }
+
+    tracing::debug!("[transcribe] VAD model not found in any candidate location");
+    None
+}
+
 /// Canonicalize `raw_model` and verify it lives inside `canon_models_dir`.
 /// Blocks `model = "/etc/passwd"` style attacks and symlink escapes from the
 /// models dir. Returns the canonicalized model path on success.
@@ -492,6 +542,29 @@ impl TranscriptionWorker {
         .env_clear()
         .stdout(std::process::Stdio::null())
         .stderr(stderr_stdio);
+
+        // TASK-56: Silero VAD pre-filter. When enabled, whisper-server skips
+        // silent regions before the decoder runs, preventing hallucination on
+        // silence and reducing transcription time on recordings with long pauses.
+        // The VAD model file must exist alongside the binary; if it is missing
+        // we log a warning and fall back to no-VAD rather than failing startup.
+        if cfg.whisper.vad_enabled {
+            match find_vad_model() {
+                Some(vad_path) => {
+                    let vad_str = vad_path.to_string_lossy().into_owned();
+                    tracing::info!("[transcribe] VAD enabled — model: {}", vad_str);
+                    cmd.args(["--vad", "--vad-model", &vad_str]);
+                }
+                None => {
+                    tracing::warn!(
+                        "[transcribe] VAD enabled in settings but ggml-silero-v5.1.2.bin not found \
+                         in binaries/ or next to executable — starting without VAD"
+                    );
+                }
+            }
+        } else {
+            tracing::info!("[transcribe] VAD disabled by settings");
+        }
         for var in &["HOME", "PATH", "TMPDIR", "USER", "LOGNAME"] {
             if let Ok(val) = std::env::var(var) {
                 cmd.env(var, val);

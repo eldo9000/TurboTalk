@@ -334,6 +334,7 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgSoundOnFinish     = $state(false);
   let cfgSoundOnCancel     = $state(false);
   let cfgSoundVolume       = $state(0.7);
+  let cfgVadEnabled        = $state(true);
   let volumeSaveTimer      = null;
   let showAdvanced         = $state(false);
   // Captured once from the Modes tab in Chaperone mode (two-column tall layout).
@@ -703,6 +704,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfgSoundOnFinish     = cfg.sound_on_finish                  ?? false;
     cfgSoundOnCancel     = cfg.sound_on_cancel                  ?? false;
     cfgSoundVolume       = cfg.sound_volume                     ?? 0.7;
+    cfgVadEnabled        = cfg.whisper?.vad_enabled             ?? true;
     cfgLaunchLogin       = launch;
     audioDevices         = devs;
     settingsSaveMsg      = '';
@@ -731,6 +733,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfg.sound_on_finish               = cfgSoundOnFinish;
     cfg.sound_on_cancel               = cfgSoundOnCancel;
     cfg.sound_volume                  = cfgSoundVolume;
+    cfg.whisper.vad_enabled           = cfgVadEnabled;
     const saveRes = await commands.saveConfig(cfg);
     if (saveRes.status === 'error') {
       settingsSaveMsg = 'Error: ' + saveRes.error;
@@ -1391,6 +1394,15 @@ Reply with only the single word, lowercase, no punctuation.
         <!-- Whisper bias prompt -->
         <div class="tt-section tt-section-last">
           <div class="subsection-hd"><span class="subsection-hd-title">Whisper</span></div>
+          <div class="tt-row tt-row-field" data-tip="Skip silent regions before transcription — prevents hallucination on silence and speeds up long recordings">
+            <span class="tt-lbl">Silence Filter</span>
+            <div class="tt-multi">
+              <button
+                onclick={() => { cfgVadEnabled = !cfgVadEnabled; saveSettings(); }}
+                class="tt-multi-btn" class:tt-multi-on={cfgVadEnabled}
+                data-tip="Silero VAD pre-filter — when on, whisper-server skips silent regions before transcribing">Skip silent regions (VAD)</button>
+            </div>
+          </div>
           <div class="tt-row tt-row-col">
             <label for="custom-vocabulary" class="tt-lbl tt-lbl-fixed">Custom vocabulary</label>
             <textarea

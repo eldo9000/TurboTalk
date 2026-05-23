@@ -6,7 +6,8 @@
       "binaries/libggml.0.dylib": "libggml.0.dylib",
       "binaries/libggml-base.0.dylib": "libggml-base.0.dylib",
       "binaries/libggml-metal.so": "libggml-metal.so",
-      "binaries/libggml-blas.so": "libggml-blas.so"
+      "binaries/libggml-blas.so": "libggml-blas.so",
+      "binaries/ggml-silero-v5.1.2.bin": "ggml-silero-v5.1.2.bin"
     }
   }
 }

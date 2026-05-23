@@ -23,6 +23,8 @@ transcription ran longer than 30 s (≈ 3 min of dense speech) silently failed
 with `"error sending request"` because the transcribe HTTP client inherited
 reqwest's blocking-client default 30 s timeout. Now set to an explicit 120 s.
 
+**Silero VAD pre-filter — wired 2026-05-23 (TASK-56):** `whisper.vad_enabled` (default true) passes `--vad --vad-model ggml-silero-v5.1.2.bin` to whisper-server so silent regions are skipped before decoding. Settings toggle in Modes tab → Whisper section. VAD model placeholder in `src-tauri/binaries/` — replace with the real 2 MB model from `https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin`. If absent, server starts without VAD (graceful fallback).
+
 **Hallucination detection filter — landed 2026-05-23 (TASK-55):** three post-hoc signals (gzip compression ratio < 0.35, trigram repetition > 3×, non-letter ratio > 0.30) suppress Whisper garbage on silence; rejected transcripts shown with "⚠ filtered" badge, paste skipped.
 
 **Streaming chunked transcription — landed 2026-05-20 (TASK-54):** silence-boundary

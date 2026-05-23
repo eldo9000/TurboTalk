@@ -96,6 +96,12 @@ pub struct WhisperConfig {
     pub model: String,
     #[serde(default)]
     pub models: Vec<String>,
+    /// Enable Silero VAD pre-filter in whisper-server. When true, the server
+    /// skips silent regions before the decoder runs, preventing hallucination
+    /// on silence and speeding up transcription of recordings with long pauses.
+    /// Toggle off if a quiet speaking voice triggers false negatives.
+    #[serde(default = "default_true")]
+    pub vad_enabled: bool,
 }
 
 /// Cleanup mode. Persisted as lowercase ("off" / "regex" / "chaperone").
@@ -184,6 +190,7 @@ impl Default for WhisperConfig {
             bin: "auto".into(),
             models: vec![],
             model: String::new(),
+            vad_enabled: true,
         }
     }
 }
