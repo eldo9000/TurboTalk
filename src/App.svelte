@@ -164,6 +164,10 @@
   let modelsSaveMsg   = $state('');
   // { [modelName: string]: number } — key present = downloading, value = pct 0-99
   let downloadProgress = $state({});
+  // Moonshine / Parakeet model descriptors (loaded from backend on tab open)
+  let altModels       = $state(/** @type {import('./bindings').ModelDescriptor[]} */ ([]));
+  // Paths confirmed installed (populated after successful download)
+  let installedAltPaths = $state(/** @type {string[]} */ ([]));
 
   // Modes tab — Chaperone classifier presets.
   //
@@ -484,6 +488,34 @@ Reply with only the single word, lowercase, no punctuation.
     cfgModels = cfg.whisper?.models ?? [];
     if (cfgModels.length === 0 && cfgModel) cfgModels = [cfgModel];
     modelsSaveMsg = '';
+    // Load model descriptors for the active non-Whisper backend
+    if (cfgBackend !== 'whisper') {
+      altModels = await commands.listModelsForFamily(cfgBackend).catch(() => []);
+    }
+  }
+
+  async function startAltDownload(m) {
+    const key = m.id;
+    downloadProgress = { ...downloadProgress, [key]: 0 };
+    let res;
+    if (cfgBackend === 'moonshine') {
+      // variant = last segment of id, e.g. "moonshine-base" → "base"
+      const variant = m.id.replace(/^moonshine-/, '');
+      res = await commands.downloadMoonshineModel(variant);
+    } else {
+      const variant = m.id.replace(/^parakeet-/, '');
+      res = await commands.downloadParakeetModel(variant);
+    }
+    const { [key]: _r, ...rest } = downloadProgress;
+    downloadProgress = rest;
+    if (res.status === 'ok') {
+      if (m.path_hint && !installedAltPaths.includes(m.path_hint)) {
+        installedAltPaths = [...installedAltPaths, m.path_hint];
+      }
+    } else {
+      modelsSaveMsg = 'Download failed: ' + res.error;
+      setTimeout(() => { modelsSaveMsg = ''; }, 5000);
+    }
   }
 
   async function setCustomModel(path) {
@@ -1255,13 +1287,15 @@ Reply with only the single word, lowercase, no punctuation.
 
   <!-- Models tab -->
   {#if activeTab === 'models'}
-    {@const rmFilename      = RECOMMENDED_MODEL.name + '.bin'}
-    {@const rmInstalledPath = cfgModels.find(p => p.endsWith(rmFilename))}
-    {@const rmIsInstalled   = !!rmInstalledPath}
-    {@const rmIsSelected    = rmIsInstalled && cfgModel === rmInstalledPath}
-    {@const rmIsDownloading = RECOMMENDED_MODEL.name in downloadProgress}
-    {@const rmPct           = downloadProgress[RECOMMENDED_MODEL.name] ?? 0}
     <div class="tt-set flex-1 min-h-0 overflow-y-auto">
+
+    {#if cfgBackend === 'whisper'}
+      {@const rmFilename      = RECOMMENDED_MODEL.name + '.bin'}
+      {@const rmInstalledPath = cfgModels.find(p => p.endsWith(rmFilename))}
+      {@const rmIsInstalled   = !!rmInstalledPath}
+      {@const rmIsSelected    = rmIsInstalled && cfgModel === rmInstalledPath}
+      {@const rmIsDownloading = RECOMMENDED_MODEL.name in downloadProgress}
+      {@const rmPct           = downloadProgress[RECOMMENDED_MODEL.name] ?? 0}
 
       <!-- Recommended -->
       <div class="tt-section">
@@ -1335,6 +1369,48 @@ Reply with only the single word, lowercase, no punctuation.
           </div>
         {/if}
       </div>
+
+    {:else}
+      <!-- Moonshine / Parakeet model catalog -->
+      {@const engineLabel = cfgBackend === 'moonshine' ? 'Moonshine' : 'Parakeet'}
+      <div class="tt-section">
+        <div class="subsection-hd"><span class="subsection-hd-title">{engineLabel} Models</span></div>
+        {#if altModels.length === 0}
+          <div class="tt-row"><p class="tt-desc">Loading…</p></div>
+        {:else}
+          {#each altModels as m}
+            {@const isDownloading = m.id in downloadProgress}
+            {@const pct           = downloadProgress[m.id] ?? 0}
+            {@const isInstalled   = installedAltPaths.some(p => p === m.path_hint && m.path_hint)}
+            <div class="tt-row tt-row-field">
+              <div class="tt-model-card group" class:tt-model-card-selected={isInstalled}>
+                <div class="tt-model-card-body">
+                  <div class="tt-row-info">
+                    <div class="tt-model-name-row">
+                      <span class="tt-tier-name">{m.label}</span>
+                    </div>
+                    <span class="tt-desc">{m.description}</span>
+                  </div>
+                  <span class="tt-model-size">{m.size}</span>
+                  {#if isDownloading}
+                    <span class="tt-model-pct tt-model-pct-lg">{pct}%</span>
+                  {:else if isInstalled}
+                    <button disabled class="tt-btn tt-btn-md tt-btn-success">Ready</button>
+                  {:else}
+                    <button onclick={() => startAltDownload(m)} class="tt-btn tt-btn-md">Download</button>
+                  {/if}
+                </div>
+              </div>
+            </div>
+          {/each}
+        {/if}
+      </div>
+      <div class="tt-section tt-section-last">
+        <div class="tt-row tt-row-col">
+          <p class="tt-desc">Models are stored in <code>~/.config/librewin/turbotalk/models/{cfgBackend}/</code>. Switch engine in the Settings tab.</p>
+        </div>
+      </div>
+    {/if}
 
     </div>
   {/if}
@@ -1610,14 +1686,14 @@ Reply with only the single word, lowercase, no punctuation.
           <div class="tt-row tt-row-field" data-tip="Which local transcription engine to use. Moonshine and Parakeet are wired but inactive — they activate automatically once the ort version conflict (TASK-58/59) is resolved.">
             <div class="tt-seg tt-seg-wide">
               {#each [['whisper','Whisper'],['moonshine','Moonshine'],['parakeet','Parakeet']] as [v, lbl], i}
-                <button onclick={() => { cfgBackend = v; saveSettings(); }} class={seg(cfgBackend === v, i, 3)}>{lbl}</button>
+                <button onclick={async () => { cfgBackend = v; saveSettings(); if (v !== 'whisper') { altModels = await commands.listModelsForFamily(v).catch(() => []); } }} class={seg(cfgBackend === v, i, 3)}>{lbl}</button>
               {/each}
             </div>
           </div>
           {#if cfgBackend === 'moonshine'}
-            <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">English-only · low hallucination on silence. Not yet active — falling back to Whisper until the ort conflict resolves.</p>
+            <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">English-only · low hallucination on silence. Download a model in the Models tab to activate.</p>
           {:else if cfgBackend === 'parakeet'}
-            <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">English-only · fastest. Not yet active — falling back to Whisper until the ort conflict resolves.</p>
+            <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">English-only · fastest, CTC architecture. Download a model in the Models tab to activate.</p>
           {:else}
             <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">Multilingual · most accurate. Model managed in the Models tab.</p>
           {/if}
