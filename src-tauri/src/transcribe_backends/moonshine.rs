@@ -39,9 +39,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use transcribe_rs::onnx::moonshine::{MoonshineModel, MoonshineVariant as TrsMoonshineVariant};
+use transcribe_rs::onnx::moonshine::{MoonshineModel, MoonshineParams, MoonshineVariant as TrsMoonshineVariant};
 use transcribe_rs::onnx::Quantization;
-use transcribe_rs::{SpeechModel, TranscribeOptions};
 
 use crate::transcribe::{TranscriptOutcome, TranscriptionBackend};
 
@@ -65,6 +64,13 @@ impl MoonshineVariant {
         match self {
             MoonshineVariant::Tiny => "tiny",
             MoonshineVariant::Base => "base",
+        }
+    }
+
+    /// Approximate max tokens per second of audio (matches transcribe-rs).
+    fn token_rate(self) -> usize {
+        match self {
+            MoonshineVariant::Tiny | MoonshineVariant::Base => 6,
         }
     }
 }
@@ -135,22 +141,64 @@ pub fn validate_moonshine_model_dir(dir: &Path) -> anyhow::Result<PathBuf> {
         }
     }
 
-    // Check required files.
-    for filename in &["encoder_model.onnx", "decoder_model_merged.onnx", "tokenizer.json"] {
-        let f = canon.join(filename);
-        if !f.exists() {
-            anyhow::bail!(
-                "Moonshine model incomplete — missing {filename} in {}. \
-                 Re-run download_moonshine_model.",
-                canon.display()
-            );
-        }
+    // Check required files (fp32 or int8 — transcribe-rs naming).
+    let has_encoder = canon.join("encoder_model.onnx").exists()
+        || canon.join("encoder_model.int8.onnx").exists();
+    let has_decoder = canon.join("decoder_model_merged.onnx").exists()
+        || canon.join("decoder_model_merged.int8.onnx").exists();
+    if !has_encoder {
+        anyhow::bail!(
+            "Moonshine model incomplete — missing encoder_model(.int8).onnx in {}. \
+             Re-run download_moonshine_model.",
+            canon.display()
+        );
+    }
+    if !has_decoder {
+        anyhow::bail!(
+            "Moonshine model incomplete — missing decoder_model_merged(.int8).onnx in {}. \
+             Re-run download_moonshine_model.",
+            canon.display()
+        );
+    }
+    if !canon.join("tokenizer.json").exists() {
+        anyhow::bail!(
+            "Moonshine model incomplete — missing tokenizer.json in {}. \
+             Re-run download_moonshine_model.",
+            canon.display()
+        );
     }
 
     Ok(canon)
 }
 
 // ── MoonshineBackend ──────────────────────────────────────────────────────────
+
+/// Peak target for Moonshine input — matches `audio.rs` NORMALIZE_PEAK.
+const MOONSHINE_TARGET_PEAK: f32 = 0.89;
+/// Floor on decoder steps so short utterances don't collapse to an empty string.
+const MOONSHINE_MIN_MAX_LENGTH: usize = 32;
+
+/// Read a 16 kHz mono WAV and ensure samples are loud enough for Moonshine.
+/// Whisper tolerates quiet post-VAD audio; Moonshine's CTC decoder often
+/// emits EOS immediately on near-silence, so we re-boost here if needed.
+fn prepare_moonshine_samples(wav: &Path) -> anyhow::Result<Vec<f32>> {
+    let mut samples = transcribe_rs::audio::read_wav_samples(wav)
+        .map_err(|e| anyhow::anyhow!("read wav {}: {e}", wav.display()))?;
+    let peak = samples.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
+    if peak > 0.0 && peak < MOONSHINE_TARGET_PEAK {
+        let gain = MOONSHINE_TARGET_PEAK / peak;
+        for s in &mut samples {
+            *s *= gain;
+        }
+    }
+    tracing::info!(
+        "[moonshine] input {} samples ({:.2}s) peak={:.4}",
+        samples.len(),
+        samples.len() as f32 / 16_000.0,
+        peak
+    );
+    Ok(samples)
+}
 
 /// `TranscriptionBackend` backed by Moonshine ONNX via `transcribe-rs`.
 ///
@@ -194,16 +242,25 @@ impl MoonshineBackend {
 
         let canon_dir = validate_moonshine_model_dir(model_dir)?;
 
+        let quantization = if canon_dir.join("encoder_model.onnx").exists() {
+            Quantization::default()
+        } else if canon_dir.join("encoder_model.int8.onnx").exists() {
+            Quantization::Int8
+        } else {
+            Quantization::default()
+        };
+
         tracing::info!(
-            "[moonshine] loading {} model from {}",
+            "[moonshine] loading {} model from {} (quant={:?})",
             variant.name(),
-            canon_dir.display()
+            canon_dir.display(),
+            quantization
         );
 
         let model = MoonshineModel::load(
             &canon_dir,
             to_trs_variant(variant),
-            &Quantization::default(),
+            &quantization,
         )
         .map_err(|e| anyhow::anyhow!("Moonshine model load failed: {e}"))?;
 
@@ -218,10 +275,8 @@ impl MoonshineBackend {
     }
 
     /// Build a backend from the current settings.
-    /// Reads `TT_BACKEND_VARIANT` env var for the variant (default: "base").
-    pub fn from_config(_cfg: &crate::settings::Config) -> anyhow::Result<Self> {
-        let variant_str = std::env::var("TT_BACKEND_VARIANT")
-            .unwrap_or_else(|_| "base".to_string());
+    pub fn from_config(cfg: &crate::settings::Config) -> anyhow::Result<Self> {
+        let variant_str = crate::settings::resolve_backend_variant(cfg);
 
         let dir = variant_dir(&variant_str).ok_or_else(|| {
             anyhow::anyhow!("Could not determine Moonshine model directory (no home dir?)")
@@ -244,8 +299,17 @@ impl TranscriptionBackend for MoonshineBackend {
 
         let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
 
+        let samples = prepare_moonshine_samples(wav)?;
+        let duration_sec = samples.len() as f32 / 16_000.0;
+        let max_length = ((duration_sec * self.variant.token_rate() as f32).ceil() as usize)
+            .max(MOONSHINE_MIN_MAX_LENGTH);
+        let params = MoonshineParams {
+            max_length: Some(max_length),
+            ..Default::default()
+        };
+
         let result = model
-            .transcribe_file(wav, &TranscribeOptions::default())
+            .transcribe_with(&samples, &params)
             .map_err(|e| anyhow::anyhow!("Moonshine transcription failed: {e}"))?;
 
         let text = result.text.trim().to_string();
@@ -272,5 +336,16 @@ impl TranscriptionBackend for MoonshineBackend {
             self.variant.name(),
             self.model_dir.display()
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_rate_is_positive_for_all_variants() {
+        assert!(MoonshineVariant::Tiny.token_rate() > 0);
+        assert!(MoonshineVariant::Base.token_rate() > 0);
     }
 }

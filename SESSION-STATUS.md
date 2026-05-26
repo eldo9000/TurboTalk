@@ -1,9 +1,9 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-05-23
-**Current state:** TASK-60 landed — Backend selector wired end-to-end. `BackendFamily` enum (Whisper/Moonshine/Parakeet) added to `settings.rs`; `backend` field persists as lowercase string in `config.toml`. `build_backend()` now reads `cfg.backend` instead of the `TT_BACKEND` env var (removed). Moonshine/Parakeet fall back to Whisper with a log warning when their feature flags are off (ort conflict still blocks actual inference — unchanged). `list_models_for_family` Tauri command added. Settings tab has a Transcription Engine segmented picker. Onboarding Step 4 shows the engine picker before the model list. `cargo test` 97/97 green. `npm run build` clean.
+**Last updated:** 2026-05-26
+**Current state:** Moonshine backend proven end-to-end on macOS with FP32 ONNX models. User confirmed dictation works after re-downloading Moonshine Tiny FP32 (~110 MB). Int8 bundle decodes empty on real mic audio; download path now fetches FP32 only and treats int8-only installs as not installed. Ort conflict resolved (direct `ort rc.12` in `vad.rs`, `moonshine`+`parakeet` features on by default). Also landed: worker cache fix for alt backends, Moonshine audio prep, Parakeet/Moonshine HF download URL fixes, `backend_variant` persistence, Models/Onboarding UX for alt backends. `cargo test` 105/105 green with moonshine+parakeet features.
 
-BLOCKER (shared with Moonshine and Parakeet): `transcribe-rs 0.3.11` pins `ort = "=2.0.0-rc.12"`. `vad-rs 0.1.5` pins `ort = "=2.0.0-rc.9"`. Both the `moonshine` and `parakeet` features are documented stubs until this conflict resolves. Unblock paths documented in `src-tauri/src/transcribe_backends/parakeet.rs` and `src-tauri/Cargo.toml`.
+**Next action:** Optional — user-test Parakeet end-to-end (download + dictation). Whisper remains default/recommended for multilingual. No urgent blockers on macOS dictation path.
 
 Previous state: TASK-58 landed (partial) — `MoonshineBackend` struct, `TranscriptionBackend` impl, and all path/download infrastructure are in place. `build_backend()` reads `TT_BACKEND` env var and routes to Moonshine when set. `download_moonshine_model` tauri command exists with the progress-event pattern. `libonnxruntime.dylib` placeholder committed; bundle.resources wired in `tauri.macos.conf.json`. 97/97 tests green, clippy clean.
 

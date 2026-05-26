@@ -512,8 +512,8 @@ fn build_backend(cfg: &crate::settings::Config) -> anyhow::Result<std::sync::Arc
             #[cfg(not(feature = "moonshine"))]
             {
                 tracing::warn!(
-                    "[transcribe] backend=moonshine requested but `moonshine` feature is not compiled in \
-                     (ort version conflict — see TASK-58). Falling back to Whisper."
+                    "[transcribe] backend=moonshine requested but `moonshine` feature is not compiled in. \
+                     Falling back to Whisper."
                 );
                 // Fall through to Whisper below.
             }
@@ -528,8 +528,8 @@ fn build_backend(cfg: &crate::settings::Config) -> anyhow::Result<std::sync::Arc
             #[cfg(not(feature = "parakeet"))]
             {
                 tracing::warn!(
-                    "[transcribe] backend=parakeet requested but `parakeet` feature is not compiled in \
-                     (ort version conflict — see TASK-59). Falling back to Whisper."
+                    "[transcribe] backend=parakeet requested but `parakeet` feature is not compiled in. \
+                     Falling back to Whisper."
                 );
                 // Fall through to Whisper below.
             }
@@ -929,27 +929,52 @@ pub fn invalidate_worker() {
     PREWARM_IN_FLIGHT.store(false, Ordering::Release);
 }
 
+/// Identity string for the currently configured backend — used to decide
+/// whether the cached worker can be reused across dictations.
+pub(crate) fn expected_backend_identity(cfg: &crate::settings::Config) -> String {
+    use crate::settings::BackendFamily;
+
+    match cfg.backend {
+        BackendFamily::Whisper => std::path::PathBuf::from(&cfg.whisper.model)
+            .canonicalize()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| cfg.whisper.model.clone()),
+        BackendFamily::Moonshine => {
+            let v = crate::settings::resolve_backend_variant(cfg);
+            match crate::transcribe_backends::moonshine::variant_dir(&v) {
+                Some(d) => {
+                    let canon = d.canonicalize().unwrap_or(d);
+                    format!("moonshine:{}:{}", v, canon.display())
+                }
+                None => format!("moonshine:{}:missing", v),
+            }
+        }
+        BackendFamily::Parakeet => {
+            let v = crate::settings::resolve_backend_variant(cfg);
+            match crate::transcribe_backends::parakeet::variant_dir(&v) {
+                Some(d) => {
+                    let canon = d.canonicalize().unwrap_or(d);
+                    format!("parakeet:{}:{}", v, canon.display())
+                }
+                None => format!("parakeet:{}:missing", v),
+            }
+        }
+    }
+}
+
 /// Get-or-build the backend against the current settings snapshot. If the
-/// cached backend's `model_identity()` differs from the current
-/// `cfg.whisper.model` (canonicalized), it is dropped and rebuilt. Returns an
-/// `Arc<dyn TranscriptionBackend>` so the spawn call can drop the outer mutex
-/// before the (potentially long) HTTP POST.
+/// cached backend's `model_identity()` differs from the configured backend,
+/// it is dropped and rebuilt. Returns an `Arc<dyn TranscriptionBackend>` so
+/// the spawn call can drop the outer mutex before the transcribe call.
 fn worker_for(
     cfg: &crate::settings::Config,
 ) -> anyhow::Result<std::sync::Arc<dyn TranscriptionBackend>> {
     let mut slot = WORKER.lock().unwrap_or_else(|e| e.into_inner());
 
-    // Cache-validity check: compare model_identity() strings. The identity is
-    // the canonicalized model path as a String; same string = same backend.
-    // canonicalize() may fail if the file was deleted out from under us —
-    // treat that as "rebuild and let the build error surface".
-    let configured_identity = std::path::PathBuf::from(&cfg.whisper.model)
-        .canonicalize()
-        .ok()
-        .and_then(|p| p.to_str().map(|s| s.to_string()));
-    let cached_matches = match (&*slot, configured_identity.as_ref()) {
-        (Some(w), Some(c)) => w.model_identity() == *c,
-        _ => false,
+    let configured_identity = expected_backend_identity(cfg);
+    let cached_matches = match &*slot {
+        Some(w) => w.model_identity() == configured_identity,
+        None => false,
     };
 
     if cached_matches {

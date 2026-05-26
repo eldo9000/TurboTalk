@@ -57,12 +57,13 @@ export const commands = {
 	/**
 	 *  Download a Parakeet TDT ONNX model bundle from HuggingFace.
 	 * 
-	 *  Model source: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2
-	 *  (ONNX export — community ONNX fork or converted from the upstream checkpoint)
+	 *  Model source: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx
 	 * 
-	 *  Files downloaded per variant:
-	 *    model.onnx
-	 *    tokenizer.json
+	 *  Files downloaded per variant (int8 quantized — ~660 MB total):
+	 *    encoder-model.int8.onnx
+	 *    decoder_joint-model.int8.onnx
+	 *    nemo128.onnx
+	 *    vocab.txt
 	 * 
 	 *  Each file is downloaded separately. Progress ticks are per-file (pct within
 	 *  the overall set). The download key used in progress events is
@@ -217,11 +218,6 @@ export type AudioConfig = {
  *  Which transcription backend family to use.
  * 
  *  Persisted as lowercase ("whisper" / "moonshine" / "parakeet").
- *  Whisper is the default and the only fully-functional backend for now —
- *  Moonshine and Parakeet are documented scaffolds blocked on an ort version
- *  conflict (transcribe-rs rc.12 vs vad-rs rc.9). The enum is wired end-to-end
- *  so the UI and settings round-trip correctly today; activation will work
- *  automatically once the conflict resolves.
  */
 export type BackendFamily = "whisper" | "moonshine" | "parakeet";
 
@@ -306,13 +302,14 @@ export type Config = {
 	sound_on_cancel?: boolean,
 	// Volume for sound cues, 0.0–1.0.
 	sound_volume?: number,
-	/**
-	 *  Which transcription backend family to use. Default: Whisper.
-	 *  Moonshine and Parakeet are wired but inactive — they fall back to
-	 *  Whisper with a warning until the ort version conflict (TASK-58/59) is
-	 *  resolved and their feature flags are enabled.
-	 */
+	// Which transcription backend family to use. Default: Whisper.
 	backend?: BackendFamily,
+	/**
+	 *  Active variant within the chosen backend family — e.g. "tiny"/"base"
+	 *  for Moonshine, "tdt-0.6b-v2" for Parakeet. Empty means use the family
+	 *  default in `resolve_backend_variant`.
+	 */
+	backend_variant?: string,
 };
 
 /**
@@ -396,6 +393,8 @@ export type ModelDescriptor = {
 	size: string,
 	download_url: string,
 	path_hint: string,
+	// True when the required ONNX bundle files are present on disk.
+	installed: boolean,
 };
 
 export type PermissionStatus = "granted" | "denied" | "not_determined" | "unsupported";

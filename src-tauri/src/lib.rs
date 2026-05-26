@@ -93,11 +93,30 @@ fn save_config(
 #[tauri::command]
 #[specta::specta]
 fn prewarm_model(app: tauri::AppHandle) -> Result<(), String> {
-    let cfg = settings::load();
-    if cfg.whisper.model.trim().is_empty() {
-        return Err("No transcription model is selected.".to_string());
+    if !permissions::check_readiness().model_present {
+        return Err(
+            "No transcription model is installed for the selected engine.".to_string(),
+        );
     }
+    let cfg = settings::load();
     transcribe::prewarm(cfg, app);
+    Ok(())
+}
+
+/// After an alt-backend model download, persist the variant, invalidate the
+/// worker, and prewarm against the new backend.
+fn apply_alt_backend_after_download(
+    app: &tauri::AppHandle,
+    family: settings::BackendFamily,
+    variant: &str,
+) -> Result<(), String> {
+    let mut cfg = settings::load();
+    cfg.backend = family;
+    cfg.backend_variant = variant.to_string();
+    settings::save(&cfg).map_err(|e| e.to_string())?;
+    settings::update_cache(&cfg);
+    transcribe::invalidate_worker();
+    transcribe::prewarm(cfg, app.clone());
     Ok(())
 }
 
@@ -715,13 +734,13 @@ async fn download_moonshine_model(
         _ => unreachable!(),
     };
 
-    // Files to download. Each is fetched from the HuggingFace model hub.
-    // ONNX int8 quantized variants are available but the default (fp32) is
-    // what transcribe-rs's `Quantization::default()` resolves to.
-    let files: &[&str] = &[
-        "encoder_model.onnx",
-        "decoder_model_merged.onnx",
-        "tokenizer.json",
+    // FP32 ONNX files live under `onnx/` on HuggingFace. Int8 exports proved
+    // unreliable in practice (empty transcripts on real mic audio despite
+    // healthy peak levels). transcribe-rs's own Moonshine tests use FP32.
+    let files: &[(&str, &str)] = &[
+        ("onnx/encoder_model.onnx", "encoder_model.onnx"),
+        ("onnx/decoder_model_merged.onnx", "decoder_model_merged.onnx"),
+        ("tokenizer.json", "tokenizer.json"),
     ];
 
     // Build destination directory.
@@ -759,8 +778,20 @@ async fn download_moonshine_model(
         serde_json::json!({ "name": &event_name, "pct": 0u8 }),
     );
 
-    for (file_idx, filename) in files.iter().enumerate() {
-        let download_key = format!("{}-{}", event_name, filename);
+    // Drop deprecated int8-only bundles so re-download picks up FP32 weights.
+    for legacy in &[
+        "encoder_model.int8.onnx",
+        "decoder_model_merged.int8.onnx",
+    ] {
+        let p = canon_dir.join(legacy);
+        if p.exists() {
+            let _ = tokio::fs::remove_file(&p).await;
+            tracing::info!("[moonshine-dl] removed legacy int8 file {}", legacy);
+        }
+    }
+
+    for (file_idx, (remote_path, local_name)) in files.iter().enumerate() {
+        let download_key = format!("{}-{}", event_name, local_name);
 
         // Check for cancellation before starting each file.
         if cancel_set.lock().remove(&event_name) {
@@ -769,7 +800,7 @@ async fn download_moonshine_model(
 
         let url = format!(
             "https://huggingface.co/{}/resolve/main/{}",
-            repo, filename
+            repo, remote_path
         );
 
         // Validate URL shape — must be huggingface.co.
@@ -780,18 +811,18 @@ async fn download_moonshine_model(
             }
         }
 
-        // Reject path traversal in filename.
-        if filename.contains(std::path::MAIN_SEPARATOR) || filename.contains("..") {
-            return Err(format!("invalid filename: {}", filename));
+        // Reject path traversal in local filename.
+        if local_name.contains(std::path::MAIN_SEPARATOR) || local_name.contains("..") {
+            return Err(format!("invalid filename: {}", local_name));
         }
-        let dest_path = canon_dir.join(filename);
+        let dest_path = canon_dir.join(local_name);
         if !dest_path.starts_with(&canon_dir) {
             return Err("download destination escaped model directory".to_string());
         }
 
         // Skip if already downloaded (idempotent re-runs).
         if dest_path.exists() {
-            tracing::info!("[moonshine-dl] {} already present — skipping", filename);
+            tracing::info!("[moonshine-dl] {} already present — skipping", local_name);
             // Still emit progress for the file.
             let base_pct = ((file_idx + 1) * 100 / files.len()).min(99) as u8;
             let _ = app.emit(
@@ -801,16 +832,16 @@ async fn download_moonshine_model(
             continue;
         }
 
-        tracing::info!("[moonshine-dl] downloading {} from {}", filename, url);
+        tracing::info!("[moonshine-dl] downloading {} from {}", local_name, url);
 
         let mut resp = client
             .get(&url)
             .send()
             .await
-            .map_err(|e| format!("Request failed for {}: {}", filename, e))?;
+            .map_err(|e| format!("Request failed for {}: {}", local_name, e))?;
 
         if !resp.status().is_success() {
-            return Err(format!("HTTP {} downloading {}", resp.status(), filename));
+            return Err(format!("HTTP {} downloading {}", resp.status(), local_name));
         }
 
         let total = resp.content_length();
@@ -845,7 +876,7 @@ async fn download_moonshine_model(
                     if let Err(e) = file.write_all(&chunk).await {
                         drop(file);
                         let _ = tokio::fs::remove_file(&temp_file_path).await;
-                        return Err(format!("Write failed for {}: {}", filename, e));
+                        return Err(format!("Write failed for {}: {}", local_name, e));
                     }
                     // Progress: blend per-file progress with overall file index.
                     // Each file contributes an equal fraction of 0..99%.
@@ -866,7 +897,7 @@ async fn download_moonshine_model(
                 Err(e) => {
                     drop(file);
                     let _ = tokio::fs::remove_file(&temp_file_path).await;
-                    return Err(format!("Download interrupted for {}: {}", filename, e));
+                    return Err(format!("Download interrupted for {}: {}", local_name, e));
                 }
             }
         }
@@ -876,7 +907,7 @@ async fn download_moonshine_model(
 
         tokio::fs::rename(&temp_file_path, &dest_path)
             .await
-            .map_err(|e| format!("Rename failed for {}: {}", filename, e))?;
+            .map_err(|e| format!("Rename failed for {}: {}", local_name, e))?;
 
         // Verify the final path is still within canon_dir (rename target check).
         if let Ok(canon_dest) = dest_path.canonicalize() {
@@ -886,7 +917,7 @@ async fn download_moonshine_model(
             }
         }
 
-        tracing::info!("[moonshine-dl] {} complete", filename);
+        tracing::info!("[moonshine-dl] {} complete", local_name);
     }
 
     let _ = app.emit(
@@ -900,17 +931,20 @@ async fn download_moonshine_model(
         canon_dir.display()
     );
 
+    apply_alt_backend_after_download(&app, settings::BackendFamily::Moonshine, &variant)?;
+
     Ok(())
 }
 
 /// Download a Parakeet TDT ONNX model bundle from HuggingFace.
 ///
-/// Model source: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2
-/// (ONNX export — community ONNX fork or converted from the upstream checkpoint)
+/// Model source: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx
 ///
-/// Files downloaded per variant:
-///   model.onnx
-///   tokenizer.json
+/// Files downloaded per variant (int8 quantized — ~660 MB total):
+///   encoder-model.int8.onnx
+///   decoder_joint-model.int8.onnx
+///   nemo128.onnx
+///   vocab.txt
 ///
 /// Each file is downloaded separately. Progress ticks are per-file (pct within
 /// the overall set). The download key used in progress events is
@@ -933,18 +967,17 @@ async fn download_parakeet_model(
     }
 
     // HuggingFace repo for the ONNX export of Parakeet TDT 0.6B v2.
-    // The upstream NVIDIA checkpoint is PyTorch/SafeTensors; the ONNX export
-    // is hosted by the community (or must be converted). Adjust this repo path
-    // once the canonical ONNX source is confirmed.
     let repo = match variant.as_str() {
-        "tdt-0.6b-v2" => "nvidia/parakeet-tdt-0.6b-v2",
+        "tdt-0.6b-v2" => "istupakov/parakeet-tdt-0.6b-v2-onnx",
         _ => unreachable!(),
     };
 
-    // Files to download. Parakeet TDT uses a single CTC graph file + tokenizer.
+    // Int8 ONNX bundle — matches transcribe-rs ParakeetModel::load(..., Int8).
     let files: &[&str] = &[
-        "model.onnx",
-        "tokenizer.json",
+        "encoder-model.int8.onnx",
+        "decoder_joint-model.int8.onnx",
+        "nemo128.onnx",
+        "vocab.txt",
     ];
 
     // Build destination directory.
@@ -1123,6 +1156,8 @@ async fn download_parakeet_model(
         canon_dir.display()
     );
 
+    apply_alt_backend_after_download(&app, settings::BackendFamily::Parakeet, &variant)?;
+
     Ok(())
 }
 
@@ -1141,6 +1176,20 @@ pub struct ModelDescriptor {
     pub size: String,
     pub download_url: String,
     pub path_hint: String,
+    /// True when the required ONNX bundle files are present on disk.
+    pub installed: bool,
+}
+
+fn moonshine_installed(variant: &str) -> bool {
+    crate::transcribe_backends::moonshine::variant_dir(variant)
+        .and_then(|d| crate::transcribe_backends::moonshine::validate_moonshine_model_dir(&d).ok())
+        .is_some_and(|d| d.join("encoder_model.onnx").exists())
+}
+
+fn parakeet_installed(variant: &str) -> bool {
+    crate::transcribe_backends::parakeet::variant_dir(variant)
+        .and_then(|d| crate::transcribe_backends::parakeet::validate_parakeet_model_dir(&d).ok())
+        .is_some()
 }
 
 /// Return the available models for a given backend family.
@@ -1162,9 +1211,10 @@ fn list_models_for_family(family: String) -> Vec<ModelDescriptor> {
                 id: "moonshine-tiny".to_string(),
                 label: "Moonshine Tiny".to_string(),
                 description: "English-only · low hallucination on silence · fastest".to_string(),
-                size: "~65 MB".to_string(),
+                size: "~110 MB".to_string(),
                 download_url: "https://huggingface.co/onnx-community/moonshine-tiny-ONNX".to_string(),
                 path_hint: ".config/librewin/turbotalk/models/moonshine/tiny/".to_string(),
+                installed: moonshine_installed("tiny"),
             },
             ModelDescriptor {
                 id: "moonshine-base".to_string(),
@@ -1173,6 +1223,7 @@ fn list_models_for_family(family: String) -> Vec<ModelDescriptor> {
                 size: "~250 MB".to_string(),
                 download_url: "https://huggingface.co/onnx-community/moonshine-base-ONNX".to_string(),
                 path_hint: ".config/librewin/turbotalk/models/moonshine/base/".to_string(),
+                installed: moonshine_installed("base"),
             },
         ],
         "parakeet" => vec![
@@ -1180,9 +1231,10 @@ fn list_models_for_family(family: String) -> Vec<ModelDescriptor> {
                 id: "parakeet-tdt-0.6b-v2".to_string(),
                 label: "Parakeet TDT 0.6B v2".to_string(),
                 description: "English-only · fastest · NVIDIA NeMo".to_string(),
-                size: "~1.2 GB".to_string(),
-                download_url: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2".to_string(),
+                size: "~660 MB (int8)".to_string(),
+                download_url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx".to_string(),
                 path_hint: ".config/librewin/turbotalk/models/parakeet/tdt-0.6b-v2/".to_string(),
+                installed: parakeet_installed("tdt-0.6b-v2"),
             },
         ],
         // "whisper" or anything else
@@ -1194,6 +1246,7 @@ fn list_models_for_family(family: String) -> Vec<ModelDescriptor> {
                 size: "1.6 GB".to_string(),
                 download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin".to_string(),
                 path_hint: String::new(),
+                installed: false,
             },
             ModelDescriptor {
                 id: "ggml-large-v3-turbo-q5_0".to_string(),
@@ -1202,6 +1255,7 @@ fn list_models_for_family(family: String) -> Vec<ModelDescriptor> {
                 size: "574 MB".to_string(),
                 download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin".to_string(),
                 path_hint: String::new(),
+                installed: false,
             },
             ModelDescriptor {
                 id: "ggml-large-v3".to_string(),
@@ -1210,6 +1264,7 @@ fn list_models_for_family(family: String) -> Vec<ModelDescriptor> {
                 size: "3.1 GB".to_string(),
                 download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin".to_string(),
                 path_hint: String::new(),
+                installed: false,
             },
         ],
     }

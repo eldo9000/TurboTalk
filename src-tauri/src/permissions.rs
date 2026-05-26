@@ -213,7 +213,7 @@ pub fn request_input_monitoring_permission() -> PermissionStatus {
 
 // ── Model presence ──────────────────────────────────────────────────────────
 
-fn model_present() -> bool {
+fn whisper_model_present() -> bool {
     let Some(dir) = crate::settings::canonical_models_dir() else {
         return false;
     };
@@ -222,6 +222,31 @@ fn model_present() -> bool {
     };
     rd.flatten()
         .any(|e| e.path().extension().is_some_and(|ext| ext == "bin"))
+}
+
+fn model_present() -> bool {
+    use crate::settings::BackendFamily;
+
+    let cfg = crate::settings::load();
+    match cfg.backend {
+        BackendFamily::Whisper => whisper_model_present(),
+        BackendFamily::Moonshine => {
+            let variant = crate::settings::resolve_backend_variant(&cfg);
+            crate::transcribe_backends::moonshine::variant_dir(&variant)
+                .and_then(|d| {
+                    crate::transcribe_backends::moonshine::validate_moonshine_model_dir(&d).ok()
+                })
+                .is_some()
+        }
+        BackendFamily::Parakeet => {
+            let variant = crate::settings::resolve_backend_variant(&cfg);
+            crate::transcribe_backends::parakeet::variant_dir(&variant)
+                .and_then(|d| {
+                    crate::transcribe_backends::parakeet::validate_parakeet_model_dir(&d).ok()
+                })
+                .is_some()
+        }
+    }
 }
 
 // ── Public commands ─────────────────────────────────────────────────────────

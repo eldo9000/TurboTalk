@@ -137,8 +137,26 @@ pub fn validate_parakeet_model_dir(dir: &Path) -> anyhow::Result<PathBuf> {
         }
     }
 
-    // Check required files (as expected by transcribe-rs ParakeetModel::load).
-    for filename in &["encoder-model.onnx", "decoder_joint-model.onnx", "nemo128.onnx", "vocab.txt"] {
+    // Check required files (int8 preferred; fp32 accepted as fallback).
+    let has_encoder = canon.join("encoder-model.int8.onnx").exists()
+        || canon.join("encoder-model.onnx").exists();
+    let has_decoder = canon.join("decoder_joint-model.int8.onnx").exists()
+        || canon.join("decoder_joint-model.onnx").exists();
+    if !has_encoder {
+        anyhow::bail!(
+            "Parakeet model incomplete — missing encoder-model(.int8).onnx in {}. \
+             Re-run download_parakeet_model.",
+            canon.display()
+        );
+    }
+    if !has_decoder {
+        anyhow::bail!(
+            "Parakeet model incomplete — missing decoder_joint-model(.int8).onnx in {}. \
+             Re-run download_parakeet_model.",
+            canon.display()
+        );
+    }
+    for filename in &["nemo128.onnx", "vocab.txt"] {
         let f = canon.join(filename);
         if !f.exists() {
             anyhow::bail!(
@@ -203,19 +221,23 @@ impl ParakeetBackend {
 
         let canon_dir = validate_parakeet_model_dir(model_dir)?;
 
+        let quantization = if canon_dir.join("encoder-model.int8.onnx").exists() {
+            Quantization::Int8
+        } else {
+            Quantization::default()
+        };
+
         tracing::info!(
-            "[parakeet] loading {} model from {}",
+            "[parakeet] loading {} model from {} (quant={:?})",
             variant.display_name(),
-            canon_dir.display()
+            canon_dir.display(),
+            quantization
         );
 
         // Note: ParakeetModel::load does NOT take a variant parameter — the
         // variant is implicit in the model files present in the directory.
-        let model = ParakeetModel::load(
-            &canon_dir,
-            &Quantization::default(),
-        )
-        .map_err(|e| anyhow::anyhow!("Parakeet model load failed: {e}"))?;
+        let model = ParakeetModel::load(&canon_dir, &quantization)
+            .map_err(|e| anyhow::anyhow!("Parakeet model load failed: {e}"))?;
 
         tracing::info!("[parakeet] model loaded successfully");
 
@@ -228,10 +250,8 @@ impl ParakeetBackend {
     }
 
     /// Build a backend from the current settings.
-    /// Reads `TT_BACKEND_VARIANT` env var for the variant (default: "tdt-0.6b-v2").
-    pub fn from_config(_cfg: &crate::settings::Config) -> anyhow::Result<Self> {
-        let variant_str = std::env::var("TT_BACKEND_VARIANT")
-            .unwrap_or_else(|_| "tdt-0.6b-v2".to_string());
+    pub fn from_config(cfg: &crate::settings::Config) -> anyhow::Result<Self> {
+        let variant_str = crate::settings::resolve_backend_variant(cfg);
 
         let dir = variant_dir(&variant_str).ok_or_else(|| {
             anyhow::anyhow!("Could not determine Parakeet model directory (no home dir?)")

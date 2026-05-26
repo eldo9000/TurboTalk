@@ -72,11 +72,13 @@ pub struct Config {
     #[serde(default = "default_sound_volume")]
     pub sound_volume: f32,
     /// Which transcription backend family to use. Default: Whisper.
-    /// Moonshine and Parakeet are wired but inactive — they fall back to
-    /// Whisper with a warning until the ort version conflict (TASK-58/59) is
-    /// resolved and their feature flags are enabled.
     #[serde(default)]
     pub backend: BackendFamily,
+    /// Active variant within the chosen backend family — e.g. "tiny"/"base"
+    /// for Moonshine, "tdt-0.6b-v2" for Parakeet. Empty means use the family
+    /// default in `resolve_backend_variant`.
+    #[serde(default)]
+    pub backend_variant: String,
 }
 
 fn default_sound_volume() -> f32 {
@@ -113,11 +115,6 @@ pub struct WhisperConfig {
 /// Which transcription backend family to use.
 ///
 /// Persisted as lowercase ("whisper" / "moonshine" / "parakeet").
-/// Whisper is the default and the only fully-functional backend for now —
-/// Moonshine and Parakeet are documented scaffolds blocked on an ort version
-/// conflict (transcribe-rs rc.12 vs vad-rs rc.9). The enum is wired end-to-end
-/// so the UI and settings round-trip correctly today; activation will work
-/// automatically once the conflict resolves.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum BackendFamily {
@@ -125,6 +122,18 @@ pub enum BackendFamily {
     Whisper,
     Moonshine,
     Parakeet,
+}
+
+/// Resolve the active ONNX/Whisper variant string for the current config.
+pub fn resolve_backend_variant(cfg: &Config) -> String {
+    if !cfg.backend_variant.trim().is_empty() {
+        return cfg.backend_variant.clone();
+    }
+    match cfg.backend {
+        BackendFamily::Moonshine => "base".into(),
+        BackendFamily::Parakeet => "tdt-0.6b-v2".into(),
+        BackendFamily::Whisper => String::new(),
+    }
 }
 
 /// Cleanup mode. Persisted as lowercase ("off" / "regex" / "chaperone").
@@ -290,6 +299,7 @@ impl Default for Config {
             sound_on_cancel: true,
             sound_volume: 0.5,
             backend: BackendFamily::default(),
+            backend_variant: String::new(),
         }
     }
 }

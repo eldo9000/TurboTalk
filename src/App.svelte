@@ -166,8 +166,6 @@
   let downloadProgress = $state({});
   // Moonshine / Parakeet model descriptors (loaded from backend on tab open)
   let altModels       = $state(/** @type {import('./bindings').ModelDescriptor[]} */ ([]));
-  // Paths confirmed installed (populated after successful download)
-  let installedAltPaths = $state(/** @type {string[]} */ ([]));
 
   // Modes tab — Chaperone classifier presets.
   //
@@ -340,6 +338,7 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgSoundVolume       = $state(0.7);
   let cfgVadEnabled        = $state(true);
   let cfgBackend           = $state('whisper'); // 'whisper' | 'moonshine' | 'parakeet'
+  let cfgBackendVariant    = $state('');
   let volumeSaveTimer      = null;
   let showAdvanced         = $state(false);
   // Captured once from the Modes tab in Chaperone mode (two-column tall layout).
@@ -496,26 +495,48 @@ Reply with only the single word, lowercase, no punctuation.
 
   async function startAltDownload(m) {
     const key = m.id;
-    downloadProgress = { ...downloadProgress, [key]: 0 };
+    const progressKey = `${cfgBackend}-${m.id.replace(/^moonshine-|^parakeet-/, '')}`;
+    downloadProgress = { ...downloadProgress, [key]: 0, [progressKey]: 0 };
+    modelsSaveMsg = 'Downloading…';
     let res;
     if (cfgBackend === 'moonshine') {
-      // variant = last segment of id, e.g. "moonshine-base" → "base"
       const variant = m.id.replace(/^moonshine-/, '');
       res = await commands.downloadMoonshineModel(variant);
     } else {
       const variant = m.id.replace(/^parakeet-/, '');
       res = await commands.downloadParakeetModel(variant);
     }
-    const { [key]: _r, ...rest } = downloadProgress;
+    const { [key]: _r, [progressKey]: _p, ...rest } = downloadProgress;
     downloadProgress = rest;
     if (res.status === 'ok') {
-      if (m.path_hint && !installedAltPaths.includes(m.path_hint)) {
-        installedAltPaths = [...installedAltPaths, m.path_hint];
-      }
+      modelsSaveMsg = 'Download complete — engine ready.';
+      cfgBackendVariant = m.id.replace(/^moonshine-|^parakeet-/, '');
+      altModels = await commands.listModelsForFamily(cfgBackend).catch(() => []);
+      setTimeout(() => { modelsSaveMsg = ''; }, 4000);
     } else {
       modelsSaveMsg = 'Download failed: ' + res.error;
-      setTimeout(() => { modelsSaveMsg = ''; }, 5000);
+      setTimeout(() => { modelsSaveMsg = ''; }, 8000);
     }
+  }
+
+  async function selectAltModel(m) {
+    const variant = m.id.replace(/^moonshine-|^parakeet-/, '');
+    const cfg = await commands.getConfig();
+    cfg.backend = cfgBackend;
+    cfg.backend_variant = variant;
+    const res = await commands.saveConfig(cfg);
+    if (res.status === 'ok') {
+      altModels = await commands.listModelsForFamily(cfgBackend).catch(() => []);
+      modelsSaveMsg = 'Engine ready.';
+      setTimeout(() => { modelsSaveMsg = ''; }, 3000);
+    } else {
+      modelsSaveMsg = 'Error: ' + res.error;
+    }
+  }
+
+  function altModelActive(m) {
+    const variant = m.id.replace(/^moonshine-|^parakeet-/, '');
+    return cfgBackendVariant === variant;
   }
 
   async function setCustomModel(path) {
@@ -739,6 +760,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfgSoundVolume       = cfg.sound_volume                     ?? 0.7;
     cfgVadEnabled        = cfg.whisper?.vad_enabled             ?? true;
     cfgBackend           = cfg.backend                          ?? 'whisper';
+    cfgBackendVariant    = cfg.backend_variant                   ?? '';
     cfgLaunchLogin       = launch;
     audioDevices         = devs;
     settingsSaveMsg      = '';
@@ -769,6 +791,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfg.sound_volume                  = cfgSoundVolume;
     cfg.whisper.vad_enabled           = cfgVadEnabled;
     cfg.backend                       = cfgBackend;
+    cfg.backend_variant               = cfgBackendVariant;
     const saveRes = await commands.saveConfig(cfg);
     if (saveRes.status === 'error') {
       settingsSaveMsg = 'Error: ' + saveRes.error;
@@ -911,11 +934,19 @@ Reply with only the single word, lowercase, no punctuation.
     }).then(u => unlisteners.push(u));
     listen('download-progress', (e) => {
       const { name, pct } = e.payload;
+      // Alt-backend downloads emit "moonshine-base" / "parakeet-tdt-0.6b-v2".
+      const altKey = name.startsWith('moonshine-') ? `moonshine-${name.slice('moonshine-'.length)}`
+        : name.startsWith('parakeet-') ? `parakeet-${name.slice('parakeet-'.length)}`
+        : null;
       if (pct >= 100) {
-        const { [name]: _removed, ...rest } = downloadProgress;
-        downloadProgress = rest;
+        const next = { ...downloadProgress };
+        delete next[name];
+        if (altKey) delete next[altKey];
+        downloadProgress = next;
       } else {
-        downloadProgress = { ...downloadProgress, [name]: pct };
+        const patch = { [name]: pct };
+        if (altKey) patch[altKey] = pct;
+        downloadProgress = { ...downloadProgress, ...patch };
       }
     }).then(u => unlisteners.push(u));
     listen('transcript',  (e) => {
@@ -1375,13 +1406,17 @@ Reply with only the single word, lowercase, no punctuation.
       {@const engineLabel = cfgBackend === 'moonshine' ? 'Moonshine' : 'Parakeet'}
       <div class="tt-section">
         <div class="subsection-hd"><span class="subsection-hd-title">{engineLabel} Models</span></div>
+        {#if modelsSaveMsg}
+          <div class="tt-row"><p class="tt-desc" class:tt-warn={modelsSaveMsg.includes('failed')}>{modelsSaveMsg}</p></div>
+        {/if}
         {#if altModels.length === 0}
           <div class="tt-row"><p class="tt-desc">Loading…</p></div>
         {:else}
           {#each altModels as m}
-            {@const isDownloading = m.id in downloadProgress}
-            {@const pct           = downloadProgress[m.id] ?? 0}
-            {@const isInstalled   = installedAltPaths.some(p => p === m.path_hint && m.path_hint)}
+            {@const isDownloading = m.id in downloadProgress || `moonshine-${m.id.replace(/^moonshine-/, '')}` in downloadProgress || `parakeet-${m.id.replace(/^parakeet-/, '')}` in downloadProgress}
+            {@const pct           = downloadProgress[m.id] ?? downloadProgress[`${cfgBackend}-${m.id.replace(/^moonshine-|^parakeet-/, '')}`] ?? 0}
+            {@const isInstalled   = m.installed}
+            {@const isActive      = altModelActive(m)}
             <div class="tt-row tt-row-field">
               <div class="tt-model-card group" class:tt-model-card-selected={isInstalled}>
                 <div class="tt-model-card-body">
@@ -1395,7 +1430,11 @@ Reply with only the single word, lowercase, no punctuation.
                   {#if isDownloading}
                     <span class="tt-model-pct tt-model-pct-lg">{pct}%</span>
                   {:else if isInstalled}
-                    <button disabled class="tt-btn tt-btn-md tt-btn-success">Ready</button>
+                    {#if isActive}
+                      <button disabled class="tt-btn tt-btn-md tt-btn-success">Active</button>
+                    {:else}
+                      <button onclick={() => selectAltModel(m)} class="tt-btn tt-btn-md">Use</button>
+                    {/if}
                   {:else}
                     <button onclick={() => startAltDownload(m)} class="tt-btn tt-btn-md">Download</button>
                   {/if}
@@ -1683,7 +1722,7 @@ Reply with only the single word, lowercase, no punctuation.
         <!-- Transcription Engine -->
         <div class="tt-section">
           <div class="subsection-hd"><span class="subsection-hd-title">Transcription Engine</span></div>
-          <div class="tt-row tt-row-field" data-tip="Which local transcription engine to use. Moonshine and Parakeet are wired but inactive — they activate automatically once the ort version conflict (TASK-58/59) is resolved.">
+          <div class="tt-row tt-row-field" data-tip="Which local transcription engine to use. Download a model in the Models tab after switching.">
             <div class="tt-seg tt-seg-wide">
               {#each [['whisper','Whisper'],['moonshine','Moonshine'],['parakeet','Parakeet']] as [v, lbl], i}
                 <button onclick={async () => { cfgBackend = v; saveSettings(); if (v !== 'whisper') { altModels = await commands.listModelsForFamily(v).catch(() => []); } }} class={seg(cfgBackend === v, i, 3)}>{lbl}</button>
