@@ -44,12 +44,19 @@
 
   async function recheckReadiness() {
     const r = await commands.checkReadiness();
+    readinessModelPresent = r.model_present;
     const unsupportedPlatform = r.platform === 'linux';
-    // Don't eject to onboarding while a model download is in flight — the
-    // temp file isn't a .bin yet so model_present() returns false, but the
-    // user is already handling it via the download progress UI.
     const downloading = Object.keys(downloadProgress).length > 0;
-    showOnboarding = (r.force_onboarding || (!r.ready && !downloading)) && !(unsupportedPlatform && unsupportedPlatformDismissed);
+
+    // Onboarding owns its own exit path (onComplete / onUnsupportedContinue).
+    // Focus events during a window drag were dismissing onboarding mid-download
+    // because `downloading === true` made `(!ready && !downloading)` false.
+    if (showOnboarding) return;
+
+    // Don't bounce back to onboarding while a model download is in flight in
+    // the main Models tab — model_present() is false until the file lands.
+    showOnboarding = (r.force_onboarding || (!r.ready && !downloading))
+      && !(unsupportedPlatform && unsupportedPlatformDismissed);
   }
 
   // Theme — override OS setting with user preference
@@ -85,7 +92,7 @@
   }
 
   function tryStartRecording() {
-    if (!cfgModel) {
+    if (!modelConfigured) {
       noModelPopupOpen = true;
       noModelPopupClosing = false;
       return;
@@ -129,6 +136,7 @@
 
   async function completeOnboarding() {
     await commands.clearForceOnboarding();
+    await syncAppStateFromBackend();
     showOnboarding = false;
     cfgLaunchLogin = await commands.getLaunchAtLogin();
     const res = await commands.prewarmModel();
@@ -336,6 +344,27 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgVadEnabled        = $state(true);
   let cfgBackend           = $state('parakeet'); // 'whisper' | 'moonshine' | 'parakeet'
   let cfgBackendVariant    = $state('');
+  let readinessModelPresent = $state(false);
+  let modelConfigured = $derived(
+    cfgBackend === 'whisper'
+      ? (!!cfgModel && cfgModels.includes(cfgModel))
+      : readinessModelPresent
+  );
+
+  async function syncAppStateFromBackend() {
+    const [cfg, scanned, r] = await Promise.all([
+      commands.getConfig(),
+      commands.scanModelsDir(),
+      commands.checkReadiness(),
+    ]);
+    cfgBackend = cfg.backend ?? 'parakeet';
+    cfgBackendVariant = cfg.backend_variant ?? '';
+    cfgModel = cfg.whisper?.model ?? '';
+    cfgModels = [...new Set([...(scanned ?? []), ...(cfg.whisper?.models ?? [])])].filter(Boolean);
+    if (cfgModels.length === 0 && cfgModel) cfgModels = [cfgModel];
+    readinessModelPresent = r.model_present;
+  }
+
   let volumeSaveTimer      = null;
   let showAdvanced         = $state(false);
   // Captured once from the Modes tab in Chaperone mode (two-column tall layout).
@@ -402,10 +431,7 @@ Reply with only the single word, lowercase, no punctuation.
     const targetH = Math.ceil(h * zoom) + WINDOW_SIZE_SLACK;
     if (targetW === lastWindowSize.w && targetH === lastWindowSize.h) return;
     lastWindowSize = { w: targetW, h: targetH };
-    const advW = Math.ceil(WINDOW_W * 2 * zoom);
-    getCurrentWindow().setSize(new LogicalSize(targetW, targetH)).then(() => {
-      commands.repinMainWindow(advW);
-    });
+    getCurrentWindow().setSize(new LogicalSize(targetW, targetH));
   });
 
   // ── Zoom ──────────────────────────────────────────────────────────────────
@@ -516,6 +542,7 @@ Reply with only the single word, lowercase, no punctuation.
       modelsSaveMsg = 'Download complete — engine ready.';
       cfgBackendVariant = m.id.replace(/^moonshine-|^parakeet-/, '');
       altModels = await commands.listModelsForFamily(cfgBackend).catch(() => []);
+      await syncAppStateFromBackend();
       setTimeout(() => { modelsSaveMsg = ''; }, 4000);
     } else {
       modelsSaveMsg = 'Download failed: ' + res.error;
@@ -532,6 +559,7 @@ Reply with only the single word, lowercase, no punctuation.
     if (res.status === 'ok') {
       cfgBackendVariant = variant;
       altModels = await commands.listModelsForFamily(cfgBackend).catch(() => []);
+      await syncAppStateFromBackend();
       modelsSaveMsg = 'Engine ready.';
       setTimeout(() => { modelsSaveMsg = ''; }, 3000);
     } else {
@@ -948,6 +976,7 @@ Reply with only the single word, lowercase, no punctuation.
         delete next[name];
         if (altKey) delete next[altKey];
         downloadProgress = next;
+        syncAppStateFromBackend();
       } else {
         const patch = { [name]: pct };
         if (altKey) patch[altKey] = pct;
@@ -1089,6 +1118,7 @@ Reply with only the single word, lowercase, no punctuation.
     // Initial check — replaces the default `showOnboarding = true` once the
     // backend confirms what's actually granted.
     recheckReadiness();
+    syncAppStateFromBackend();
 
     const onKeydown = (e) => { if (e.key === 'Shift') shiftHeld = true; };
     const onKeyup   = (e) => { if (e.key === 'Shift') shiftHeld = false; };
@@ -1200,7 +1230,7 @@ Reply with only the single word, lowercase, no punctuation.
 
   <!-- No-model banner — unmissable red bar above all tab content. Only
        hidden when a whisper model is selected. -->
-  {#if !cfgModel && !showOnboarding}
+  {#if !modelConfigured && !showOnboarding}
     <button
       onclick={() => switchTab('models')}
       class="tt-no-model-banner"

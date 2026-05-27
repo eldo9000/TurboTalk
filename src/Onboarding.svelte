@@ -208,7 +208,8 @@
     const backend = cfg.backend ?? selectedBackend;
     const nextModelReady = modelReadyForBackend(nextReadiness, backend);
     if (
-      permissionSatisfied(nextReadiness.accessibility)
+      !downloadingModel
+      && permissionSatisfied(nextReadiness.accessibility)
       && permissionSatisfied(nextReadiness.input_monitoring)
       && permissionSatisfied(nextReadiness.microphone)
       && nextModelReady
@@ -308,7 +309,7 @@
       } else {
         launchAtLogin = true;
         stopPolling();
-        onComplete?.();
+        if (!downloadingModel) onComplete?.();
       }
     } finally {
       launchPromptInFlight = false;
