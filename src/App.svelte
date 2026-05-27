@@ -337,7 +337,7 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgSoundOnCancel     = $state(false);
   let cfgSoundVolume       = $state(0.7);
   let cfgVadEnabled        = $state(true);
-  let cfgBackend           = $state('whisper'); // 'whisper' | 'moonshine' | 'parakeet'
+  let cfgBackend           = $state('parakeet'); // 'whisper' | 'moonshine' | 'parakeet'
   let cfgBackendVariant    = $state('');
   let volumeSaveTimer      = null;
   let showAdvanced         = $state(false);
@@ -451,13 +451,18 @@ Reply with only the single word, lowercase, no punctuation.
 
   // ── Models ────────────────────────────────────────────────────────────────
 
-  // The default starter model. Surfaced in its own "Recommended" section
-  // above the rest of the catalog so first-time users don't have to choose.
+  const ENGINE_OPTIONS = [
+    ['parakeet', 'Parakeet'],
+    ['whisper', 'Whisper'],
+    ['moonshine', 'Moonshine'],
+  ];
+
+  // Whisper starter model — recommended when the Whisper engine is selected.
   const RECOMMENDED_MODEL = {
     name: 'ggml-large-v3-turbo',
     tier: 'Recommended',
     size: '1.6 GB',
-    description: 'multilingual, balanced',
+    description: 'multilingual · best accuracy',
     url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin',
   };
 
@@ -486,6 +491,8 @@ Reply with only the single word, lowercase, no punctuation.
     cfgModel  = cfg.whisper?.model ?? '';
     cfgModels = cfg.whisper?.models ?? [];
     if (cfgModels.length === 0 && cfgModel) cfgModels = [cfgModel];
+    cfgBackend        = cfg.backend          ?? 'parakeet';
+    cfgBackendVariant = cfg.backend_variant  ?? '';
     modelsSaveMsg = '';
     // Load model descriptors for the active non-Whisper backend
     if (cfgBackend !== 'whisper') {
@@ -526,6 +533,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfg.backend_variant = variant;
     const res = await commands.saveConfig(cfg);
     if (res.status === 'ok') {
+      cfgBackendVariant = variant;
       altModels = await commands.listModelsForFamily(cfgBackend).catch(() => []);
       modelsSaveMsg = 'Engine ready.';
       setTimeout(() => { modelsSaveMsg = ''; }, 3000);
@@ -759,7 +767,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfgSoundOnCancel     = cfg.sound_on_cancel                  ?? false;
     cfgSoundVolume       = cfg.sound_volume                     ?? 0.7;
     cfgVadEnabled        = cfg.whisper?.vad_enabled             ?? true;
-    cfgBackend           = cfg.backend                          ?? 'whisper';
+    cfgBackend           = cfg.backend                          ?? 'parakeet';
     cfgBackendVariant    = cfg.backend_variant                   ?? '';
     cfgLaunchLogin       = launch;
     audioDevices         = devs;
@@ -1404,25 +1412,76 @@ Reply with only the single word, lowercase, no punctuation.
     {:else}
       <!-- Moonshine / Parakeet model catalog -->
       {@const engineLabel = cfgBackend === 'moonshine' ? 'Moonshine' : 'Parakeet'}
-      <div class="tt-section">
-        <div class="subsection-hd"><span class="subsection-hd-title">{engineLabel} Models</span></div>
-        {#if modelsSaveMsg}
+      {@const recAltModel = altModels.find(m => m.recommended)}
+      {@const altCatalog  = altModels.filter(m => !m.recommended)}
+
+      {#if modelsSaveMsg}
+        <div class="tt-section">
           <div class="tt-row"><p class="tt-desc" class:tt-warn={modelsSaveMsg.includes('failed')}>{modelsSaveMsg}</p></div>
-        {/if}
-        {#if altModels.length === 0}
+        </div>
+      {/if}
+
+      {#if altModels.length === 0}
+        <div class="tt-section">
+          <div class="subsection-hd"><span class="subsection-hd-title">{engineLabel} Models</span></div>
           <div class="tt-row"><p class="tt-desc">Loading…</p></div>
-        {:else}
-          {#each altModels as m}
+        </div>
+      {:else if recAltModel}
+        {@const m = recAltModel}
+        {@const isDownloading = m.id in downloadProgress || `moonshine-${m.id.replace(/^moonshine-/, '')}` in downloadProgress || `parakeet-${m.id.replace(/^parakeet-/, '')}` in downloadProgress}
+        {@const pct           = downloadProgress[m.id] ?? downloadProgress[`${cfgBackend}-${m.id.replace(/^moonshine-|^parakeet-/, '')}`] ?? 0}
+        {@const isInstalled   = m.installed}
+        {@const isActive      = altModelActive(m)}
+
+        <div class="tt-section">
+          <div class="subsection-hd"><span class="subsection-hd-title">Recommended</span></div>
+          <div class="tt-row tt-row-field">
+            <div class="tt-model-card group" class:tt-model-card-selected={isActive}>
+              <div class="tt-model-card-hd">
+                <span class="tt-model-star">★</span>
+                <span class="tt-model-star-lbl">Recommended</span>
+              </div>
+              <div class="tt-model-card-body">
+                <div class="tt-row-info">
+                  <div class="tt-model-name-row">
+                    <span class="tt-tier-name">{m.tier}</span>
+                    <span class="tt-model-name-pill">{m.label}</span>
+                  </div>
+                  <span class="tt-desc">{m.description}</span>
+                </div>
+                <span class="tt-model-size">{m.size}</span>
+                {#if isDownloading}
+                  <span class="tt-model-pct tt-model-pct-lg">{pct}%</span>
+                {:else if isInstalled}
+                  {#if isActive}
+                    <button disabled class="tt-btn tt-btn-md tt-btn-success">Active</button>
+                  {:else}
+                    <button onclick={() => selectAltModel(m)} class="tt-btn tt-btn-md tt-btn-accent">Use</button>
+                  {/if}
+                {:else}
+                  <button onclick={() => startAltDownload(m)} class="tt-btn tt-btn-md tt-btn-accent">Download</button>
+                {/if}
+              </div>
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      {#if altCatalog.length > 0}
+        <div class="tt-section">
+          <div class="subsection-hd"><span class="subsection-hd-title">Available</span></div>
+          {#each altCatalog as m}
             {@const isDownloading = m.id in downloadProgress || `moonshine-${m.id.replace(/^moonshine-/, '')}` in downloadProgress || `parakeet-${m.id.replace(/^parakeet-/, '')}` in downloadProgress}
             {@const pct           = downloadProgress[m.id] ?? downloadProgress[`${cfgBackend}-${m.id.replace(/^moonshine-|^parakeet-/, '')}`] ?? 0}
             {@const isInstalled   = m.installed}
             {@const isActive      = altModelActive(m)}
             <div class="tt-row tt-row-field">
-              <div class="tt-model-card group" class:tt-model-card-selected={isInstalled}>
+              <div class="tt-model-card group" class:tt-model-card-selected={isActive}>
                 <div class="tt-model-card-body">
                   <div class="tt-row-info">
                     <div class="tt-model-name-row">
-                      <span class="tt-tier-name">{m.label}</span>
+                      <span class="tt-tier-name">{m.tier}</span>
+                      <span class="tt-model-name-pill">{m.label}</span>
                     </div>
                     <span class="tt-desc">{m.description}</span>
                   </div>
@@ -1442,8 +1501,9 @@ Reply with only the single word, lowercase, no punctuation.
               </div>
             </div>
           {/each}
-        {/if}
-      </div>
+        </div>
+      {/if}
+
       <div class="tt-section tt-section-last">
         <div class="tt-row tt-row-col">
           <p class="tt-desc">Models are stored in <code>~/.config/librewin/turbotalk/models/{cfgBackend}/</code>. Switch engine in the Settings tab.</p>
@@ -1724,15 +1784,15 @@ Reply with only the single word, lowercase, no punctuation.
           <div class="subsection-hd"><span class="subsection-hd-title">Transcription Engine</span></div>
           <div class="tt-row tt-row-field" data-tip="Which local transcription engine to use. Download a model in the Models tab after switching.">
             <div class="tt-seg tt-seg-wide">
-              {#each [['whisper','Whisper'],['moonshine','Moonshine'],['parakeet','Parakeet']] as [v, lbl], i}
-                <button onclick={async () => { cfgBackend = v; saveSettings(); if (v !== 'whisper') { altModels = await commands.listModelsForFamily(v).catch(() => []); } }} class={seg(cfgBackend === v, i, 3)}>{lbl}</button>
+              {#each ENGINE_OPTIONS as [v, lbl], i}
+                <button onclick={async () => { cfgBackend = v; saveSettings(); if (v !== 'whisper') { altModels = await commands.listModelsForFamily(v).catch(() => []); } }} class={seg(cfgBackend === v, i, ENGINE_OPTIONS.length)}>{lbl}</button>
               {/each}
             </div>
           </div>
-          {#if cfgBackend === 'moonshine'}
-            <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">English-only · low hallucination on silence. Download a model in the Models tab to activate.</p>
-          {:else if cfgBackend === 'parakeet'}
-            <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">English-only · fastest, CTC architecture. Download a model in the Models tab to activate.</p>
+          {#if cfgBackend === 'parakeet'}
+            <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">Recommended default · English-only · fastest. Download the model in the Models tab.</p>
+          {:else if cfgBackend === 'moonshine'}
+            <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">English-only · low hallucination on silence. Download Moonshine Tiny in the Models tab.</p>
           {:else}
             <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">Multilingual · most accurate. Model managed in the Models tab.</p>
           {/if}
@@ -1974,7 +2034,7 @@ Reply with only the single word, lowercase, no punctuation.
           <span class="no-model-icon">⚠</span>
           <span class="no-model-title">NO MODEL INSTALLED</span>
           <p class="no-model-body">
-            TurboTalk needs a whisper model before it can transcribe. Download one to get started.
+            TurboTalk needs a transcription model before it can transcribe. Download one in the Models tab to get started.
           </p>
         </div>
         <div class="flex flex-col gap-2 pt-2">

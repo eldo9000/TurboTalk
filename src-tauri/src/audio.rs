@@ -334,6 +334,16 @@ fn resample_to_16k(buf: &[f32], src_rate: u32) -> anyhow::Result<Vec<f32>> {
 /// what whisper.cpp was trained on — boosting before transcription
 /// measurably reduces hallucinations on quiet audio (see
 /// https://arxiv.org/html/2505.12969v1 and faster-whisper#183).
+fn peak_normalize(samples: &mut [f32], target: f32) {
+    let peak = samples.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
+    if peak > 0.0 && peak < target {
+        let gain = target / peak;
+        for s in samples.iter_mut() {
+            *s = (*s * gain).clamp(-1.0, 1.0);
+        }
+    }
+}
+
 /// Build the `hound::WavSpec` for the on-disk handoff to whisper-cli. Pulled
 /// out so a unit test can pin the exact contract (16 kHz mono 16-bit PCM int)
 /// and so `stop()` doesn't grow another magic-number block.
@@ -346,14 +356,19 @@ fn whisper_wav_spec() -> hound::WavSpec {
     }
 }
 
-fn peak_normalize(samples: &mut [f32], target: f32) {
-    let peak = samples.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
-    if peak > 0.0 && peak < target {
-        let gain = target / peak;
-        for s in samples.iter_mut() {
-            *s = (*s * gain).clamp(-1.0, 1.0);
-        }
+/// On-disk WAV contract for all transcription backends: 16 kHz mono 16-bit PCM
+/// int. Matches `AudioCapture::write_wav` and `transcribe-rs` `read_wav_samples`.
+pub(crate) fn write_transcription_wav(
+    path: &std::path::Path,
+    samples: &[f32],
+) -> anyhow::Result<()> {
+    let mut writer = hound::WavWriter::create(path, whisper_wav_spec())?;
+    for &s in samples {
+        let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        writer.write_sample(v)?;
     }
+    writer.finalize()?;
+    Ok(())
 }
 
 impl AudioCapture {
@@ -1174,13 +1189,7 @@ impl AudioCapture {
         let temp_path: TempPath = named.into_temp_path();
         let path_buf = temp_path.to_path_buf();
 
-        let spec = whisper_wav_spec();
-        let mut writer = hound::WavWriter::create(&path_buf, spec)?;
-        for &s in samples.iter() {
-            let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-            writer.write_sample(v)?;
-        }
-        writer.finalize()?;
+        write_transcription_wav(&path_buf, samples)?;
         Ok(temp_path)
     }
 }

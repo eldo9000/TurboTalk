@@ -959,16 +959,17 @@ async fn download_parakeet_model(
     use tokio::io::AsyncWriteExt;
 
     // Validate variant name early so we fail fast.
-    if !matches!(variant.as_str(), "tdt-0.6b-v2") {
+    if !matches!(variant.as_str(), "tdt-0.6b-v2" | "tdt-0.6b-v3") {
         return Err(format!(
-            "unknown Parakeet variant {:?} — expected \"tdt-0.6b-v2\"",
+            "unknown Parakeet variant {:?} — expected \"tdt-0.6b-v2\" or \"tdt-0.6b-v3\"",
             variant
         ));
     }
 
-    // HuggingFace repo for the ONNX export of Parakeet TDT 0.6B v2.
+    // HuggingFace repo for the ONNX export of Parakeet TDT 0.6B.
     let repo = match variant.as_str() {
         "tdt-0.6b-v2" => "istupakov/parakeet-tdt-0.6b-v2-onnx",
+        "tdt-0.6b-v3" => "istupakov/parakeet-tdt-0.6b-v3-onnx",
         _ => unreachable!(),
     };
 
@@ -1171,6 +1172,9 @@ async fn download_parakeet_model(
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct ModelDescriptor {
     pub id: String,
+    /// Human tier label (e.g. "Recommended", "Large") — matches Whisper Models UI.
+    pub tier: String,
+    /// Technical model name shown in the monospace pill (e.g. `moonshine-tiny`).
     pub label: String,
     pub description: String,
     pub size: String,
@@ -1178,6 +1182,8 @@ pub struct ModelDescriptor {
     pub path_hint: String,
     /// True when the required ONNX bundle files are present on disk.
     pub installed: bool,
+    /// True for the recommended starter model within this backend family.
+    pub recommended: bool,
 }
 
 fn moonshine_installed(variant: &str) -> bool {
@@ -1198,7 +1204,7 @@ fn parakeet_installed(variant: &str) -> bool {
 ///   `download_model` accepts). The UI should show installed vs. not-installed
 ///   state by cross-referencing with `scan_models_dir`.
 /// - Moonshine: returns "tiny" and "base" ONNX variants from the onnx-community repo.
-/// - Parakeet: returns the single "tdt-0.6b-v2" variant.
+/// - Parakeet: returns "tdt-0.6b-v2" (English) and "tdt-0.6b-v3" (multilingual).
 ///
 /// `family` is a lowercase string: "whisper" | "moonshine" | "parakeet".
 /// Unknown values are treated as "whisper".
@@ -1209,62 +1215,85 @@ fn list_models_for_family(family: String) -> Vec<ModelDescriptor> {
         "moonshine" => vec![
             ModelDescriptor {
                 id: "moonshine-tiny".to_string(),
-                label: "Moonshine Tiny".to_string(),
-                description: "English-only · low hallucination on silence · fastest".to_string(),
-                size: "~110 MB".to_string(),
+                tier: "Recommended".to_string(),
+                label: "moonshine-tiny".to_string(),
+                description: "english-only · fastest · low silence hallucination".to_string(),
+                size: "110 MB".to_string(),
                 download_url: "https://huggingface.co/onnx-community/moonshine-tiny-ONNX".to_string(),
                 path_hint: ".config/librewin/turbotalk/models/moonshine/tiny/".to_string(),
                 installed: moonshine_installed("tiny"),
+                recommended: true,
             },
             ModelDescriptor {
                 id: "moonshine-base".to_string(),
-                label: "Moonshine Base".to_string(),
-                description: "English-only · low hallucination on silence · more accurate than tiny".to_string(),
-                size: "~250 MB".to_string(),
+                tier: "Large".to_string(),
+                label: "moonshine-base".to_string(),
+                description: "english-only · more accurate".to_string(),
+                size: "250 MB".to_string(),
                 download_url: "https://huggingface.co/onnx-community/moonshine-base-ONNX".to_string(),
                 path_hint: ".config/librewin/turbotalk/models/moonshine/base/".to_string(),
                 installed: moonshine_installed("base"),
+                recommended: false,
             },
         ],
         "parakeet" => vec![
             ModelDescriptor {
                 id: "parakeet-tdt-0.6b-v2".to_string(),
-                label: "Parakeet TDT 0.6B v2".to_string(),
-                description: "English-only · fastest · NVIDIA NeMo".to_string(),
-                size: "~660 MB (int8)".to_string(),
+                tier: "Recommended".to_string(),
+                label: "parakeet-en-v2".to_string(),
+                description: "english-only · fastest".to_string(),
+                size: "660 MB".to_string(),
                 download_url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx".to_string(),
                 path_hint: ".config/librewin/turbotalk/models/parakeet/tdt-0.6b-v2/".to_string(),
                 installed: parakeet_installed("tdt-0.6b-v2"),
+                recommended: true,
+            },
+            ModelDescriptor {
+                id: "parakeet-tdt-0.6b-v3".to_string(),
+                tier: "Multilingual".to_string(),
+                label: "parakeet-multi-v3".to_string(),
+                description: "multilingual · 25 european languages".to_string(),
+                size: "660 MB".to_string(),
+                download_url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx".to_string(),
+                path_hint: ".config/librewin/turbotalk/models/parakeet/tdt-0.6b-v3/".to_string(),
+                installed: parakeet_installed("tdt-0.6b-v3"),
+                recommended: false,
             },
         ],
         // "whisper" or anything else
         _ => vec![
             ModelDescriptor {
                 id: "ggml-large-v3-turbo".to_string(),
-                label: "Large v3 Turbo".to_string(),
-                description: "Recommended · best accuracy · multilingual".to_string(),
+                tier: "Recommended".to_string(),
+                label: "ggml-large-v3-turbo".to_string(),
+                description: "multilingual · best accuracy".to_string(),
                 size: "1.6 GB".to_string(),
                 download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin".to_string(),
                 path_hint: String::new(),
                 installed: false,
+                recommended: true,
             },
             ModelDescriptor {
                 id: "ggml-large-v3-turbo-q5_0".to_string(),
-                label: "Large v3 Turbo (q5_0)".to_string(),
-                description: "Low RAM · slightly reduced accuracy".to_string(),
+                tier: "Small".to_string(),
+                label: "ggml-large-v3-turbo-q5_0".to_string(),
+                description: "low RAM · english only".to_string(),
                 size: "574 MB".to_string(),
                 download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin".to_string(),
                 path_hint: String::new(),
                 installed: false,
+                recommended: false,
             },
             ModelDescriptor {
                 id: "ggml-large-v3".to_string(),
-                label: "Large v3".to_string(),
-                description: "High accuracy · high RAM · slow".to_string(),
+                tier: "Large".to_string(),
+                label: "ggml-large-v3".to_string(),
+                description: "high accuracy · high RAM · slow".to_string(),
                 size: "3.1 GB".to_string(),
                 download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin".to_string(),
                 path_hint: String::new(),
                 installed: false,
+                recommended: false,
             },
         ],
     }

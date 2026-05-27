@@ -47,41 +47,49 @@
   let fixAxError         = $state('');
 
   // Backend family selection — shown in the model step before picking a model.
-  let selectedBackend = $state('whisper'); // 'whisper' | 'moonshine' | 'parakeet'
+  let selectedBackend = $state('parakeet'); // 'whisper' | 'moonshine' | 'parakeet'
+
+  const ENGINE_OPTIONS = [
+    ['parakeet', 'Parakeet'],
+    ['whisper', 'Whisper'],
+    ['moonshine', 'Moonshine'],
+  ];
 
   const BACKEND_EXPLAINERS = {
-    whisper:   'Multilingual · most accurate. Runs via whisper-server — the default.',
-    moonshine: 'English-only · low hallucination on silence · fast ONNX inference.',
-    parakeet:  'English-only · fastest · NVIDIA NeMo CTC architecture.',
+    parakeet:  'English-only · fastest · recommended default.',
+    whisper:   'Multilingual · most accurate.',
+    moonshine: 'English-only · low hallucination on silence.',
   };
 
-  const RECOMMENDED = {
+  const RECOMMENDED_WHISPER = {
     id: 'ggml-large-v3-turbo',
     label: 'Large v3 Turbo',
     size: '1.6 GB',
-    description: 'Recommended · best accuracy · multilingual',
+    description: 'Best accuracy · multilingual',
+    recommended: true,
   };
 
   const ALTERNATES = [
     { id: 'ggml-large-v3-turbo-q5_0', label: 'Large v3 Turbo (q5_0)',
-      size: '574 MB', description: 'Low RAM · slightly reduced accuracy' },
+      size: '574 MB', description: 'Low RAM · slightly reduced accuracy', recommended: false },
     { id: 'ggml-large-v3', label: 'Large v3',
-      size: '3.1 GB', description: 'High accuracy · high RAM · slow' },
+      size: '3.1 GB', description: 'High accuracy · high RAM · slow', recommended: false },
   ];
 
-  const ALL_MODELS = [RECOMMENDED, ...ALTERNATES];
+  const ALL_MODELS = [RECOMMENDED_WHISPER, ...ALTERNATES];
 
-  // Models to display for non-Whisper families (stubs — shown for awareness).
   const MOONSHINE_MODELS = [
-    { id: 'moonshine-tiny', label: 'Moonshine Tiny', size: '~65 MB',
-      description: 'English-only · fastest Moonshine variant' },
-    { id: 'moonshine-base', label: 'Moonshine Base', size: '~250 MB',
-      description: 'English-only · more accurate than Tiny' },
+    { id: 'moonshine-tiny', tier: 'Recommended', name: 'moonshine-tiny', size: '110 MB',
+      description: 'english-only · fastest · low silence hallucination', recommended: true },
+    { id: 'moonshine-base', tier: 'Large', name: 'moonshine-base', size: '250 MB',
+      description: 'english-only · more accurate', recommended: false },
   ];
 
   const PARAKEET_MODELS = [
-    { id: 'parakeet-tdt-0.6b-v2', label: 'Parakeet TDT 0.6B v2', size: '~660 MB',
-      description: 'English-only · NVIDIA NeMo · fastest' },
+    { id: 'parakeet-tdt-0.6b-v2', tier: 'Recommended', name: 'parakeet-en-v2', size: '660 MB',
+      description: 'english-only · fastest', recommended: true },
+    { id: 'parakeet-tdt-0.6b-v3', tier: 'Multilingual', name: 'parakeet-multi-v3', size: '660 MB',
+      description: 'multilingual · 25 european languages', recommended: false },
   ];
   const WINDOW_W = 440;
   const WINDOW_SIZE_SLACK = 18;
@@ -622,13 +630,13 @@
             <div class="flex flex-col gap-0.5">
               <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Choose an engine and download a model</h2>
               <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-                All engines run fully locally on your Mac. Whisper is recommended for most users.
+                Parakeet is recommended for most English dictation. All engines run fully locally on your Mac.
               </p>
             </div>
             {#if stepStates.model === 'active' || stepStates.model === 'done'}
               <!-- Backend family picker -->
               <div class="flex gap-1.5">
-                {#each [['whisper','Whisper'],['moonshine','Moonshine'],['parakeet','Parakeet']] as [v, lbl]}
+                {#each ENGINE_OPTIONS as [v, lbl]}
                   <button
                     onclick={async () => { selectedBackend = v; await saveBackendToConfig(v); }}
                     class="px-2.5 py-1 rounded-md border text-[11px] font-medium transition-colors
@@ -653,14 +661,14 @@
                 </div>
               {:else if selectedBackend === 'whisper'}
                 <!-- Whisper model list — downloadable and selectable -->
-                {#each ALL_MODELS as model, idx (model.id)}
+                {#each ALL_MODELS as model (model.id)}
                   {@const path = installedPath(model.id)}
                   {@const isSelected = path && path === cfgModel}
                   <div class="flex items-start justify-between gap-2 p-2 rounded-md border border-[var(--border,#2a2a2a)]">
                     <div class="flex flex-col gap-0.5 min-w-0">
                       <div class="flex items-center gap-2 min-w-0">
                         <span class="text-[12px] font-medium text-[var(--text-primary)] truncate">{model.label}</span>
-                        {#if idx === 0}
+                        {#if model.recommended}
                           <span class="shrink-0 text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-400 text-black">Recommended</span>
                         {/if}
                       </div>
@@ -687,7 +695,13 @@
                 {#each MOONSHINE_MODELS as model (model.id)}
                   <div class="flex items-start justify-between gap-2 p-2 rounded-md border border-[var(--border,#2a2a2a)]">
                     <div class="flex flex-col gap-0.5 min-w-0">
-                      <span class="text-[12px] font-medium text-[var(--text-primary)] truncate">{model.label}</span>
+                      <div class="flex items-center gap-2 min-w-0 flex-wrap">
+                        <span class="text-[12px] font-medium text-[var(--text-primary)]">{model.tier}</span>
+                        <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-[var(--border,#3a3a3a)] text-[var(--text-secondary)]">{model.name}</span>
+                        {#if model.recommended}
+                          <span class="shrink-0 text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-400 text-black">Recommended</span>
+                        {/if}
+                      </div>
                       <span class="text-[11px] text-[var(--text-secondary)] leading-snug">{model.description}</span>
                     </div>
                     <div class="shrink-0 flex items-center gap-2">
@@ -709,7 +723,13 @@
                 {#each PARAKEET_MODELS as model (model.id)}
                   <div class="flex items-start justify-between gap-2 p-2 rounded-md border border-[var(--border,#2a2a2a)]">
                     <div class="flex flex-col gap-0.5 min-w-0">
-                      <span class="text-[12px] font-medium text-[var(--text-primary)] truncate">{model.label}</span>
+                      <div class="flex items-center gap-2 min-w-0 flex-wrap">
+                        <span class="text-[12px] font-medium text-[var(--text-primary)]">{model.tier}</span>
+                        <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-[var(--border,#3a3a3a)] text-[var(--text-secondary)]">{model.name}</span>
+                        {#if model.recommended}
+                          <span class="shrink-0 text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-400 text-black">Recommended</span>
+                        {/if}
+                      </div>
                       <span class="text-[11px] text-[var(--text-secondary)] leading-snug">{model.description}</span>
                     </div>
                     <div class="shrink-0 flex items-center gap-2">

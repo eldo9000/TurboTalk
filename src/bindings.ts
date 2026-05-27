@@ -19,7 +19,7 @@ export const commands = {
 	 *    `download_model` accepts). The UI should show installed vs. not-installed
 	 *    state by cross-referencing with `scan_models_dir`.
 	 *  - Moonshine: returns "tiny" and "base" ONNX variants from the onnx-community repo.
-	 *  - Parakeet: returns the single "tdt-0.6b-v2" variant.
+	 *  - Parakeet: returns "tdt-0.6b-v2" (English) and "tdt-0.6b-v3" (multilingual).
 	 * 
 	 *  `family` is a lowercase string: "whisper" | "moonshine" | "parakeet".
 	 *  Unknown values are treated as "whisper".
@@ -302,7 +302,7 @@ export type Config = {
 	sound_on_cancel?: boolean,
 	// Volume for sound cues, 0.0–1.0.
 	sound_volume?: number,
-	// Which transcription backend family to use. Default: Whisper.
+	// Which transcription backend family to use. Default: Parakeet.
 	backend?: BackendFamily,
 	/**
 	 *  Active variant within the chosen backend family — e.g. "tiny"/"base"
@@ -388,6 +388,9 @@ export type HotkeyConfig = {
  */
 export type ModelDescriptor = {
 	id: string,
+	// Human tier label (e.g. "Recommended", "Large") — matches Whisper Models UI.
+	tier: string,
+	// Technical model name shown in the monospace pill (e.g. `moonshine-tiny`).
 	label: string,
 	description: string,
 	size: string,
@@ -395,6 +398,8 @@ export type ModelDescriptor = {
 	path_hint: string,
 	// True when the required ONNX bundle files are present on disk.
 	installed: boolean,
+	// True for the recommended starter model within this backend family.
+	recommended: boolean,
 };
 
 export type PermissionStatus = "granted" | "denied" | "not_determined" | "unsupported";

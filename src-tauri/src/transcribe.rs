@@ -1107,23 +1107,14 @@ pub fn run_raw(wav: &Path) -> anyhow::Result<TranscriptOutcome> {
 
 // ── Segment transcription queue (TASK-54B) ───────────────────────────────────
 
-/// Write a slice of 16 kHz mono f32 samples to a temporary WAV file.
+/// Write a slice of 16 kHz mono f32 samples to a temporary WAV file using the
+/// same 16-bit PCM contract as the tail WAV (`audio::write_transcription_wav`).
 fn write_segment_wav(
     samples: &[f32],
     seg_index: usize,
 ) -> anyhow::Result<std::path::PathBuf> {
     let path = std::env::temp_dir().join(format!("turbotalk-seg-{}.wav", seg_index));
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: 16_000,
-        bits_per_sample: 32,
-        sample_format: hound::SampleFormat::Float,
-    };
-    let mut writer = hound::WavWriter::create(&path, spec)?;
-    for &s in samples {
-        writer.write_sample(s)?;
-    }
-    writer.finalize()?;
+    crate::audio::write_transcription_wav(&path, samples)?;
     Ok(path)
 }
 
@@ -1445,7 +1436,7 @@ mod tests {
     }
 
     /// write_segment_wav round-trips: the produced WAV is readable by hound
-    /// and contains the same number of samples as the input slice.
+    /// and transcribe-rs (16 kHz mono 16-bit PCM — same as tail WAV).
     #[test]
     fn write_segment_wav_round_trips() {
         let samples: Vec<f32> = (0..1600).map(|i| (i as f32 / 1600.0) * 0.5).collect();
@@ -1454,8 +1445,13 @@ mod tests {
         let spec = reader.spec();
         assert_eq!(spec.channels, 1);
         assert_eq!(spec.sample_rate, 16_000);
-        assert_eq!(spec.bits_per_sample, 32);
+        assert_eq!(spec.bits_per_sample, 16);
+        assert!(matches!(spec.sample_format, hound::SampleFormat::Int));
         assert_eq!(reader.duration(), samples.len() as u32);
+        #[cfg(any(feature = "moonshine", feature = "parakeet"))]
+        {
+            transcribe_rs::audio::read_wav_samples(&path).expect("transcribe-rs read");
+        }
         let _ = std::fs::remove_file(&path);
     }
 

@@ -46,9 +46,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use transcribe_rs::onnx::parakeet::ParakeetModel;
+use transcribe_rs::onnx::parakeet::{ParakeetModel, ParakeetParams};
 use transcribe_rs::onnx::Quantization;
-use transcribe_rs::{SpeechModel, TranscribeOptions};
 
 use crate::transcribe::{TranscriptOutcome, TranscriptionBackend};
 
@@ -60,23 +59,26 @@ use crate::transcribe::{TranscriptOutcome, TranscriptionBackend};
 /// Parakeet model variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParakeetVariant {
-    /// Parakeet TDT 0.6B v2 — NVIDIA's flagship English ASR model.
-    /// Extremely high throughput, CTC/TDT architecture.
-    Tdt06b,
+    /// Parakeet TDT 0.6B v2 — English-only, fastest path for monolingual dictation.
+    Tdt06bV2,
+    /// Parakeet TDT 0.6B v3 — multilingual (25 European languages), same ONNX layout as v2.
+    Tdt06bV3,
 }
 
 impl ParakeetVariant {
     /// Directory-safe name for the variant (used as storage subdirectory).
     pub fn name(self) -> &'static str {
         match self {
-            ParakeetVariant::Tdt06b => "tdt-0.6b-v2",
+            ParakeetVariant::Tdt06bV2 => "tdt-0.6b-v2",
+            ParakeetVariant::Tdt06bV3 => "tdt-0.6b-v3",
         }
     }
 
     /// Human-readable display name.
     pub fn display_name(self) -> &'static str {
         match self {
-            ParakeetVariant::Tdt06b => "Parakeet TDT 0.6B v2",
+            ParakeetVariant::Tdt06bV2 => "Parakeet TDT 0.6B v2",
+            ParakeetVariant::Tdt06bV3 => "Parakeet TDT 0.6B v3",
         }
     }
 }
@@ -85,7 +87,8 @@ impl ParakeetVariant {
 /// Returns `None` for unrecognised strings.
 pub fn parse_variant(s: &str) -> Option<ParakeetVariant> {
     match s.to_lowercase().as_str() {
-        "tdt-0.6b-v2" | "tdt06b" | "tdt_0.6b_v2" => Some(ParakeetVariant::Tdt06b),
+        "tdt-0.6b-v2" | "tdt06b" | "tdt_0.6b_v2" => Some(ParakeetVariant::Tdt06bV2),
+        "tdt-0.6b-v3" | "tdt06b_v3" | "tdt_0.6b_v3" => Some(ParakeetVariant::Tdt06bV3),
         _ => None,
     }
 }
@@ -172,6 +175,29 @@ pub fn validate_parakeet_model_dir(dir: &Path) -> anyhow::Result<PathBuf> {
 
 // ── ParakeetBackend ───────────────────────────────────────────────────────────
 
+/// Peak target for Parakeet input — matches `audio.rs` NORMALIZE_PEAK.
+const PARAKEET_TARGET_PEAK: f32 = 0.89;
+
+/// Read a 16 kHz mono WAV and re-boost quiet peaks before inference.
+fn prepare_parakeet_samples(wav: &Path) -> anyhow::Result<Vec<f32>> {
+    let mut samples = transcribe_rs::audio::read_wav_samples(wav)
+        .map_err(|e| anyhow::anyhow!("read wav {}: {e}", wav.display()))?;
+    let peak = samples.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
+    if peak > 0.0 && peak < PARAKEET_TARGET_PEAK {
+        let gain = PARAKEET_TARGET_PEAK / peak;
+        for s in &mut samples {
+            *s *= gain;
+        }
+    }
+    tracing::info!(
+        "[parakeet] input {} samples ({:.2}s) peak={:.4}",
+        samples.len(),
+        samples.len() as f32 / 16_000.0,
+        peak
+    );
+    Ok(samples)
+}
+
 /// `TranscriptionBackend` backed by Parakeet TDT ONNX via `transcribe-rs`.
 ///
 /// # Architecture
@@ -214,7 +240,7 @@ impl ParakeetBackend {
     ) -> anyhow::Result<Self> {
         let variant = parse_variant(variant_str).ok_or_else(|| {
             anyhow::anyhow!(
-                "unknown Parakeet variant {:?} — expected \"tdt-0.6b-v2\"",
+                "unknown Parakeet variant {:?} — expected \"tdt-0.6b-v2\" or \"tdt-0.6b-v3\"",
                 variant_str
             )
         })?;
@@ -274,8 +300,11 @@ impl TranscriptionBackend for ParakeetBackend {
 
         let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
 
+        let samples = prepare_parakeet_samples(wav)?;
+        let params = ParakeetParams::default();
+
         let result = model
-            .transcribe_file(wav, &TranscribeOptions::default())
+            .transcribe_with(&samples, &params)
             .map_err(|e| anyhow::anyhow!("Parakeet transcription failed: {e}"))?;
 
         // Parakeet CTC output is typically lowercase/unpunctuated — pass through
@@ -369,8 +398,9 @@ mod tests {
     #[test]
     fn parse_variant_accepts_known_aliases() {
         assert!(parse_variant("tdt-0.6b-v2").is_some());
+        assert!(parse_variant("tdt-0.6b-v3").is_some());
         assert!(parse_variant("tdt06b").is_some());
-        assert!(parse_variant("TDT-0.6B-V2").is_some()); // case-insensitive
+        assert!(parse_variant("TDT-0.6B-V3").is_some()); // case-insensitive
     }
 
     /// parse_variant rejects unknown strings.

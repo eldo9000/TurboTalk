@@ -71,7 +71,7 @@ pub struct Config {
     /// Volume for sound cues, 0.0–1.0.
     #[serde(default = "default_sound_volume")]
     pub sound_volume: f32,
-    /// Which transcription backend family to use. Default: Whisper.
+    /// Which transcription backend family to use. Default: Parakeet.
     #[serde(default)]
     pub backend: BackendFamily,
     /// Active variant within the chosen backend family — e.g. "tiny"/"base"
@@ -118,9 +118,9 @@ pub struct WhisperConfig {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum BackendFamily {
-    #[default]
     Whisper,
     Moonshine,
+    #[default]
     Parakeet,
 }
 
@@ -130,7 +130,7 @@ pub fn resolve_backend_variant(cfg: &Config) -> String {
         return cfg.backend_variant.clone();
     }
     match cfg.backend {
-        BackendFamily::Moonshine => "base".into(),
+        BackendFamily::Moonshine => "tiny".into(),
         BackendFamily::Parakeet => "tdt-0.6b-v2".into(),
         BackendFamily::Whisper => String::new(),
     }

@@ -1,9 +1,9 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-05-26
-**Current state:** Moonshine backend proven end-to-end on macOS with FP32 ONNX models. User confirmed dictation works after re-downloading Moonshine Tiny FP32 (~110 MB). Int8 bundle decodes empty on real mic audio; download path now fetches FP32 only and treats int8-only installs as not installed. Ort conflict resolved (direct `ort rc.12` in `vad.rs`, `moonshine`+`parakeet` features on by default). Also landed: worker cache fix for alt backends, Moonshine audio prep, Parakeet/Moonshine HF download URL fixes, `backend_variant` persistence, Models/Onboarding UX for alt backends. `cargo test` 105/105 green with moonshine+parakeet features.
+**Current state:** All three transcription backends proven end-to-end on macOS: Whisper (default, multilingual), Moonshine (FP32 ONNX, English), Parakeet (int8 ONNX, English, fastest). User confirmed Moonshine Tiny FP32 and Parakeet TDT 0.6B v2 dictation both paste into focused app. Alt-backend sprint complete: ort conflict resolved, worker cache fix, HF download URLs, `backend_variant` persistence, Models/Onboarding UX. `cargo test` 105/105 green with moonshine+parakeet features.
 
-**Next action:** Optional — user-test Parakeet end-to-end (download + dictation). Whisper remains default/recommended for multilingual. No urgent blockers on macOS dictation path.
+**Next action:** None pinned. Pick backend by tradeoff: Whisper = multilingual/accurate, Moonshine = low silence hallucination, Parakeet = fastest English-only. Uncommitted local change: `parakeet.rs` quiet-audio prep (used in the test that worked).
 
 Previous state: TASK-58 landed (partial) — `MoonshineBackend` struct, `TranscriptionBackend` impl, and all path/download infrastructure are in place. `build_backend()` reads `TT_BACKEND` env var and routes to Moonshine when set. `download_moonshine_model` tauri command exists with the progress-event pattern. `libonnxruntime.dylib` placeholder committed; bundle.resources wired in `tauri.macos.conf.json`. 97/97 tests green, clippy clean.
 
