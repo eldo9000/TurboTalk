@@ -419,6 +419,8 @@ export type Readiness = {
 	input_monitoring: PermissionStatus,
 	microphone: PermissionStatus,
 	model_present: boolean,
+	// Host OS id (`macos`, `windows`, `linux`, …) for platform-aware onboarding UI.
+	platform: string,
 	/**
 	 *  True iff all four gates pass — frontend uses this as the
 	 *  "show onboarding vs. show main UI" switch.

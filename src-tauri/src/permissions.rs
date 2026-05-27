@@ -35,6 +35,8 @@ pub struct Readiness {
     pub input_monitoring: PermissionStatus,
     pub microphone: PermissionStatus,
     pub model_present: bool,
+    /// Host OS id (`macos`, `windows`, `linux`, …) for platform-aware onboarding UI.
+    pub platform: String,
     /// True iff all four gates pass — frontend uses this as the
     /// "show onboarding vs. show main UI" switch.
     pub ready: bool,
@@ -272,6 +274,7 @@ pub fn check_readiness() -> Readiness {
         input_monitoring,
         microphone,
         model_present,
+        platform: std::env::consts::OS.to_string(),
         ready,
         force_onboarding,
     }

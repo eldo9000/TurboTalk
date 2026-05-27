@@ -177,6 +177,17 @@
     }
   }
 
+  function permissionSatisfied(status) {
+    return status === 'granted' || status === 'unsupported';
+  }
+
+  function modelReadyForBackend(r, backend) {
+    if (backend === 'whisper') {
+      return !!cfgModel && cfgModels.includes(cfgModel);
+    }
+    return r?.model_present ?? false;
+  }
+
   async function refresh() {
     const [nextReadiness, nextLaunchAtLogin, cfg, scannedModels] = await Promise.all([
       commands.checkReadiness(),
@@ -186,7 +197,6 @@
     ]);
     const nextCfgModel = cfg.whisper?.model ?? '';
     const nextCfgModels = uniqueModels(scannedModels ?? []);
-    const nextSelectedModelReady = !!nextCfgModel && nextCfgModels.includes(nextCfgModel);
     readiness = nextReadiness;
     launchAtLogin = nextLaunchAtLogin;
     cfgModel = nextCfgModel;
@@ -195,11 +205,13 @@
     if (cfg.backend && cfg.backend !== selectedBackend) {
       selectedBackend = cfg.backend;
     }
+    const backend = cfg.backend ?? selectedBackend;
+    const nextModelReady = modelReadyForBackend(nextReadiness, backend);
     if (
-      nextReadiness.accessibility === 'granted'
-      && nextReadiness.input_monitoring === 'granted'
-      && nextReadiness.microphone === 'granted'
-      && nextSelectedModelReady
+      permissionSatisfied(nextReadiness.accessibility)
+      && permissionSatisfied(nextReadiness.input_monitoring)
+      && permissionSatisfied(nextReadiness.microphone)
+      && nextModelReady
       && nextLaunchAtLogin
       && !nextReadiness.force_onboarding
     ) {
@@ -400,9 +412,9 @@
 
   let stepStates = $derived.by(() => {
     if (!readiness) return { accessibility: 'active', input_monitoring: 'pending', microphone: 'pending', model: 'pending', launch: 'pending' };
-    const a = readiness.accessibility === 'granted';
-    const i = readiness.input_monitoring === 'granted';
-    const m = readiness.microphone    === 'granted';
+    const a = permissionSatisfied(readiness.accessibility);
+    const i = permissionSatisfied(readiness.input_monitoring);
+    const m = permissionSatisfied(readiness.microphone);
     const p = selectedModelReady;
     return {
       input_monitoring: i ? 'done' : 'active',
@@ -413,11 +425,9 @@
     };
   });
 
-  let unsupportedPlatform = $derived(
-    readiness?.accessibility === 'unsupported'
-      || readiness?.input_monitoring === 'unsupported'
-      || readiness?.microphone === 'unsupported'
-  );
+  // Linux beta is not fully supported (Wayland hotkey gap). Windows returns
+  // `unsupported` for macOS-only TCC checks — that is not a platform block.
+  let unsupportedPlatform = $derived(readiness?.platform === 'linux');
 
   function stepClass(state) {
     if (state === 'active') return 'border-[var(--accent)]/40 bg-[var(--accent)]/5';
@@ -446,8 +456,10 @@
       <h1 class="text-[18px] font-semibold leading-tight text-[var(--text-primary)]">Welcome to Turbo Talk</h1>
       <p class="text-[12px] text-[var(--text-secondary)] leading-relaxed">
         {unsupportedPlatform
-          ? 'This beta is macOS-only for recording, global hotkeys, and paste.'
-          : 'Finish setup before you can start dictating.'}
+          ? 'This beta is not fully supported on Linux yet.'
+          : readiness?.platform === 'windows'
+            ? 'Download a Whisper model to start dictating on Windows.'
+            : 'Finish setup before you can start dictating.'}
       </p>
     </div>
 
@@ -457,9 +469,8 @@
           <div class="flex flex-col gap-1">
             <h2 class="text-[13px] font-medium leading-tight text-yellow-700 dark:text-yellow-200">Unsupported platform</h2>
             <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-              Turbo Talk's beta dictation loop currently depends on macOS Accessibility,
-              Input Monitoring, microphone permission, and paste APIs. Those controls are unavailable here,
-              so recording and paste will not work on this platform.
+              Turbo Talk's Linux beta does not yet support global push-to-talk on all
+              desktop sessions. Use macOS or Windows for the full dictation loop.
             </p>
           </div>
           <button onclick={() => onUnsupportedContinue?.()}
@@ -630,7 +641,7 @@
             <div class="flex flex-col gap-0.5">
               <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Choose an engine and download a model</h2>
               <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-                Parakeet is recommended for most English dictation. All engines run fully locally on your Mac.
+                Parakeet is recommended for most English dictation. All engines run fully locally on your device.
               </p>
             </div>
             {#if stepStates.model === 'active' || stepStates.model === 'done'}

@@ -44,10 +44,7 @@
 
   async function recheckReadiness() {
     const r = await commands.checkReadiness();
-    const unsupportedPlatform =
-      r.accessibility === 'unsupported'
-        || r.input_monitoring === 'unsupported'
-        || r.microphone === 'unsupported';
+    const unsupportedPlatform = r.platform === 'linux';
     // Don't eject to onboarding while a model download is in flight — the
     // temp file isn't a .bin yet so model_present() returns false, but the
     // user is already handling it via the download progress UI.
