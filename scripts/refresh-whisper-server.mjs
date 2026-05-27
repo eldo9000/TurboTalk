@@ -14,6 +14,7 @@ import { execSync } from 'node:child_process';
 import { copyFileSync, existsSync, statSync, unlinkSync, chmodSync } from 'node:fs';
 import { resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertNoCoreMLLinkage } from './lib/dylib-guard.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const binariesDir = resolve(repoRoot, 'src-tauri/binaries');
@@ -159,6 +160,17 @@ if (statSync(destinations.bin).isSymbolicLink?.() ?? false) {
 // Homebrew signature; without this the binary may be blocked on first run.
 run(`codesign -f -s - "${destinations.bin}"`);
 console.log('[refresh-whisper-server] ad-hoc signature applied');
+
+try {
+  assertNoCoreMLLinkage(destinations.bin, 'whisper-server');
+  assertNoCoreMLLinkage(destinations.libWhisper, 'libwhisper.1.dylib');
+  console.log('[refresh-whisper-server] CoreML linkage check passed (Metal-only sidecar)');
+} catch (err) {
+  console.error(err.message);
+  console.error('[refresh-whisper-server] Homebrew whisper-cpp must be built without CoreML for the default sidecar.');
+  console.error('[refresh-whisper-server] See docs/reference/COREML-BLOCKER.md');
+  process.exit(1);
+}
 
 console.log('\n[refresh-whisper-server] verification passed');
 console.log('[refresh-whisper-server] final links:');

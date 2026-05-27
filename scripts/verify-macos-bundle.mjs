@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertNoCoreMLLinkage } from './lib/dylib-guard.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const appPath = process.argv[2]
@@ -37,11 +38,13 @@ function requireFile(rel) {
 const server = requireFile('Contents/MacOS/whisper-server');
 requireFile('Contents/MacOS/whisper-cli');
 requireFile('Contents/MacOS/turbotalk');
-requireFile('Contents/Resources/libwhisper.1.dylib');
 requireFile('Contents/Resources/libggml.0.dylib');
 requireFile('Contents/Resources/libggml-base.0.dylib');
 requireFile('Contents/Resources/libggml-blas.so');
 requireFile('Contents/Resources/libggml-metal.so');
+requireFile('Contents/Resources/ggml-silero-v5.1.2.bin');
+
+const libWhisper = requireFile('Contents/Resources/libwhisper.1.dylib');
 
 const links = execFileSync('otool', ['-L', server], { encoding: 'utf8' });
 const leakedLinks = links
@@ -55,6 +58,14 @@ const leakedLinks = links
 if (leakedLinks.length > 0) {
   console.error('[verify-macos-bundle] whisper-server is not self-contained; Homebrew links remain:');
   for (const line of leakedLinks) console.error(`[verify-macos-bundle]   ${line}`);
+  process.exit(1);
+}
+
+try {
+  assertNoCoreMLLinkage(server, 'whisper-server');
+  assertNoCoreMLLinkage(libWhisper, 'libwhisper.1.dylib');
+} catch (err) {
+  console.error(err.message);
   process.exit(1);
 }
 

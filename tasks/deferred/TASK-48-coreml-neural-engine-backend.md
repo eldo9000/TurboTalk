@@ -79,7 +79,7 @@ This is the heaviest task in the speed pass. The bulk of the work is whisper.cpp
 - `WHISPER_COREML_ALLOW_FALLBACK=1` at compile time is the difference between "CoreML init failure breaks dictation" and "CoreML init failure logs a warn and falls back to Metal." Always include it.
 - The bench for this task only makes sense once Metal backend correctness is independently verified — don't trust a CoreML-vs-Metal comparison if the Metal path itself is silently falling back to CPU.
 
-## Deferral note — 2026-05-09
+## Deferral note — 2026-05-09 (updated 2026-05-26)
 
 Phase 1 done: CoreML-enabled `whisper-server` builds successfully from
 whisper.cpp v1.8.4 source. Build blocker (cmake `check_cxx_source_runs`
@@ -98,27 +98,18 @@ binary on this machine:
    present. `libwhisper.coreml.dylib` links `CoreML.framework`, which
    triggers an ANE warmup in dyld's initializer phase before `main()`
    runs. `WHISPER_COREML_ALLOW_FALLBACK=1` does not help — the hang is
-   in the framework loader, not in whisper's code path. Needs to be
-   reproduced **with** the `.mlmodelc` in place to determine whether
-   the warmup is amortized after first use. If it isn't, the binary
-   isn't shippable as the default path regardless of inference speed.
-2. **Packaging integration not done.** The new dylibs the source build
-   produces (`libwhisper.coreml.dylib`, `libggml-cpu.0.dylib`,
-   `libggml-blas.0.dylib`, `libggml-metal.0.dylib`) are not declared
-   in `tauri.macos.conf.json` `bundle.resources`. The `.mlmodelc`
-   download flow (1.17 GB sidecar artifact alongside the model `.bin`)
-   doesn't exist either — `whisper_models.rs` was the planned home but
-   that file does not exist in the repo today.
+   in the framework loader, not in whisper's code path.
+
+2. **Packaging integration not done.** The `.mlmodelc` download flow
+   (1.17 GB sidecar artifact alongside the model `.bin`) doesn't exist.
+
+**Mitigation landed 2026-05-26:** Default bundle stays Metal-only.
+`scripts/preflight.mjs`, `scripts/refresh-whisper-server.mjs`, and
+`scripts/verify-macos-bundle.mjs` reject any sidecar whose dylib chain
+links CoreML. Approved re-attempt path: optional `whisper-server-coreml`
+sidecar spawned only when user opts in — see
+`docs/reference/COREML-BLOCKER.md`.
 
 App is in a usable state without CoreML (Metal + audio_ctx adaptive +
-warm worker). The user-visible speed is acceptable for daily use, so
-the speed pass is paused at "good enough" rather than chased to "best
-possible." Re-attempt only when (a) the dyld-init hang has a
-documented mitigation, and (b) someone is willing to build and host
-the precomputed `.mlmodelc` artifacts (or a download flow + first-use
-generation path).
-
-Commits to consult on resume:
-- `e81fb11` feat(transcribe): replace whisper-server with CoreML-enabled build
-- `be38b26` fix(transcribe): revert whisper-server to Homebrew symlink — CoreML binary hangs 60s at startup
-- `8e38cd8` chore(binaries): revert CoreML-build dylibs, drop unused new files
+warm worker). Re-attempt phase 2 when optional sidecar + `.mlmodelc`
+download flow are implemented and bench-validated.

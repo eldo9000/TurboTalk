@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertNoCoreMLLinkage } from './lib/dylib-guard.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -27,6 +28,7 @@ switch (process.platform) {
       'src-tauri/binaries/libggml-base.0.dylib',
       'src-tauri/binaries/libggml-blas.so',
       'src-tauri/binaries/libggml-metal.so',
+      'src-tauri/binaries/ggml-silero-v5.1.2.bin',
     ];
     break;
   case 'win32':
@@ -83,6 +85,7 @@ if (missingCount > 0) {
 
 if (process.platform === 'darwin') {
   const server = resolve(repoRoot, 'src-tauri/binaries/whisper-server-aarch64-apple-darwin');
+  const libWhisper = resolve(repoRoot, 'src-tauri/binaries/libwhisper.1.dylib');
   const links = execFileSync('otool', ['-L', server], { encoding: 'utf8' });
   const leakedLinks = links
     .split('\n')
@@ -95,6 +98,23 @@ if (process.platform === 'darwin') {
     console.error('[preflight] whisper-server is not self-contained; Homebrew links remain:');
     for (const line of leakedLinks) console.error(`[preflight]   ${line}`);
     console.error('[preflight]   run `npm run refresh-whisper-server` before packaging');
+    process.exit(1);
+  }
+
+  try {
+    assertNoCoreMLLinkage(server, 'whisper-server');
+    assertNoCoreMLLinkage(libWhisper, 'libwhisper.1.dylib');
+  } catch (err) {
+    console.error(err.message);
+    console.error('[preflight]   run `npm run refresh-whisper-server` to restore Metal-only sidecar');
+    process.exit(1);
+  }
+
+  const vad = resolve(repoRoot, 'src-tauri/binaries/ggml-silero-v5.1.2.bin');
+  const vadSize = statSync(vad).size;
+  if (vadSize < 10_000) {
+    console.error('[preflight] ggml-silero-v5.1.2.bin is missing or a placeholder');
+    console.error('[preflight]   run `npm run fetch-vad-model`');
     process.exit(1);
   }
 }

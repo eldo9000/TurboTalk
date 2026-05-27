@@ -13,3 +13,5 @@
 | 2026-05-11 | CONFIRMED | dispatch 3/3 — #[cfg(unix)] guard on pre_exec/setsid fixed Windows build; installer downloaded: TurboTalk-0.8.12-windows-x64-setup.exe |
 | 2026-05-12 | OPEN | dispatch 1/1 — write docs/WINDOWS-UTM-TESTING.md; UTM confirmed installed, installer at dist-artifacts/windows-x64-tmp/ confirmed present |
 | 2026-05-12 | CONFIRMED | dispatch 1/1 — docs/WINDOWS-UTM-TESTING.md written; UTM present, installer confirmed, 6-step guide covers ISO acquisition through x64 verification |
+| 2026-05-26 | CONFIRMED | CoreML dyld-init hang — Metal-only default sidecar enforced; preflight + refresh-whisper-server reject CoreML.framework / libwhisper.coreml.dylib linkage; optional sidecar design documented in docs/reference/COREML-BLOCKER.md |
+| 2026-05-26 | CONFIRMED | Silero VAD model bundled — ggml-silero-v5.1.2.bin fetched from ggml-org/whisper-vad (864 KB, sha256 29940d98…); npm run fetch-vad-model added |
