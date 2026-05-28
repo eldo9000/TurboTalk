@@ -290,15 +290,20 @@ impl Default for HotkeyConfig {
 pub fn migrate_platform_defaults(cfg: &mut Config) -> bool {
     #[cfg(target_os = "windows")]
     {
-        // macOS default (right_option → AltGr) is a poor fit for typical US
-        // Windows keyboards — Right Control is the standard PTT modifier.
+        let mut changed = false;
         if cfg.hotkey.key == "right_option" {
             tracing::info!(
                 "[settings] Windows: migrating hotkey right_option → right_control"
             );
             cfg.hotkey.key = "right_control".into();
-            return true;
+            changed = true;
         }
+        if cfg.hotkey.mode == "toggle" {
+            tracing::info!("[settings] Windows: migrating hotkey mode toggle → hold");
+            cfg.hotkey.mode = "hold".into();
+            changed = true;
+        }
+        return changed;
     }
 
     false

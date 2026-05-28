@@ -12,7 +12,7 @@
 //   - `pub fn accessibility_trusted() -> bool` — used by the onboarding
 //     readiness gate.
 
-mod common {
+pub(crate) mod common {
     use crate::audio::{DiscardReason, StopOutcome};
     use crate::recorder::{Recorder, RecorderError};
     use crate::tray::{self, TrayState};
@@ -1104,6 +1104,7 @@ mod imp {
 }
 
 #[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 mod imp {
     //! Windows + Linux/X11 push-to-talk via `rdev`.
     //!
@@ -1339,8 +1340,15 @@ mod imp {
     }
 }
 
-pub use imp::accessibility_trusted;
-pub use imp::spawn;
+#[cfg(target_os = "windows")]
+mod hotkey_win32;
+
+#[cfg(target_os = "macos")]
+pub use imp::{accessibility_trusted, spawn};
+#[cfg(target_os = "linux")]
+pub use imp::{accessibility_trusted, spawn};
+#[cfg(target_os = "windows")]
+pub use hotkey_win32::{accessibility_trusted, spawn};
 
 /// Programmatically start a recording — same path as the physical PTT down stroke.
 /// Safe to call from any thread; spawns its own worker internally.

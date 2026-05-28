@@ -9,7 +9,7 @@
   import Select from '@libre/ui/src/components/Select.svelte';
   import UpdateManager from './UpdateManager.svelte';
 
-  const HOTKEY_KEY_ITEMS = [
+  const HOTKEY_KEY_ITEMS_MAC = [
     { value: 'option',          label: 'Option ⌥' },
     { value: 'control',         label: 'Control ⌃' },
     { value: 'command',         label: 'Command ⌘' },
@@ -21,6 +21,45 @@
     { value: 'numpad_subtract', label: '−' },
     { value: 'numpad_multiply', label: '*' },
   ];
+
+  const HOTKEY_KEY_ITEMS_WIN = [
+    { value: 'option',          label: 'Alt' },
+    { value: 'control',         label: 'Ctrl' },
+    { value: 'command',         label: 'Win' },
+    { value: 'shift',           label: 'Shift' },
+    { value: 'numpad_enter',    label: 'Numpad Enter' },
+    { value: 'numpad_0',        label: 'Numpad 0' },
+    { value: 'numpad_decimal',  label: 'Numpad .' },
+    { value: 'numpad_add',      label: 'Numpad +' },
+    { value: 'numpad_subtract', label: 'Numpad −' },
+    { value: 'numpad_multiply', label: 'Numpad *' },
+  ];
+
+  const hotkeyKeyItems = $derived(
+    platform === 'windows' ? HOTKEY_KEY_ITEMS_WIN : HOTKEY_KEY_ITEMS_MAC
+  );
+
+  function hotkeyDisplayName(key) {
+    if (platform === 'windows') {
+      const win = {
+        left_option: 'Left Alt', right_option: 'Right Alt',
+        left_control: 'Left Ctrl', right_control: 'Right Ctrl',
+        left_command: 'Left Win', right_command: 'Right Win',
+        left_shift: 'Left Shift', right_shift: 'Right Shift',
+        numpad_enter: 'Numpad Enter', numpad_0: 'Numpad 0',
+        numpad_decimal: 'Numpad .', numpad_add: 'Numpad +',
+        numpad_subtract: 'Numpad −', numpad_multiply: 'Numpad *',
+      };
+      return win[key] ?? key;
+    }
+    const mac = {
+      right_option: 'Right Option ⌥', left_option: 'Left Option ⌥',
+      right_control: 'Right Control ⌃', left_control: 'Left Control ⌃',
+      right_command: 'Right Command ⌘', left_command: 'Left Command ⌘',
+      right_shift: 'Right Shift ⇧', left_shift: 'Left Shift ⇧',
+    };
+    return mac[key] ?? key;
+  }
 
   const HISTORY_AUTO_DELETE_ITEMS = [
     { value: 'restart', label: 'On app restart' },
@@ -463,12 +502,6 @@ Reply with only the single word, lowercase, no punctuation.
   const ZOOM_LEVELS = [100, 125, 150, 175, 200];
   let zoomIdx = $state(parseInt(localStorage.getItem('tt-zoom') ?? '0'));
 
-  const KEY_DISPLAY = {
-    right_option:  'Right Option ⌥',
-    right_control: 'Right Control ⌃',
-    right_command: 'Right Command ⌘',
-    right_shift:   'Right Shift ⇧',
-  };
 
   $effect(() => {
     document.documentElement.style.zoom = `${ZOOM_LEVELS[zoomIdx]}%`;
@@ -1308,7 +1341,7 @@ Reply with only the single word, lowercase, no punctuation.
           {#if recording || transcribing}
             <p class="tt-history-empty-status">{recording ? 'Recording…' : 'Transcribing…'}</p>
           {:else}
-            <kbd class="tt-kbd">{KEY_DISPLAY[cfgHotkeyKey] ?? cfgHotkeyKey}</kbd>
+            <kbd class="tt-kbd">{hotkeyDisplayName(cfgHotkeyKey)}</kbd>
             <p class="tt-history-empty-hint">
               {cfgHotkeyMode === 'toggle' ? 'Press to start · press again to stop' : 'Hold to record'}
             </p>
@@ -1794,7 +1827,7 @@ Reply with only the single word, lowercase, no punctuation.
             </div>
             <div class="tt-key-sel">
               <Select
-                items={HOTKEY_KEY_ITEMS}
+                items={hotkeyKeyItems}
                 bind:value={hotkeyKeyPart}
                 onchange={applyHotkeyKey}
                 variant="flat"
