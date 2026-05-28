@@ -1214,12 +1214,14 @@ mod imp {
         let app_for_error = app.clone();
 
         std::thread::spawn(move || {
-            let hk = hotkey_state.read();
-            tracing::info!(
-                "[hotkey] rdev listener starting — key={} mode={}",
-                hk.key,
-                hk.mode
-            );
+            {
+                let hk = hotkey_state.read();
+                tracing::info!(
+                    "[hotkey] rdev listener starting — key={} mode={}",
+                    hk.key,
+                    hk.mode
+                );
+            }
 
             // Track the current logical hotkey state so we don't double-fire on
             // OS auto-repeat (Windows in particular re-emits KeyPress while the
