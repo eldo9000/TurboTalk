@@ -180,6 +180,16 @@ pub async fn export_diagnostic_report() -> Result<ExportDiagnosticResult, String
     writeln!(out, "{cfg_json}").map_err(|e| e.to_string())?;
     writeln!(out).map_err(|e| e.to_string())?;
 
+    #[cfg(target_os = "windows")]
+    {
+        writeln!(out, "=== Hotkey probe ===").map_err(|e| e.to_string())?;
+        let probe = crate::hotkey::diagnostic_probe();
+        let probe_json =
+            serde_json::to_string_pretty(&probe).unwrap_or_else(|_| "(serialize failed)".into());
+        writeln!(out, "{probe_json}").map_err(|e| e.to_string())?;
+        writeln!(out).map_err(|e| e.to_string())?;
+    }
+
     writeln!(out, "=== UI events ({} lines) ===", client_events.len())
         .map_err(|e| e.to_string())?;
     for line in &client_events {

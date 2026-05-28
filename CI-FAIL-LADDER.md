@@ -17,3 +17,5 @@
 - **Verdict:** QUICK (budget: 1 attempt)
 - **Hypothesis:** `mod hotkey_win32` inside `hotkey.rs` resolves to `hotkey/hotkey_win32.rs`; file lives at `src/hotkey_win32.rs`. macOS CI skip hid this.
 - **Next:** `hotkey.rs:1344` — add `#[path = "hotkey_win32.rs"]` on the mod declaration
+
+## Fail arc closed — 2026-05-28 — 2 entries — green CI 26606830689

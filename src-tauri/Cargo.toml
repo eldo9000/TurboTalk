@@ -121,4 +121,4 @@ rdev = "0.5"
 
 # Windows push-to-talk uses a native WH_KEYBOARD_LL hook (see hotkey_win32.rs).
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["winuser", "libloaderapi", "errhandlingapi"] }
+winapi = { version = "0.3", features = ["winuser"] }

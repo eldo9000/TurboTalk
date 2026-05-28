@@ -1349,7 +1349,7 @@ pub use imp::{accessibility_trusted, spawn};
 #[cfg(target_os = "linux")]
 pub use imp::{accessibility_trusted, spawn};
 #[cfg(target_os = "windows")]
-pub use hotkey_win32::{accessibility_trusted, spawn};
+pub use hotkey_win32::{accessibility_trusted, diagnostic_probe, spawn, HotkeyProbe};
 
 /// Programmatically start a recording — same path as the physical PTT down stroke.
 /// Safe to call from any thread; spawns its own worker internally.

@@ -1559,7 +1559,11 @@ pub fn run() {
         .and_then(|s| s.to_str())
         .unwrap_or("turbotalk.log");
     let file_appender = tracing_appender::rolling::never(log_dir, log_name);
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    // Keep the non-blocking writer alive for the process lifetime so logs flush.
+    static LOG_GUARD: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
+        std::sync::OnceLock::new();
+    let _ = LOG_GUARD.set(guard);
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         tracing_subscriber::EnvFilter::new("turbotalk_lib=debug,warn")
