@@ -303,10 +303,13 @@ pub fn migrate_platform_defaults(cfg: &mut Config) -> bool {
             cfg.hotkey.mode = "hold".into();
             changed = true;
         }
-        return changed;
+        changed
     }
-
-    false
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = cfg;
+        false
+    }
 }
 
 impl Default for Config {

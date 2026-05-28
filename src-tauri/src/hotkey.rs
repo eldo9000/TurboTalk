@@ -1341,6 +1341,7 @@ mod imp {
 }
 
 #[cfg(target_os = "windows")]
+#[path = "hotkey_win32.rs"]
 mod hotkey_win32;
 
 #[cfg(target_os = "macos")]
