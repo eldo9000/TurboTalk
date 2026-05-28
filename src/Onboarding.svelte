@@ -78,19 +78,8 @@
 
   const ALL_MODELS = [RECOMMENDED_WHISPER, ...ALTERNATES];
 
-  const MOONSHINE_MODELS = [
-    { id: 'moonshine-tiny', tier: 'Recommended', name: 'moonshine-tiny', size: '110 MB',
-      description: 'english-only · fastest · low silence hallucination', recommended: true },
-    { id: 'moonshine-base', tier: 'Large', name: 'moonshine-base', size: '250 MB',
-      description: 'english-only · more accurate', recommended: false },
-  ];
-
-  const PARAKEET_MODELS = [
-    { id: 'parakeet-tdt-0.6b-v2', tier: 'Recommended', name: 'parakeet-en-v2', size: '660 MB',
-      description: 'english-only · fastest', recommended: true },
-    { id: 'parakeet-tdt-0.6b-v3', tier: 'Multilingual', name: 'parakeet-multi-v3', size: '660 MB',
-      description: 'multilingual · 25 european languages', recommended: false },
-  ];
+  // Populated from listModelsForFamily — per-model installed state, not global model_present.
+  let altModels = $state([]);
   const WINDOW_W = 440;
   const WINDOW_SIZE_SLACK = 18;
 
@@ -167,11 +156,21 @@
     scheduleResize();
   });
 
+  async function loadAltModels(backend = selectedBackend) {
+    if (backend === 'whisper') {
+      altModels = [];
+      return;
+    }
+    altModels = await commands.listModelsForFamily(backend).catch(() => []);
+  }
+
   async function saveBackendToConfig(family) {
     try {
       const cfg = await commands.getConfig();
       cfg.backend = family;
       await commands.saveConfig(cfg);
+      await loadAltModels(family);
+      await refresh();
     } catch (e) {
       console.warn('saveBackendToConfig failed', e);
     }
@@ -207,6 +206,7 @@
     }
     const backend = cfg.backend ?? selectedBackend;
     const nextModelReady = modelReadyForBackend(nextReadiness, backend);
+    await loadAltModels(backend);
     if (
       !downloadingModel
       && permissionSatisfied(nextReadiness.accessibility)
@@ -417,11 +417,13 @@
     const i = permissionSatisfied(readiness.input_monitoring);
     const m = permissionSatisfied(readiness.microphone);
     const p = selectedModelReady;
+    // macOS TCC steps only gate model selection; Windows/Linux skip that wait.
+    const permissionsReady = readiness.platform === 'macos' ? (a && i && m) : readiness.platform !== 'linux';
     return {
       input_monitoring: i ? 'done' : 'active',
       microphone:    m ? 'done' : (i ? 'active' : 'pending'),
       accessibility: a ? 'done' : (i && m ? 'active' : 'pending'),
-      model:         p ? 'done' : (a && i && m ? 'active' : 'pending'),
+      model:         p ? 'done' : (permissionsReady ? 'active' : 'pending'),
       launch:        (launchAtLogin || launchSkipped) ? 'done' : (a && i && m && p ? 'active' : 'pending'),
     };
   });
@@ -459,7 +461,7 @@
         {unsupportedPlatform
           ? 'This beta is not fully supported on Linux yet.'
           : readiness?.platform === 'windows'
-            ? 'Download a Whisper model to start dictating on Windows.'
+            ? 'Download a model to start dictating. Parakeet is recommended on Windows.'
             : 'Finish setup before you can start dictating.'}
       </p>
     </div>
@@ -703,13 +705,13 @@
                     </div>
                   </div>
                 {/each}
-              {:else if selectedBackend === 'moonshine'}
-                {#each MOONSHINE_MODELS as model (model.id)}
+              {:else if selectedBackend === 'moonshine' || selectedBackend === 'parakeet'}
+                {#each altModels as model (model.id)}
                   <div class="flex items-start justify-between gap-2 p-2 rounded-md border border-[var(--border,#2a2a2a)]">
                     <div class="flex flex-col gap-0.5 min-w-0">
                       <div class="flex items-center gap-2 min-w-0 flex-wrap">
                         <span class="text-[12px] font-medium text-[var(--text-primary)]">{model.tier}</span>
-                        <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-[var(--border,#3a3a3a)] text-[var(--text-secondary)]">{model.name}</span>
+                        <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-[var(--border,#3a3a3a)] text-[var(--text-secondary)]">{model.label}</span>
                         {#if model.recommended}
                           <span class="shrink-0 text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-400 text-black">Recommended</span>
                         {/if}
@@ -720,7 +722,7 @@
                       <span class="text-[11px] font-mono text-[var(--text-secondary)]">{model.size}</span>
                       {#if downloadingModel === model.id}
                         <span class="text-[11px] text-[var(--text-primary)]">{downloadPct}%</span>
-                      {:else if readiness?.model_present && selectedBackend === 'moonshine'}
+                      {:else if model.installed}
                         <span class="text-[11px] text-emerald-400">Ready</span>
                       {:else}
                         <button onclick={() => downloadAltModel(model)}
@@ -731,34 +733,9 @@
                     </div>
                   </div>
                 {/each}
-              {:else if selectedBackend === 'parakeet'}
-                {#each PARAKEET_MODELS as model (model.id)}
-                  <div class="flex items-start justify-between gap-2 p-2 rounded-md border border-[var(--border,#2a2a2a)]">
-                    <div class="flex flex-col gap-0.5 min-w-0">
-                      <div class="flex items-center gap-2 min-w-0 flex-wrap">
-                        <span class="text-[12px] font-medium text-[var(--text-primary)]">{model.tier}</span>
-                        <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-[var(--border,#3a3a3a)] text-[var(--text-secondary)]">{model.name}</span>
-                        {#if model.recommended}
-                          <span class="shrink-0 text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-400 text-black">Recommended</span>
-                        {/if}
-                      </div>
-                      <span class="text-[11px] text-[var(--text-secondary)] leading-snug">{model.description}</span>
-                    </div>
-                    <div class="shrink-0 flex items-center gap-2">
-                      <span class="text-[11px] font-mono text-[var(--text-secondary)]">{model.size}</span>
-                      {#if downloadingModel === model.id}
-                        <span class="text-[11px] text-[var(--text-primary)]">{downloadPct}%</span>
-                      {:else if readiness?.model_present && selectedBackend === 'parakeet'}
-                        <span class="text-[11px] text-emerald-400">Ready</span>
-                      {:else}
-                        <button onclick={() => downloadAltModel(model)}
-                          class="px-2 py-1 rounded-md bg-[var(--accent)] text-white text-[11px] font-medium hover:opacity-90 transition-opacity">
-                          Download
-                        </button>
-                      {/if}
-                    </div>
-                  </div>
-                {/each}
+                {#if altModels.length === 0}
+                  <p class="text-[11px] text-[var(--text-secondary)] leading-snug">Loading models…</p>
+                {/if}
               {/if}
 
               {#if downloadError}

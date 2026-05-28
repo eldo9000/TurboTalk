@@ -3,7 +3,7 @@
 **Last updated:** 2026-05-28  
 **Current state:** macOS dictation is feature-complete for personal use. Latest commit `88a26b8`: overlay dismisses on transcription-rejected (fixes stuck Transcribing pill). Prior `1124d4a`: onboarding drag-during-download fix.
 
-**Next action:** User-retest overlay after hallucination filter rejection. Optional: fix tail-rejection discarding valid streaming segments. Windows v1.0 path: TASK-25/26.
+**Next action:** User-retest Windows onboarding Parakeet download buttons. Optional: tail-rejection discarding valid streaming segments.
 
 ## Open backlog
 
