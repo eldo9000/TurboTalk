@@ -29,8 +29,6 @@
   let downloadPct        = $state(0);
   let downloadError      = $state('');
   let restartArmed       = $state(false);
-  let cfgModel           = $state('');
-  let cfgModels          = $state([]);
   let contentEl          = $state(null);
   let resizeObserver     = null;
   let resizeRaf          = null;
@@ -46,56 +44,16 @@
   let fixImError         = $state('');
   let fixAxError         = $state('');
 
-  // Backend family selection — shown in the model step before picking a model.
-  let selectedBackend = $state('parakeet'); // 'whisper' | 'moonshine' | 'parakeet'
+  // Onboarding is Parakeet-only — other engines live in Settings after setup.
+  const ONBOARDING_BACKEND = 'parakeet';
 
-  const ENGINE_OPTIONS = [
-    ['parakeet', 'Parakeet'],
-    ['whisper', 'Whisper'],
-    ['moonshine', 'Moonshine'],
-  ];
-
-  const BACKEND_EXPLAINERS = {
-    parakeet:  'English-only · fastest · recommended default.',
-    whisper:   'Multilingual · most accurate.',
-    moonshine: 'English-only · low hallucination on silence.',
-  };
-
-  const RECOMMENDED_WHISPER = {
-    id: 'ggml-large-v3-turbo',
-    label: 'Large v3 Turbo',
-    size: '1.6 GB',
-    description: 'Best accuracy · multilingual',
-    recommended: true,
-  };
-
-  const ALTERNATES = [
-    { id: 'ggml-large-v3-turbo-q5_0', label: 'Large v3 Turbo (q5_0)',
-      size: '574 MB', description: 'Low RAM · slightly reduced accuracy', recommended: false },
-    { id: 'ggml-large-v3', label: 'Large v3',
-      size: '3.1 GB', description: 'High accuracy · high RAM · slow', recommended: false },
-  ];
-
-  const ALL_MODELS = [RECOMMENDED_WHISPER, ...ALTERNATES];
-
-  // Populated from listModelsForFamily — per-model installed state, not global model_present.
+  // Populated from listModelsForFamily — we show the recommended variant only.
   let altModels = $state([]);
+  let onboardingModel = $derived(altModels.find(m => m.recommended) ?? altModels[0] ?? null);
   const WINDOW_W = 440;
   const WINDOW_SIZE_SLACK = 18;
 
-  function uniqueModels(paths) {
-    return [...new Set(paths.filter(Boolean))];
-  }
-
-  function installedPath(modelId) {
-    return cfgModels.find(path => path.endsWith(`${modelId}.bin`)) ?? '';
-  }
-
-  let selectedModelReady = $derived(
-    selectedBackend === 'whisper'
-      ? (!!cfgModel && cfgModels.includes(cfgModel))
-      : (readiness?.model_present ?? false)
-  );
+  let selectedModelReady = $derived(readiness?.model_present ?? false);
 
   function currentZoom() {
     return (parseFloat(document.documentElement.style.zoom || '100') || 100) / 100;
@@ -141,8 +99,6 @@
   $effect(() => {
     readiness;
     launchAtLogin;
-    cfgModel;
-    cfgModels;
     downloadingModel;
     downloadPct;
     downloadError;
@@ -152,27 +108,24 @@
     axOpenedSettings;
     fixImError;
     fixAxError;
-    selectedBackend;
+    onboardingModel;
     scheduleResize();
   });
 
-  async function loadAltModels(backend = selectedBackend) {
-    if (backend === 'whisper') {
-      altModels = [];
-      return;
-    }
-    altModels = await commands.listModelsForFamily(backend).catch(() => []);
+  async function loadAltModels() {
+    altModels = await commands.listModelsForFamily(ONBOARDING_BACKEND).catch(() => []);
   }
 
-  async function saveBackendToConfig(family) {
+  async function ensureParakeetBackend() {
     try {
       const cfg = await commands.getConfig();
-      cfg.backend = family;
-      await commands.saveConfig(cfg);
-      await loadAltModels(family);
-      await refresh();
+      if (cfg.backend !== ONBOARDING_BACKEND) {
+        cfg.backend = ONBOARDING_BACKEND;
+        await commands.saveConfig(cfg);
+      }
+      await loadAltModels();
     } catch (e) {
-      console.warn('saveBackendToConfig failed', e);
+      console.warn('ensureParakeetBackend failed', e);
     }
   }
 
@@ -180,33 +133,19 @@
     return status === 'granted' || status === 'unsupported';
   }
 
-  function modelReadyForBackend(r, backend) {
-    if (backend === 'whisper') {
-      return !!cfgModel && cfgModels.includes(cfgModel);
-    }
+  function modelReadyForBackend(r) {
     return r?.model_present ?? false;
   }
 
   async function refresh() {
-    const [nextReadiness, nextLaunchAtLogin, cfg, scannedModels] = await Promise.all([
+    const [nextReadiness, nextLaunchAtLogin] = await Promise.all([
       commands.checkReadiness(),
       commands.getLaunchAtLogin(),
-      commands.getConfig(),
-      commands.scanModelsDir(),
     ]);
-    const nextCfgModel = cfg.whisper?.model ?? '';
-    const nextCfgModels = uniqueModels(scannedModels ?? []);
     readiness = nextReadiness;
     launchAtLogin = nextLaunchAtLogin;
-    cfgModel = nextCfgModel;
-    cfgModels = nextCfgModels;
-    // Restore backend selection from persisted config (e.g. if user reopens onboarding).
-    if (cfg.backend && cfg.backend !== selectedBackend) {
-      selectedBackend = cfg.backend;
-    }
-    const backend = cfg.backend ?? selectedBackend;
-    const nextModelReady = modelReadyForBackend(nextReadiness, backend);
-    await loadAltModels(backend);
+    await ensureParakeetBackend();
+    const nextModelReady = modelReadyForBackend(nextReadiness);
     if (
       !downloadingModel
       && permissionSatisfied(nextReadiness.accessibility)
@@ -230,6 +169,7 @@
   }
 
   onMount(async () => {
+    await ensureParakeetBackend();
     await refresh();
     startPolling();
     scheduleResize();
@@ -316,25 +256,14 @@
     }
   }
 
-  async function saveSelectedModel(path) {
-    const cfg = await commands.getConfig();
-    if (!cfg.whisper) cfg.whisper = { bin: 'auto', model: '', models: [] };
-    cfg.whisper.model = path;
-    cfg.whisper.models = uniqueModels([...(cfg.whisper.models ?? []), path]);
-    await commands.saveConfig(cfg);
-    await refresh();
-  }
-
-  async function selectModel(path) {
-    await saveSelectedModel(path);
-  }
-
-  async function downloadAltModel(model) {
+  async function downloadParakeetModel() {
+    const model = onboardingModel;
+    if (!model) return;
     downloadingModel = model.id;
     downloadPct      = 0;
     downloadError    = '';
-    const variant = model.id.replace(/^moonshine-|^parakeet-/, '');
-    const progressKey = `${selectedBackend}-${variant}`;
+    const variant = model.id.replace(/^parakeet-/, '');
+    const progressKey = `${ONBOARDING_BACKEND}-${variant}`;
     const unlisten = await listen('download-progress', (e) => {
       const name = e.payload?.name ?? '';
       if (name === model.id || name === progressKey || name.startsWith(progressKey)) {
@@ -342,36 +271,12 @@
       }
     });
     try {
-      const res = selectedBackend === 'moonshine'
-        ? await commands.downloadMoonshineModel(variant)
-        : await commands.downloadParakeetModel(variant);
+      const res = await commands.downloadParakeetModel(variant);
       if (res.status === 'error') {
         downloadError = res.error || 'Download failed.';
         return;
       }
       await refresh();
-    } finally {
-      unlisten();
-      downloadingModel = null;
-    }
-  }
-
-  async function downloadModel(model) {
-    downloadingModel = model.id;
-    downloadPct      = 0;
-    downloadError    = '';
-    const unlisten = await listen('download-progress', (e) => {
-      if (e.payload?.name === model.id) {
-        downloadPct = e.payload.pct ?? 0;
-      }
-    });
-    try {
-      const res = await commands.downloadModel(model.id);
-      if (res.status === 'error') {
-        downloadError = res.error || 'Download failed.';
-        return;
-      }
-      await saveSelectedModel(res.data);
     } finally {
       unlisten();
       downloadingModel = null;
@@ -460,9 +365,7 @@
       <p class="text-[12px] text-[var(--text-secondary)] leading-relaxed">
         {unsupportedPlatform
           ? 'This beta is not fully supported on Linux yet.'
-          : readiness?.platform === 'windows'
-            ? 'Download a model to start dictating. Parakeet is recommended on Windows.'
-            : 'Finish setup before you can start dictating.'}
+          : 'Download the Parakeet model to start dictating. Other engines are in Settings later.'}
       </p>
     </div>
 
@@ -635,34 +538,19 @@
         <!-- Connector 3 → 4 -->
         <div class="h-3.5 ml-[23px] w-1 rounded-full {connectorClass(stepStates.accessibility === 'done')}"></div>
 
-        <!-- Step 4: Model (includes backend family picker) -->
+        <!-- Step 4: Parakeet model download -->
         <div class="flex gap-3 p-3.5 rounded-lg border {stepClass(stepStates.model)}">
           <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.model)}">
             {stepStates.model === 'done' ? '✓' : '4'}
           </div>
           <div class="flex flex-col gap-2 min-w-0 flex-1">
             <div class="flex flex-col gap-0.5">
-              <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Choose an engine and download a model</h2>
+              <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Download the Parakeet model</h2>
               <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-                Parakeet is recommended for most English dictation. All engines run fully locally on your device.
+                Fast English dictation — runs fully on your device. Whisper and Moonshine are available in Settings after setup.
               </p>
             </div>
             {#if stepStates.model === 'active' || stepStates.model === 'done'}
-              <!-- Backend family picker -->
-              <div class="flex gap-1.5">
-                {#each ENGINE_OPTIONS as [v, lbl]}
-                  <button
-                    onclick={async () => { selectedBackend = v; await saveBackendToConfig(v); }}
-                    class="px-2.5 py-1 rounded-md border text-[11px] font-medium transition-colors
-                           {selectedBackend === v
-                             ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--text-primary)]'
-                             : 'border-[var(--border,#2a2a2a)] text-[var(--text-secondary)] hover:bg-white/5'}">
-                    {lbl}
-                  </button>
-                {/each}
-              </div>
-              <p class="text-[10px] text-[var(--text-secondary)] leading-snug -mt-1">{BACKEND_EXPLAINERS[selectedBackend]}</p>
-
               {#if downloadingModel}
                 <div class="flex flex-col gap-1.5">
                   <div class="flex items-center justify-between text-[11px]">
@@ -673,69 +561,28 @@
                     <div class="h-full bg-[var(--accent)] transition-all" style="width: {downloadPct}%"></div>
                   </div>
                 </div>
-              {:else if selectedBackend === 'whisper'}
-                <!-- Whisper model list — downloadable and selectable -->
-                {#each ALL_MODELS as model (model.id)}
-                  {@const path = installedPath(model.id)}
-                  {@const isSelected = path && path === cfgModel}
-                  <div class="flex items-start justify-between gap-2 p-2 rounded-md border border-[var(--border,#2a2a2a)]">
-                    <div class="flex flex-col gap-0.5 min-w-0">
-                      <div class="flex items-center gap-2 min-w-0">
-                        <span class="text-[12px] font-medium text-[var(--text-primary)] truncate">{model.label}</span>
-                        {#if model.recommended}
-                          <span class="shrink-0 text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-400 text-black">Recommended</span>
-                        {/if}
-                      </div>
-                      <span class="text-[11px] text-[var(--text-secondary)] leading-snug">{model.description}</span>
+              {:else if onboardingModel}
+                <div class="flex items-start justify-between gap-2 p-2 rounded-md border border-[var(--border,#2a2a2a)]">
+                  <div class="flex flex-col gap-0.5 min-w-0">
+                    <div class="flex items-center gap-2 min-w-0 flex-wrap">
+                      <span class="text-[12px] font-medium text-[var(--text-primary)]">{onboardingModel.label}</span>
                     </div>
-                    <div class="shrink-0 flex items-center gap-2">
-                      <span class="text-[11px] font-mono text-[var(--text-secondary)]">{model.size}</span>
-                      {#if path}
-                        <button onclick={() => selectModel(path)}
-                          disabled={isSelected}
-                          class="px-2 py-1 rounded-md border border-[var(--border,#3a3a3a)] text-[11px] font-medium text-[var(--text-primary)] hover:bg-white/5 disabled:opacity-60 disabled:hover:bg-transparent transition-colors">
-                          {isSelected ? 'Selected' : 'Select'}
-                        </button>
-                      {:else}
-                        <button onclick={() => downloadModel(model)}
-                          class="px-2 py-1 rounded-md bg-[var(--accent)] text-white text-[11px] font-medium hover:opacity-90 transition-opacity">
-                          Download
-                        </button>
-                      {/if}
-                    </div>
+                    <span class="text-[11px] text-[var(--text-secondary)] leading-snug">{onboardingModel.description}</span>
                   </div>
-                {/each}
-              {:else if selectedBackend === 'moonshine' || selectedBackend === 'parakeet'}
-                {#each altModels as model (model.id)}
-                  <div class="flex items-start justify-between gap-2 p-2 rounded-md border border-[var(--border,#2a2a2a)]">
-                    <div class="flex flex-col gap-0.5 min-w-0">
-                      <div class="flex items-center gap-2 min-w-0 flex-wrap">
-                        <span class="text-[12px] font-medium text-[var(--text-primary)]">{model.tier}</span>
-                        <span class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-[var(--border,#3a3a3a)] text-[var(--text-secondary)]">{model.label}</span>
-                        {#if model.recommended}
-                          <span class="shrink-0 text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-400 text-black">Recommended</span>
-                        {/if}
-                      </div>
-                      <span class="text-[11px] text-[var(--text-secondary)] leading-snug">{model.description}</span>
-                    </div>
-                    <div class="shrink-0 flex items-center gap-2">
-                      <span class="text-[11px] font-mono text-[var(--text-secondary)]">{model.size}</span>
-                      {#if downloadingModel === model.id}
-                        <span class="text-[11px] text-[var(--text-primary)]">{downloadPct}%</span>
-                      {:else if model.installed}
-                        <span class="text-[11px] text-emerald-400">Ready</span>
-                      {:else}
-                        <button onclick={() => downloadAltModel(model)}
-                          class="px-2 py-1 rounded-md bg-[var(--accent)] text-white text-[11px] font-medium hover:opacity-90 transition-opacity">
-                          Download
-                        </button>
-                      {/if}
-                    </div>
+                  <div class="shrink-0 flex items-center gap-2">
+                    <span class="text-[11px] font-mono text-[var(--text-secondary)]">{onboardingModel.size}</span>
+                    {#if onboardingModel.installed}
+                      <span class="text-[11px] text-emerald-400">Ready</span>
+                    {:else}
+                      <button onclick={downloadParakeetModel}
+                        class="px-2 py-1 rounded-md bg-[var(--accent)] text-white text-[11px] font-medium hover:opacity-90 transition-opacity">
+                        Download
+                      </button>
+                    {/if}
                   </div>
-                {/each}
-                {#if altModels.length === 0}
-                  <p class="text-[11px] text-[var(--text-secondary)] leading-snug">Loading models…</p>
-                {/if}
+                </div>
+              {:else}
+                <p class="text-[11px] text-[var(--text-secondary)] leading-snug">Loading model…</p>
               {/if}
 
               {#if downloadError}

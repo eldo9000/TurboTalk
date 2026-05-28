@@ -42,8 +42,15 @@
   let showOnboarding = $state(true);
   let unsupportedPlatformDismissed = $state(false);
 
+  let platform = $state('macos');
+
+  function defaultHotkeyKey() {
+    return platform === 'windows' ? 'right_control' : 'right_option';
+  }
+
   async function recheckReadiness() {
     const r = await commands.checkReadiness();
+    platform = r.platform ?? 'macos';
     readinessModelPresent = r.model_present;
     const unsupportedPlatform = r.platform === 'linux';
     const downloading = Object.keys(downloadProgress).length > 0;
@@ -270,6 +277,23 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgDevice            = $state('default');
   let audioDevices         = $state([]);
   let settingsSaveMsg      = $state('');
+  let diagnosticMsg        = $state('');
+
+  function logUi(event, detail = '') {
+    commands.logClientEvent(event, detail || null).catch(() => {});
+  }
+
+  async function exportTestLog() {
+    diagnosticMsg = 'Exporting…';
+    try {
+      const res = await commands.exportDiagnosticReport();
+      diagnosticMsg = `Saved: ${res.report_path}`;
+      logUi('diagnostic-export', res.report_path);
+    } catch (e) {
+      diagnosticMsg = `Export failed: ${e}`;
+    }
+  }
+
   let cfgHotkeyKey         = $state('right_option');
   let cfgHotkeyMode        = $state('hold');
   let cfgCancelOnEsc       = $state(true);
@@ -773,7 +797,7 @@ Reply with only the single word, lowercase, no punctuation.
       commands.getLaunchAtLogin(),
     ]);
     cfgDevice            = cfg.audio?.device                   ?? 'default';
-    cfgHotkeyKey         = cfg.hotkey?.key                     ?? 'right_option';
+    cfgHotkeyKey         = cfg.hotkey?.key                     ?? defaultHotkeyKey();
     cfgHotkeyMode        = cfg.hotkey?.mode                    ?? 'hold';
     cfgCancelOnEsc       = cfg.hotkey?.cancel_on_esc            ?? true;
     cfgCancelOnHold      = cfg.hotkey?.cancel_on_hold           ?? true;
@@ -803,7 +827,7 @@ Reply with only the single word, lowercase, no punctuation.
     const cfg = await commands.getConfig();
     if (!cfg.whisper) cfg.whisper = { bin: 'auto', model: '', models: [] };
     if (!cfg.audio)   cfg.audio   = { device: 'default', idle_timeout_secs: 0 };
-    if (!cfg.hotkey)  cfg.hotkey  = { key: 'right_option', mode: 'hold', cancel_on_esc: true, cancel_on_hold: true };
+    if (!cfg.hotkey)  cfg.hotkey  = { key: defaultHotkeyKey(), mode: 'hold', cancel_on_esc: true, cancel_on_hold: true };
     cfg.whisper.bin                   = cfgBin;
     cfg.audio.device                  = cfgDevice;
     cfg.theme                         = cfgTheme;
@@ -832,6 +856,14 @@ Reply with only the single word, lowercase, no punctuation.
     }
     const launchRes = await commands.setLaunchAtLogin(cfgLaunchLogin);
     settingsSaveMsg = launchRes.status === 'ok' ? 'Saved.' : 'Error: ' + launchRes.error;
+    if (launchRes.status === 'ok') {
+      logUi('settings-saved', JSON.stringify({
+        hotkey: cfgHotkeyKey,
+        mode: cfgHotkeyMode,
+        backend: cfgBackend,
+        overlay: cfgShowOverlay,
+      }));
+    }
   }
 
   // Measure live chrome (titlebar + bottom bar) in unscaled CSS pixels.
@@ -875,7 +907,7 @@ Reply with only the single word, lowercase, no punctuation.
       commands.loadHistory(),
     ]);
     cfgTheme      = initialCfg.theme        ?? 'auto';
-    cfgHotkeyKey  = initialCfg.hotkey?.key  ?? 'right_option';
+    cfgHotkeyKey  = initialCfg.hotkey?.key  ?? defaultHotkeyKey();
     cfgHotkeyMode = initialCfg.hotkey?.mode ?? 'hold';
     if (savedHistory.length) history = savedHistory;
 
@@ -960,10 +992,12 @@ Reply with only the single word, lowercase, no punctuation.
       recording = true;
       transcribing = false;
       filteredEntry = null; // clear any previous filtered-entry badge
+      logUi('ptt-down');
     }).then(u => unlisteners.push(u));
     listen('ptt-up',           () => {
       recording = false;
       transcribing = true;
+      logUi('ptt-up');
     }).then(u => unlisteners.push(u));
     listen('download-progress', (e) => {
       const { name, pct } = e.payload;
@@ -987,6 +1021,7 @@ Reply with only the single word, lowercase, no punctuation.
       recording = false;
       transcribing = false;
       const text = e.payload;
+      logUi('transcript', text ? `${text.length} chars` : 'empty');
       if (text) {
         // Backend enforces the 50-entry on-disk cap; the frontend keeps the
         // full in-memory list. `await` so save failures surface — the backend
@@ -1002,6 +1037,7 @@ Reply with only the single word, lowercase, no punctuation.
     listen('ui-error', (e) => {
       const id = ++uiErrorId;
       const payload = e.payload || {};
+      logUi('ui-error', `${payload.kind || 'unknown'}: ${payload.message || ''}`);
       uiErrors = [...uiErrors, {
         id,
         kind: payload.kind || 'unknown',
@@ -1019,6 +1055,7 @@ Reply with only the single word, lowercase, no punctuation.
       recording = false;
       transcribing = false;
       const p = e.payload || {};
+      logUi('transcription-rejected', p.reason || 'filtered');
       filteredEntry = { text: p.text || '', reason: p.reason || 'Hallucination detected' };
       const id = ++uiErrorId;
       uiErrors = [...uiErrors, {
@@ -1038,6 +1075,7 @@ Reply with only the single word, lowercase, no punctuation.
       setTimeout(() => { transcriptError = ''; }, 5000);
     }).then(u => unlisteners.push(u));
     listen('paste-miss', (e) => {
+      logUi('paste-miss', String(e.payload ?? ''));
       recording = false;
       transcribing = false;
       transcriptError = e.payload || 'Paste missed — text is in your clipboard.';
@@ -1064,6 +1102,7 @@ Reply with only the single word, lowercase, no punctuation.
       setTimeout(() => { transcriptError = ''; }, 4000);
     }).then(u => unlisteners.push(u));
     listen('recording-discarded', (e) => {
+      logUi('recording-discarded', String(e.payload ?? ''));
       recording = false;
       transcribing = false;
       // empty-final-text: whisper produced only noise/annotations that were
@@ -1074,6 +1113,7 @@ Reply with only the single word, lowercase, no punctuation.
       }
     }).then(u => unlisteners.push(u));
     listen('recording-cancelled', () => {
+      logUi('recording-cancelled');
       // User cancelled mid-recording (Esc, hold-to-cancel, UI cancel, tray
       // click). The hotkey path swallows the matching ptt_up, so without this
       // listener the main window's recording/transcribing flags would stay
@@ -1117,7 +1157,7 @@ Reply with only the single word, lowercase, no punctuation.
     window.addEventListener('focus', onFocus);
     // Initial check — replaces the default `showOnboarding = true` once the
     // backend confirms what's actually granted.
-    recheckReadiness();
+    recheckReadiness().then(() => logUi('app-ready', platform));
     syncAppStateFromBackend();
 
     const onKeydown = (e) => { if (e.key === 'Shift') shiftHeld = true; };
@@ -1966,6 +2006,17 @@ Reply with only the single word, lowercase, no punctuation.
             <button
               onclick={() => { cfgLaunchLogin = !cfgLaunchLogin; saveSettings(); }}
               class="tt-multi-btn" class:tt-multi-on={cfgLaunchLogin}>Automatically launch TurboTalk at login</button>
+          </div>
+          <div class="tt-row tt-row-field" data-tip="Export a text file with config, UI events, and backend logs — attach when reporting Windows/macOS test results">
+            <div class="flex flex-col gap-1.5 w-full">
+              <div class="flex gap-2 w-full">
+                <button onclick={exportTestLog} class="tt-btn flex-1 justify-center">Export test log</button>
+                <button onclick={() => commands.openLogsFolder()} class="tt-btn flex-1 justify-center">Open logs folder</button>
+              </div>
+              {#if diagnosticMsg}
+                <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug">{diagnosticMsg}</p>
+              {/if}
+            </div>
           </div>
           <div class="tt-row tt-row-field" data-tip="Reset settings and history, or check for a newer version">
             <div class="flex gap-2 w-full">

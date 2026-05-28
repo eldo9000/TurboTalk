@@ -7,14 +7,29 @@ pub enum TrayState {
 }
 
 pub fn make_icon(state: TrayState) -> Image<'static> {
-    let size = 44u32; // 44x44 → 22x22 logical at 2x retina
+    // Windows system tray scales icons down aggressively; 32×32 matches the
+    // bundled .ico and avoids the semi-transparent fringe that reads as a blue
+    // square on the Win32 tray compositor.
+    #[cfg(target_os = "windows")]
+    {
+        if matches!(state, TrayState::Idle) {
+            return Image::from_bytes(include_bytes!("../icons/32x32.png"))
+                .expect("embedded 32x32 tray icon");
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    let size = 32u32;
+    #[cfg(not(target_os = "windows"))]
+    let size = 44u32;
+
     let mut px = vec![0u8; (size * size * 4) as usize];
 
-    // Windows system tray doesn't composite alpha-0 pixels as transparent —
-    // they render as the tray background color (appears as a colored square).
-    // Fill a dark pill background so the white TT glyph is always visible.
+    // Windows does not composite alpha-0 as transparent in the notification
+    // area — fringe pixels pick up the tray background (often blue). Start from
+    // an opaque #111 canvas matching the app icon, then paint state on top.
     #[cfg(target_os = "windows")]
-    fill_circle(&mut px, size, 50, 50, 50);
+    fill_opaque(&mut px, size, 17, 17, 17);
 
     match state {
         TrayState::Idle => draw_tt(&mut px, size),
@@ -30,6 +45,15 @@ pub fn make_icon(state: TrayState) -> Image<'static> {
 
 // ── Pixel helpers ─────────────────────────────────────────────────────────────
 // Pixel-buffer plotters take RGBA + position + size — naturally many args.
+
+#[cfg(target_os = "windows")]
+fn fill_opaque(px: &mut [u8], w: u32, r: u8, g: u8, b: u8) {
+    for y in 0..w {
+        for x in 0..w {
+            set(px, w, x, y, r, g, b, 255);
+        }
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 fn set(px: &mut [u8], w: u32, x: u32, y: u32, r: u8, g: u8, b: u8, a: u8) {

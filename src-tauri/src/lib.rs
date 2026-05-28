@@ -14,6 +14,7 @@ pub mod audio;
 pub mod audio_finalizer;
 pub mod cleanup;
 pub mod diagnostics;
+pub mod diagnostic_log;
 pub mod hotkey;
 pub mod ollama;
 pub mod paste;
@@ -1529,6 +1530,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         ollama::ping_ollama,
         ollama::pull_ollama_model,
         diagnostics::run_diagnostics,
+        diagnostic_log::log_client_event,
+        diagnostic_log::export_diagnostic_report,
+        diagnostic_log::open_logs_folder,
         permissions::check_readiness,
         permissions::request_microphone_permission,
         permissions::request_input_monitoring_permission,
@@ -1544,10 +1548,22 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let file_appender = tracing_appender::rolling::never("/tmp", "turbotalk-bench.log");
+    let _ = diagnostic_log::ensure_log_dir();
+    let log_path = diagnostic_log::log_file_path();
+    let log_dir = log_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(diagnostic_log::log_dir);
+    let log_name = log_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("turbotalk.log");
+    let file_appender = tracing_appender::rolling::never(log_dir, log_name);
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-    let filter = tracing_subscriber::EnvFilter::new("turbotalk_lib=info,warn");
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new("turbotalk_lib=debug,warn")
+    });
     tracing_subscriber::registry()
         .with(filter)
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
@@ -1557,6 +1573,12 @@ pub fn run() {
                 .with_ansi(false),
         )
         .init();
+
+    tracing::info!(
+        "[startup] TurboTalk v{} logging to {}",
+        env!("CARGO_PKG_VERSION"),
+        log_path.display()
+    );
 
     // ── Typed Rust↔TS contract ─────────────────────────────────────────────
     // Every command crossing the IPC boundary that the frontend talks to is
@@ -1614,6 +1636,9 @@ pub fn run() {
             ollama::ping_ollama,
             ollama::pull_ollama_model,
             diagnostics::run_diagnostics,
+            diagnostic_log::log_client_event,
+            diagnostic_log::export_diagnostic_report,
+            diagnostic_log::open_logs_folder,
             permissions::check_readiness,
             permissions::request_microphone_permission,
             permissions::request_input_monitoring_permission,

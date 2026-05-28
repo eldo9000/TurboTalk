@@ -132,6 +132,9 @@ export const commands = {
 	 */
 	pullOllamaModel: (modelName: string) => typedError<null, string>(__TAURI_INVOKE("pull_ollama_model", { modelName })),
 	runDiagnostics: () => __TAURI_INVOKE<DiagnosticsResult>("run_diagnostics"),
+	logClientEvent: (event: string, detail: string | null) => typedError<null, string>(__TAURI_INVOKE("log_client_event", { event, detail })),
+	exportDiagnosticReport: () => typedError<ExportDiagnosticResult, string>(__TAURI_INVOKE("export_diagnostic_report")),
+	openLogsFolder: () => typedError<null, string>(__TAURI_INVOKE("open_logs_folder")),
 	checkReadiness: () => __TAURI_INVOKE<Readiness>("check_readiness"),
 	/**
 	 *  Trigger the native macOS microphone prompt. Resolves to the new status
@@ -352,6 +355,13 @@ export type DiagnosticsResult = {
 	ollama_status: string,
 	// "supported" on macOS; "unsupported" on other platforms.
 	paste_capability: string,
+};
+
+export type ExportDiagnosticResult = {
+	// Absolute path to the bundled report file.
+	report_path: string,
+	// Absolute path to the live session log (also embedded in the report).
+	log_path: string,
 };
 
 export type HistoryEntry = {

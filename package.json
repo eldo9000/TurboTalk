@@ -8,11 +8,12 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "gen-icons": "python3 src-tauri/icons/gen_icons.py",
     "preflight": "node scripts/preflight.mjs",
     "fetch-sidecars": "node scripts/fetch-sidecars.mjs",
     "fetch-vad-model": "node scripts/fetch-vad-model.mjs",
     "refresh-whisper-server": "node scripts/refresh-whisper-server.mjs",
-    "package": "npm run fetch-vad-model && npm run preflight && tauri build && node scripts/verify-macos-bundle.mjs && node scripts/rename-artifact.mjs",
+    "package": "npm run fetch-vad-model && npm run gen-icons && npm run preflight && tauri build && node scripts/verify-macos-bundle.mjs && node scripts/rename-artifact.mjs",
     "bump-version": "node scripts/bump-version.mjs",
     "typecheck": "tsc --noEmit"
   },

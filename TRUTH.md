@@ -108,9 +108,9 @@ Model lineup: Recommended = `ggml-large-v3-turbo` (1.6 GB) · Small = `ggml-larg
 
 ## What is explicitly not working
 
-- Windows hotkey — `rdev` `WH_KEYBOARD_LL` hook installs but captures no events in UTM/QEMU (x64-emulated on ARM64 + virtio keyboard bypasses Win32 low-level hook chain). Untested on real Windows hardware. TASK-25.
+- Windows hotkey — default was Right Option (AltGr), which most US keyboards lack; fixed to Right Control + hold mode with full left/right modifier and numpad mapping. Auto-migrates existing configs. Awaiting real-hardware retest. TASK-25.
 - Windows paste — unreachable without working hotkey; arboard+enigo impl in place, untested. TASK-26.
-- Windows tray icon — renders as transparent/invisible blue square; no TT glyph. Cosmetic.
+- Windows app/tray icons — `icon.ico` was stale Tauri default (solid blue); regen from `gen_icons.py` now runs before every package build. Tray idle icon loads embedded `32x32.png` on Windows.
 - Windows onboarding flag — welcome screen re-triggers on every restart; "onboarding complete" state not persisting correctly on Windows config path.
 - Linux Whisper sidecar — upstream ships no Linux binary; Linux excluded from release matrix.
 - Developer ID codesigning / notarization is intentionally deferred for v0.8.

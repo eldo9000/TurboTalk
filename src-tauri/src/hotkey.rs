@@ -1144,16 +1144,34 @@ mod imp {
             .unwrap_or(false)
     }
 
-    /// Map config key names (shared with macOS) to `rdev::Key` variants.
-    /// The default (and the only canonical TurboTalk key) is `right_option`,
-    /// which on Windows/Linux is the Right Alt key — `rdev::Key::AltGr`.
-    fn key_for_name(name: &str) -> rdev::Key {
+    /// Map config key names (shared with the Settings UI) to `rdev::Key` variants.
+    ///
+    /// macOS uses Right Option (⌥) as the canonical PTT key; on Windows that maps
+    /// to VK_RMENU (`Key::AltGr`), which many US-layout keyboards lack as a
+    /// distinct physical key. Windows defaults to Right Control instead — see
+    /// `HotkeyConfig::default` and `migrate_platform_defaults`.
+    fn key_for_name(name: &str) -> Option<rdev::Key> {
+        use rdev::Key;
         match name {
-            "right_control" => rdev::Key::ControlRight,
-            "right_command" => rdev::Key::MetaRight,
-            "right_shift" => rdev::Key::ShiftRight,
-            // "right_option" or anything unknown → Right Alt (AltGr on Win/X11).
-            _ => rdev::Key::AltGr,
+            "left_control" => Some(Key::ControlLeft),
+            "right_control" => Some(Key::ControlRight),
+            "left_command" => Some(Key::MetaLeft),
+            "right_command" => Some(Key::MetaRight),
+            "left_shift" => Some(Key::ShiftLeft),
+            "right_shift" => Some(Key::ShiftRight),
+            // Option (macOS) ≡ Alt (Win/X11). Left vs right are distinct VK codes.
+            "left_option" => Some(Key::Alt),
+            "right_option" => Some(Key::AltGr),
+            "numpad_enter" => Some(Key::KpReturn),
+            "numpad_0" => Some(Key::Kp0),
+            "numpad_decimal" => Some(Key::KpDelete),
+            "numpad_add" => Some(Key::KpPlus),
+            "numpad_subtract" => Some(Key::KpMinus),
+            "numpad_multiply" => Some(Key::KpMultiply),
+            unknown => {
+                tracing::warn!("[hotkey] unknown hotkey key {:?} — no rdev mapping", unknown);
+                None
+            }
         }
     }
 
@@ -1196,6 +1214,13 @@ mod imp {
         let app_for_error = app.clone();
 
         std::thread::spawn(move || {
+            let hk = hotkey_state.read();
+            tracing::info!(
+                "[hotkey] rdev listener starting — key={} mode={}",
+                hk.key,
+                hk.mode
+            );
+
             // Track the current logical hotkey state so we don't double-fire on
             // OS auto-repeat (Windows in particular re-emits KeyPress while the
             // key is held). `rdev` does not deduplicate.
@@ -1222,6 +1247,9 @@ mod imp {
                         hk.cancel_on_esc,
                         hk.cancel_on_hold,
                     )
+                };
+                let Some(target_key) = target_key else {
+                    return;
                 };
 
                 // Escape → cancel any in-flight recording. We act only when

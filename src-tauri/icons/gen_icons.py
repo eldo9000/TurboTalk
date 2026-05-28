@@ -9,19 +9,34 @@ def _chunk(tag, data):
     crc = zlib.crc32(tag + data) & 0xFFFFFFFF
     return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', crc)
 
-def write_png(path, size, pixels):
-    """Write RGBA pixel list (size*size*4 bytes) as PNG."""
+def make_png_bytes(size, pixels):
+    """Return PNG file bytes for RGBA pixel buffer."""
     raw = b''
     for y in range(size):
         raw += b'\x00'
         base = y * size * 4
         raw += bytes(pixels[base:base + size * 4])
-    png = (b'\x89PNG\r\n\x1a\n'
-           + _chunk(b'IHDR', struct.pack('>II', size, size) + bytes([8, 6, 0, 0, 0]))
-           + _chunk(b'IDAT', zlib.compress(raw, 9))
-           + _chunk(b'IEND', b''))
+    return (b'\x89PNG\r\n\x1a\n'
+            + _chunk(b'IHDR', struct.pack('>II', size, size) + bytes([8, 6, 0, 0, 0]))
+            + _chunk(b'IDAT', zlib.compress(raw, 9))
+            + _chunk(b'IEND', b''))
+
+def write_ico(path, sizes):
+    """Write a multi-size .ico with embedded PNG payloads (Windows Vista+)."""
+    pngs = [make_png_bytes(s, make_icon(s)) for s in sizes]
+    header = struct.pack('<HHH', 0, 1, len(pngs))
+    dir_size = 16 * len(pngs)
+    offset = 6 + dir_size
+    directory = b''
+    payload = b''
+    for size, png in zip(sizes, pngs):
+        dim = 0 if size >= 256 else size
+        directory += struct.pack('<BBBBHHII', dim, dim, 0, 0, 1, 32, len(png), offset)
+        payload += png
+        offset += len(png)
     with open(path, 'wb') as f:
-        f.write(png)
+        f.write(header + directory + payload)
+
 
 # ── Pixel helpers ─────────────────────────────────────────────────────────────
 
@@ -81,6 +96,11 @@ def make_icon(size):
     _draw_t(px, size, ox + lw + gap, oy, lw, lh, bar_h, stem_w)
     return px
 
+def write_png(path, size, pixels):
+    """Write RGBA pixel list (size*size*4 bytes) as PNG."""
+    with open(path, 'wb') as f:
+        f.write(make_png_bytes(size, pixels))
+
 # ── Emit all sizes ────────────────────────────────────────────────────────────
 
 SIZES = {
@@ -95,3 +115,8 @@ for name, size in SIZES.items():
     path = os.path.join(script_dir, name)
     write_png(path, size, make_icon(size))
     print(f'  {name}  ({size}×{size})')
+
+ico_path = os.path.join(script_dir, 'icon.ico')
+ICO_SIZES = [16, 32, 48, 64, 128, 256]
+write_ico(ico_path, ICO_SIZES)
+print(f'  icon.ico  ({", ".join(str(s) for s in ICO_SIZES)})')

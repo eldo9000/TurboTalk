@@ -1,15 +1,15 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-05-28  
-**Current state:** macOS dictation is feature-complete for personal use. Latest commit `88a26b8`: overlay dismisses on transcription-rejected (fixes stuck Transcribing pill). Prior `1124d4a`: onboarding drag-during-download fix.
+**Last updated:** 2026-05-26  
+**Current state:** macOS dictation feature-complete. Windows hotkey fix landed locally: default Right Control + hold mode, full rdev key mapping, auto-migration from macOS-style `right_option`. Awaiting user retest on real Windows hardware.
 
-**Next action:** User-retest Windows onboarding Parakeet download buttons. Optional: tail-rejection discarding valid streaming segments.
+**Next action:** Windows test with **Export test log** (Settings → System): flip controls, exercise PTT/hotkey/paste, export report, attach file.
 
 ## Open backlog
 
 | Item | Status |
 |------|--------|
-| TASK-25/26 — Windows hotkey + paste | Stub on Windows; real hardware test pending |
+| TASK-25/26 — Windows hotkey + paste | Hotkey fix ready for retest; paste still unproven E2E |
 | TASK-48 — CoreML / Neural Engine | Phase 1 built; phase 2 blocked on dyld-init hang — mitigated via Metal-only default + preflight guard |
 | Developer ID signing + notarization | Deferred until credentials available |
 | Parakeet v3 multilingual | In catalog; end-to-end not user-confirmed |

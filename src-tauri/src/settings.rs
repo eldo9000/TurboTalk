@@ -270,13 +270,38 @@ pub struct HotkeyConfig {
 
 impl Default for HotkeyConfig {
     fn default() -> Self {
+        #[cfg(target_os = "macos")]
+        let key = "right_option";
+        #[cfg(not(target_os = "macos"))]
+        let key = "right_control";
+
         Self {
-            key: "right_option".into(),
-            mode: "toggle".into(),
+            key: key.into(),
+            mode: "hold".into(),
             cancel_on_esc: true,
             cancel_on_hold: true,
         }
     }
+}
+
+/// One-time platform fixes for hotkey config saved on another OS or from an
+/// older default. Returns `true` when `cfg` was modified (caller may persist).
+#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+pub fn migrate_platform_defaults(cfg: &mut Config) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        // macOS default (right_option → AltGr) is a poor fit for typical US
+        // Windows keyboards — Right Control is the standard PTT modifier.
+        if cfg.hotkey.key == "right_option" {
+            tracing::info!(
+                "[settings] Windows: migrating hotkey right_option → right_control"
+            );
+            cfg.hotkey.key = "right_control".into();
+            return true;
+        }
+    }
+
+    false
 }
 
 impl Default for Config {
@@ -328,8 +353,12 @@ pub fn filter_history_by_policy(entries: Vec<HistoryEntry>, policy: &str) -> Vec
 }
 
 pub(crate) fn config_path() -> PathBuf {
+    data_dir().join("config.toml")
+}
+
+pub fn data_dir() -> PathBuf {
     let mut p = dirs::home_dir().unwrap_or_default();
-    p.push(".config/librewin/turbotalk/config.toml");
+    p.push(".config/librewin/turbotalk");
     p
 }
 
@@ -487,11 +516,16 @@ pub fn load_detailed() -> LoadConfigResult {
 
     // First attempt: strict parse.
     let strict_err = match toml::from_str::<Config>(&contents) {
-        Ok(cfg) => {
+        Ok(mut cfg) => {
+            if migrate_platform_defaults(&mut cfg) {
+                if let Err(e) = save(&cfg) {
+                    tracing::warn!("[settings] failed to persist platform migration: {e}");
+                }
+            }
             return LoadConfigResult {
                 config: cfg,
                 parse_error: None,
-            }
+            };
         }
         Err(e) => {
             tracing::warn!(
@@ -514,7 +548,12 @@ pub fn load_detailed() -> LoadConfigResult {
                 table.remove("cleanup");
             }
         }
-        if let Ok(cfg) = value.try_into::<Config>() {
+        if let Ok(mut cfg) = value.try_into::<Config>() {
+            if migrate_platform_defaults(&mut cfg) {
+                if let Err(e) = save(&cfg) {
+                    tracing::warn!("[settings] failed to persist platform migration: {e}");
+                }
+            }
             // Recovery succeeded — surface the original strict-parse error so
             // the user knows the cleanup section was reset.
             return LoadConfigResult {
