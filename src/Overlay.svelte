@@ -109,6 +109,14 @@
     }
   }
 
+  function stopTranscribing(nextMode = 'idle') {
+    clearInterval(transcribeTimer);
+    transcribeTimer = null;
+    resetElapsed();
+    mode = nextMode;
+    draw();
+  }
+
   onMount(async () => {
     const win = getCurrentWindow();
     const dpr = window.devicePixelRatio || 1;
@@ -176,10 +184,7 @@
     }).then(u => uns.push(u));
 
     listen('ptt-arm-failed', () => {
-      clearInterval(transcribeTimer);
-      resetElapsed();
-      mode = 'error';
-      draw();
+      stopTranscribing('error');
       setTimeout(() => { mode = 'idle'; }, 2500);
     }).then(u => uns.push(u));
 
@@ -206,52 +211,49 @@
     }).then(u => uns.push(u));
 
     listen('transcript', () => {
-      clearInterval(transcribeTimer);
-      setTimeout(() => { resetElapsed(); mode = 'idle'; }, 350);
+      setTimeout(() => { stopTranscribing('idle'); }, 350);
+    }).then(u => uns.push(u));
+
+    listen('transcription-rejected', () => {
+      stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     listen('transcript-error', () => {
-      clearInterval(transcribeTimer);
-      resetElapsed();
-      mode = 'error';
-      draw();
+      stopTranscribing('error');
       setTimeout(() => { mode = 'idle'; }, 2500);
     }).then(u => uns.push(u));
 
     listen('recording-discarded', () => {
-      clearInterval(transcribeTimer);
-      resetElapsed();
-      mode = 'idle';
-      draw();
+      stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     listen('recording-cancelled', () => {
-      clearInterval(transcribeTimer);
-      resetElapsed();
-      mode = 'idle';
-      draw();
+      stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     listen('recording-too-short', () => {
-      clearInterval(transcribeTimer);
-      resetElapsed();
-      mode = 'idle';
-      draw();
+      stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     listen('device-lost', () => {
-      clearInterval(transcribeTimer);
-      resetElapsed();
-      mode = 'idle';
-      draw();
+      stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     listen('paste-error', () => {
-      clearInterval(transcribeTimer);
-      resetElapsed();
-      mode = 'error';
-      draw();
+      stopTranscribing('error');
       setTimeout(() => { mode = 'idle'; }, 2500);
+    }).then(u => uns.push(u));
+
+    listen('paste-miss', () => {
+      // transcript usually clears us first; this covers any ordering edge case.
+      if (mode === 'transcribing') stopTranscribing('idle');
+    }).then(u => uns.push(u));
+
+    // Belt-and-suspenders: backend always emits stage=ready when a job ends.
+    listen('dictation-stage', (e) => {
+      if (e.payload?.stage === 'ready' && mode === 'transcribing') {
+        stopTranscribing('idle');
+      }
     }).then(u => uns.push(u));
 
     listen('audio-level', (e) => {

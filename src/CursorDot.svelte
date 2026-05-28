@@ -8,8 +8,8 @@
   onMount(() => {
     const uns = [];
     const reset = [
-      'transcript', 'transcript-error', 'recording-discarded',
-      'recording-cancelled', 'recording-too-short', 'device-lost', 'paste-error',
+      'transcript', 'transcript-error', 'transcription-rejected', 'recording-discarded',
+      'recording-cancelled', 'recording-too-short', 'device-lost', 'paste-error', 'paste-miss',
     ];
 
     listen('ptt-down',  () => { phase = 'recording';    }).then(u => uns.push(u));
