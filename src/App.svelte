@@ -494,7 +494,13 @@ Reply with only the single word, lowercase, no punctuation.
     const targetH = Math.ceil(h * zoom) + WINDOW_SIZE_SLACK;
     if (targetW === lastWindowSize.w && targetH === lastWindowSize.h) return;
     lastWindowSize = { w: targetW, h: targetH };
-    getCurrentWindow().setSize(new LogicalSize(targetW, targetH));
+    getCurrentWindow().setSize(new LogicalSize(targetW, targetH)).then(() => {
+      // Repin after the shell reports the new outer size so Settings/Models
+      // tab height changes stay inside the desktop work area (Windows taskbar).
+      requestAnimationFrame(() => {
+        commands.repinMainWindow(targetW);
+      });
+    });
   });
 
   // ── Zoom ──────────────────────────────────────────────────────────────────

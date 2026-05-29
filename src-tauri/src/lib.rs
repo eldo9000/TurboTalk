@@ -1388,39 +1388,74 @@ const ADV_WIN_W_BASE: f64 = 880.0;
 #[cfg(target_os = "macos")]
 const CORNER_TOP_OFFSET: f64 = 24.0;
 
+/// Inset from the monitor work area on Windows/Linux (excludes taskbar/dock).
+#[cfg(not(target_os = "macos"))]
+const WORK_AREA_MARGIN: f64 = 8.0;
+
+/// Resolve the monitor under the cursor, falling back to the window's monitor.
+fn monitor_for_cursor(app: &tauri::AppHandle, win: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
+    if let Some(c) = app.cursor_position().ok() {
+        if let Ok(Some(m)) = win.monitor_from_point(c.x, c.y) {
+            return Some(m);
+        }
+    }
+    win.current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| win.primary_monitor().ok().flatten())
+}
+
 /// Compute the x that places the window's right edge at `monitor_right - adv_width`
 /// so in advanced mode (window = adv_width) it snaps flush, and in normal mode it floats.
-/// Returns (x, y). For y: macOS top-right, Windows bottom-right.
+/// Returns (x, y). macOS: top-right under the menu bar. Windows/Linux: top-right inside
+/// the work area (above the taskbar), sliding up when the window is taller than fits.
 fn corner_xy(
     win: &tauri::WebviewWindow,
     monitor: &tauri::Monitor,
     adv_width: f64,
 ) -> (f64, f64) {
     let scale = monitor.scale_factor();
-    let mp = monitor.position();
-    let ms = monitor.size();
-    let mon_x = mp.x as f64;
-    let mon_y = mp.y as f64;
-    let mon_w = ms.width as f64 / scale;
-    let mon_h = ms.height as f64 / scale;
-
-    let x = mon_x + mon_w - adv_width;
 
     #[cfg(target_os = "macos")]
-    let y = {
-        let _ = (mon_h, win);
-        mon_y + CORNER_TOP_OFFSET
-    };
+    {
+        let _ = win;
+        let mp = monitor.position();
+        let ms = monitor.size();
+        let mon_x = mp.x as f64;
+        let mon_y = mp.y as f64;
+        let mon_w = ms.width as f64 / scale;
+        let x = mon_x + mon_w - adv_width;
+        let y = mon_y + CORNER_TOP_OFFSET;
+        (x, y)
+    }
+
     #[cfg(not(target_os = "macos"))]
-    let y = {
+    {
+        let wa = monitor.work_area();
+        let work_x = wa.position.x as f64 / scale;
+        let work_y = wa.position.y as f64 / scale;
+        let work_w = wa.size.width as f64 / scale;
+        let work_h = wa.size.height as f64 / scale;
+
         let win_h = win
             .outer_size()
             .map(|s| s.height as f64 / scale)
             .unwrap_or(280.0);
-        mon_y + mon_h - win_h
-    };
 
-    (x, y)
+        let x = (work_x + work_w - adv_width).max(work_x + WORK_AREA_MARGIN);
+
+        // Top-anchor (same growth direction as macOS). If the window is taller than
+        // the work area, slide it up so the bottom stays above the taskbar.
+        let top = work_y + WORK_AREA_MARGIN;
+        let max_bottom = work_y + work_h - WORK_AREA_MARGIN;
+        let y = if top + win_h > max_bottom {
+            (max_bottom - win_h).max(top)
+        } else {
+            top
+        };
+
+        (x, y)
+    }
 }
 
 /// Pin the main window to the corner on the monitor containing the cursor.
@@ -1434,41 +1469,9 @@ fn position_main_window_inner(
 ) {
     use tauri::LogicalPosition;
 
-    let primary_scale = win
-        .primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| m.scale_factor())
-        .unwrap_or(1.0);
-
-    let cursor = app.cursor_position().ok();
-    let (cx, cy) = match cursor {
-        #[cfg(target_os = "macos")]
-        Some(c) => (c.x / primary_scale, c.y / primary_scale),
-        #[cfg(not(target_os = "macos"))]
-        Some(c) => (c.x, c.y),
-        None => (f64::NAN, f64::NAN),
+    let Some(monitor) = monitor_for_cursor(app, win) else {
+        return;
     };
-
-    let monitors = win.available_monitors().ok().unwrap_or_default();
-    let monitor = monitors
-        .iter()
-        .find(|m| {
-            if cx.is_nan() {
-                return false;
-            }
-            let p = m.position();
-            let s = m.size();
-            let scale = m.scale_factor();
-            let lw = s.width as f64 / scale;
-            let lh = s.height as f64 / scale;
-            cx >= p.x as f64 && cx < p.x as f64 + lw && cy >= p.y as f64 && cy < p.y as f64 + lh
-        })
-        .cloned()
-        .or_else(|| win.current_monitor().ok().flatten())
-        .or_else(|| win.primary_monitor().ok().flatten());
-
-    let Some(monitor) = monitor else { return };
     let (x, y) = corner_xy(win, &monitor, adv_width);
     let _ = win.set_position(LogicalPosition::new(x, y));
 }
@@ -1479,23 +1482,16 @@ fn position_main_window(app: &tauri::AppHandle, win: &tauri::WebviewWindow) {
 
 
 /// Called from the frontend after every `setSize`.
-/// `adv_width` is the *zoomed* advanced window width (e.g. 1100 at 125% zoom).
-/// Fixes x so the right edge stays flush regardless of zoom level.
+/// `adv_width` is the *zoomed* window width (e.g. 1100 at 125% zoom in Chaperone mode).
+/// Re-pins x/y so the right edge stays flush and the window stays inside the work area.
 #[tauri::command]
 #[specta::specta]
 fn repin_main_window(app: tauri::AppHandle, adv_width: f64) {
-    use tauri::{LogicalPosition, Manager};
+    use tauri::Manager;
     let Some(win) = app.get_webview_window("main") else {
         return;
     };
-    let monitor = win
-        .current_monitor()
-        .ok()
-        .flatten()
-        .or_else(|| win.primary_monitor().ok().flatten());
-    let Some(monitor) = monitor else { return };
-    let (x, y) = corner_xy(&win, &monitor, adv_width);
-    let _ = win.set_position(LogicalPosition::new(x, y));
+    position_main_window_inner(&app, &win, adv_width);
 }
 
 /// Build the tauri-specta type-export descriptor. Lives in its own function
