@@ -313,10 +313,11 @@ impl TranscriptionBackend for ParakeetBackend {
         let rejection = crate::transcribe::detect_garbage(&text);
 
         tracing::info!(
-            "[parakeet] transcribed: {:?} (rejection={:?})",
-            text,
+            "[parakeet] transcribed ({} chars, rejection={:?})",
+            text.chars().count(),
             rejection
         );
+        crate::diagnostic_log::record_transcript("parakeet", &text, &format!("{rejection:?}"));
 
         Ok(TranscriptOutcome { text, rejection })
     }

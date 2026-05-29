@@ -465,6 +465,66 @@ fn delete_model_file(path: String) -> Result<bool, String> {
     Ok(true)
 }
 
+/// Delete an ONNX model bundle directory for Moonshine or Parakeet.
+///
+/// `family` is "moonshine" or "parakeet"; `variant` is the variant slug
+/// (e.g. "tiny", "tdt-0.6b-v2"). Clears `backend_variant` when the removed
+/// bundle was the active selection. Returns `Ok(true)` when a directory was
+/// removed, `Ok(false)` when it was already gone.
+#[tauri::command]
+#[specta::specta]
+fn delete_backend_model(family: String, variant: String) -> Result<bool, String> {
+    use crate::settings::BackendFamily;
+
+    let (dir, base) = match family.to_lowercase().as_str() {
+        "moonshine" => (
+            crate::transcribe_backends::moonshine::variant_dir(&variant),
+            crate::transcribe_backends::moonshine::moonshine_models_dir(),
+        ),
+        "parakeet" => (
+            crate::transcribe_backends::parakeet::variant_dir(&variant),
+            crate::transcribe_backends::parakeet::parakeet_models_dir(),
+        ),
+        other => return Err(format!("unsupported backend family {:?}", other)),
+    };
+
+    let Some(dir) = dir else {
+        return Ok(false);
+    };
+    if !dir.exists() {
+        return Ok(false);
+    }
+
+    let Some(base) = base else {
+        return Ok(false);
+    };
+    let canon = dir.canonicalize().map_err(|e| format!("path error: {}", e))?;
+    let canon_base = base
+        .canonicalize()
+        .unwrap_or(base);
+    if !canon.starts_with(&canon_base) {
+        return Err("refusing to delete path outside the models directory".into());
+    }
+
+    std::fs::remove_dir_all(&canon).map_err(|e| format!("delete failed: {}", e))?;
+    tracing::info!("[models] deleted backend bundle {}", canon.display());
+
+    let mut cfg = settings::load();
+    if cfg.backend_variant == variant {
+        match cfg.backend {
+            BackendFamily::Moonshine | BackendFamily::Parakeet => {
+                cfg.backend_variant.clear();
+                settings::save(&cfg).map_err(|e| format!("failed to save config: {}", e))?;
+                settings::update_cache(&cfg);
+            }
+            _ => {}
+        }
+    }
+
+    transcribe::invalidate_worker();
+    Ok(true)
+}
+
 #[tauri::command]
 #[specta::specta]
 fn load_history(app: tauri::AppHandle) -> Vec<settings::HistoryEntry> {
@@ -1380,120 +1440,6 @@ use tauri::{
     Emitter, Manager, RunEvent, WindowEvent,
 };
 
-/// Unzoomed advanced-mode width (WINDOW_W * 2 in the frontend).
-/// Used as the default anchor when zoom is unknown (tray click before frontend loads).
-const ADV_WIN_W_BASE: f64 = 880.0;
-
-/// macOS menu bar clearance so the titlebar isn't tucked under it.
-#[cfg(target_os = "macos")]
-const CORNER_TOP_OFFSET: f64 = 24.0;
-
-/// Inset from the monitor work area on Windows/Linux (excludes taskbar/dock).
-#[cfg(not(target_os = "macos"))]
-const WORK_AREA_MARGIN: f64 = 8.0;
-
-/// Resolve the monitor under the cursor, falling back to the window's monitor.
-fn monitor_for_cursor(app: &tauri::AppHandle, win: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
-    if let Some(c) = app.cursor_position().ok() {
-        if let Ok(Some(m)) = win.monitor_from_point(c.x, c.y) {
-            return Some(m);
-        }
-    }
-    win.current_monitor()
-        .ok()
-        .flatten()
-        .or_else(|| win.primary_monitor().ok().flatten())
-}
-
-/// Compute the x that places the window's right edge at `monitor_right - adv_width`
-/// so in advanced mode (window = adv_width) it snaps flush, and in normal mode it floats.
-/// Returns (x, y). macOS: top-right under the menu bar. Windows/Linux: top-right inside
-/// the work area (above the taskbar), sliding up when the window is taller than fits.
-fn corner_xy(
-    win: &tauri::WebviewWindow,
-    monitor: &tauri::Monitor,
-    adv_width: f64,
-) -> (f64, f64) {
-    let scale = monitor.scale_factor();
-
-    #[cfg(target_os = "macos")]
-    {
-        let _ = win;
-        let mp = monitor.position();
-        let ms = monitor.size();
-        let mon_x = mp.x as f64;
-        let mon_y = mp.y as f64;
-        let mon_w = ms.width as f64 / scale;
-        let x = mon_x + mon_w - adv_width;
-        let y = mon_y + CORNER_TOP_OFFSET;
-        (x, y)
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let wa = monitor.work_area();
-        let work_x = wa.position.x as f64 / scale;
-        let work_y = wa.position.y as f64 / scale;
-        let work_w = wa.size.width as f64 / scale;
-        let work_h = wa.size.height as f64 / scale;
-
-        let win_h = win
-            .outer_size()
-            .map(|s| s.height as f64 / scale)
-            .unwrap_or(280.0);
-
-        let x = (work_x + work_w - adv_width).max(work_x + WORK_AREA_MARGIN);
-
-        // Top-anchor (same growth direction as macOS). If the window is taller than
-        // the work area, slide it up so the bottom stays above the taskbar.
-        let top = work_y + WORK_AREA_MARGIN;
-        let max_bottom = work_y + work_h - WORK_AREA_MARGIN;
-        let y = if top + win_h > max_bottom {
-            (max_bottom - win_h).max(top)
-        } else {
-            top
-        };
-
-        (x, y)
-    }
-}
-
-/// Pin the main window to the corner on the monitor containing the cursor.
-/// Uses `adv_width` as the anchor width — the right edge of the monitor minus
-/// adv_width is the fixed x position, so the window snaps flush when it reaches
-/// that width and floats otherwise.
-fn position_main_window_inner(
-    app: &tauri::AppHandle,
-    win: &tauri::WebviewWindow,
-    adv_width: f64,
-) {
-    use tauri::LogicalPosition;
-
-    let Some(monitor) = monitor_for_cursor(app, win) else {
-        return;
-    };
-    let (x, y) = corner_xy(win, &monitor, adv_width);
-    let _ = win.set_position(LogicalPosition::new(x, y));
-}
-
-fn position_main_window(app: &tauri::AppHandle, win: &tauri::WebviewWindow) {
-    position_main_window_inner(app, win, ADV_WIN_W_BASE);
-}
-
-
-/// Called from the frontend after every `setSize`.
-/// `adv_width` is the *zoomed* window width (e.g. 1100 at 125% zoom in Chaperone mode).
-/// Re-pins x/y so the right edge stays flush and the window stays inside the work area.
-#[tauri::command]
-#[specta::specta]
-fn repin_main_window(app: tauri::AppHandle, adv_width: f64) {
-    use tauri::Manager;
-    let Some(win) = app.get_webview_window("main") else {
-        return;
-    };
-    position_main_window_inner(&app, &win, adv_width);
-}
-
 /// Build the tauri-specta type-export descriptor. Lives in its own function
 /// so the `#[test]` regenerator below can call it without standing up the
 /// full Tauri runtime.
@@ -1514,6 +1460,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         download_moonshine_model,
         download_parakeet_model,
         delete_model_file,
+        delete_backend_model,
         load_history,
         save_history,
         copy_history_item,
@@ -1528,6 +1475,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         diagnostics::run_diagnostics,
         diagnostic_log::log_client_event,
         diagnostic_log::export_diagnostic_report,
+        diagnostic_log::submit_bug_report,
         diagnostic_log::open_logs_folder,
         permissions::check_readiness,
         permissions::request_microphone_permission,
@@ -1538,29 +1486,61 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         permissions::reset_onboarding,
         permissions::clear_force_onboarding,
         permissions::reset_tcc_entry,
-        repin_main_window,
     ])
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = diagnostic_log::ensure_log_dir();
-    let log_path = diagnostic_log::log_file_path();
-    let log_dir = log_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(diagnostic_log::log_dir);
-    let log_name = log_path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("turbotalk.log");
-    let file_appender = tracing_appender::rolling::never(log_dir, log_name);
-    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-    // Keep the non-blocking writer alive for the process lifetime so logs flush.
-    static LOG_GUARD: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
-        std::sync::OnceLock::new();
-    let _ = LOG_GUARD.set(guard);
-    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+    let log_dir = diagnostic_log::log_dir();
+
+    use tracing_appender::rolling::{RollingFileAppender, Rotation};
+    // Full session log: one file per day (`turbotalk.YYYY-MM-DD.log`), keeping
+    // ~2 weeks so the directory can't grow without bound on a daily driver.
+    let main_appender = RollingFileAppender::builder()
+        .rotation(Rotation::DAILY)
+        .filename_prefix(diagnostic_log::MAIN_LOG_PREFIX)
+        .filename_suffix(diagnostic_log::LOG_SUFFIX)
+        .max_log_files(14)
+        .build(&log_dir)
+        .expect("init main log appender");
+    let (main_nb, main_guard) = tracing_appender::non_blocking(main_appender);
+
+    // Errors-only log: WARN+ERROR across all targets, retained longer so a
+    // "what broke over the last week/month" query reads one short file.
+    let error_appender = RollingFileAppender::builder()
+        .rotation(Rotation::DAILY)
+        .filename_prefix(diagnostic_log::ERROR_LOG_PREFIX)
+        .filename_suffix(diagnostic_log::LOG_SUFFIX)
+        .max_log_files(60)
+        .build(&log_dir)
+        .expect("init error log appender");
+    let (error_nb, error_guard) = tracing_appender::non_blocking(error_appender);
+
+    // Transcript debug log: a dedicated, local-only sink kept off the tracing
+    // pipeline entirely (see diagnostic_log::TRANSCRIPT_LOG_PREFIX). TEMPORARY —
+    // used to chase transcription quirks; never included in uploaded reports.
+    let transcript_appender = RollingFileAppender::builder()
+        .rotation(Rotation::DAILY)
+        .filename_prefix(diagnostic_log::TRANSCRIPT_LOG_PREFIX)
+        .filename_suffix(diagnostic_log::LOG_SUFFIX)
+        .max_log_files(14)
+        .build(&log_dir)
+        .expect("init transcript log appender");
+    let (transcript_nb, transcript_guard) = tracing_appender::non_blocking(transcript_appender);
+    diagnostic_log::init_transcript_writer(transcript_nb);
+
+    // Keep all non-blocking writers alive for the process lifetime so logs flush.
+    static LOG_GUARDS: std::sync::OnceLock<(
+        tracing_appender::non_blocking::WorkerGuard,
+        tracing_appender::non_blocking::WorkerGuard,
+        tracing_appender::non_blocking::WorkerGuard,
+    )> = std::sync::OnceLock::new();
+    let _ = LOG_GUARDS.set((main_guard, error_guard, transcript_guard));
+
+    use tracing_subscriber::{
+        filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt, Layer,
+    };
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         tracing_subscriber::EnvFilter::new("turbotalk_lib=debug,warn")
     });
@@ -1569,15 +1549,21 @@ pub fn run() {
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .with(
             tracing_subscriber::fmt::layer()
-                .with_writer(non_blocking)
+                .with_writer(main_nb)
                 .with_ansi(false),
+        )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(error_nb)
+                .with_ansi(false)
+                .with_filter(LevelFilter::WARN),
         )
         .init();
 
     tracing::info!(
         "[startup] TurboTalk v{} logging to {}",
         env!("CARGO_PKG_VERSION"),
-        log_path.display()
+        log_dir.display()
     );
 
     // ── Typed Rust↔TS contract ─────────────────────────────────────────────
@@ -1624,6 +1610,7 @@ pub fn run() {
             download_moonshine_model,
             download_parakeet_model,
             delete_model_file,
+            delete_backend_model,
             load_history,
             save_history,
             copy_history_item,
@@ -1638,6 +1625,7 @@ pub fn run() {
             diagnostics::run_diagnostics,
             diagnostic_log::log_client_event,
             diagnostic_log::export_diagnostic_report,
+            diagnostic_log::submit_bug_report,
             diagnostic_log::open_logs_folder,
             permissions::check_readiness,
             permissions::request_microphone_permission,
@@ -1648,7 +1636,6 @@ pub fn run() {
             permissions::reset_onboarding,
             permissions::clear_force_onboarding,
             permissions::reset_tcc_entry,
-            repin_main_window,
         ])
         .setup(|app| {
             // ── macOS: hide from Dock and Cmd-Tab. The tray icon is the only
@@ -1722,7 +1709,6 @@ pub fn run() {
                             return;
                         }
                         if let Some(win) = app.get_webview_window("main") {
-                            position_main_window(app, &win);
                             let _ = win.show();
                             let _ = win.set_focus();
                         }
@@ -1830,17 +1816,18 @@ pub fn run() {
                     let _ = splash_win.show();
             }
 
-            // ── Main window — position below cursor at launch ─────────────
+            // ── Main window — hidden until tray click unless onboarding ───
             if let Some(win) = app.get_webview_window("main") {
-                position_main_window(app.handle(), &win);
-
+                use tauri::LogicalSize;
+                // Spawn height is the floor; width stays at 550 (JS also sets min/max).
+                let _ = win.set_min_size(Some(LogicalSize::new(550.0, 560.0)));
                 // First-run / regression gate: if Accessibility, Microphone,
                 // or a model are missing, show the window so the onboarding
                 // wizard can guide the user. Otherwise leave it hidden (tray-
                 // resident agent behaviour).
                 let readiness = crate::permissions::check_readiness();
                 if !readiness.ready {
-                    let _ = win.set_size(tauri::LogicalSize::new(440.0, 420.0));
+                    let _ = win.set_size(tauri::LogicalSize::new(550.0, 420.0));
                     let _ = win.center();
                     let _ = win.show();
                     let _ = win.set_focus();

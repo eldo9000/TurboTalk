@@ -3,7 +3,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { LogicalSize, LogicalPosition } from '@tauri-apps/api/dpi';
+  import { LogicalSize } from '@tauri-apps/api/dpi';
   import { open as openFilePicker } from '@tauri-apps/plugin-dialog';
   import { initTheme } from '@libre/ui/src/theme.js';
   import Select from '@libre/ui/src/components/Select.svelte';
@@ -93,6 +93,12 @@
     readinessModelPresent = r.model_present;
     const unsupportedPlatform = r.platform === 'linux';
     const downloading = Object.keys(downloadProgress).length > 0;
+
+    // Refresh alt-backend install state so modelConfigured stays accurate
+    // after external file deletes or engine switches.
+    if (!showOnboarding && cfgBackend !== 'whisper') {
+      altModels = await commands.listModelsForFamily(cfgBackend).catch(() => []);
+    }
 
     // Onboarding owns its own exit path (onComplete / onUnsupportedContinue).
     // Focus events during a window drag were dismissing onboarding mid-download
@@ -184,6 +190,7 @@
     await commands.clearForceOnboarding();
     await syncAppStateFromBackend();
     showOnboarding = false;
+    await restoreMainWindowSize();
     cfgLaunchLogin = await commands.getLaunchAtLogin();
     const res = await commands.prewarmModel();
     if (res.status === 'error') {
@@ -212,7 +219,6 @@
   let cfgModels       = $state([]);
   let cfgModel        = $state('');
   let newModelPath    = $state('');
-  let modelsSaveMsg   = $state('');
   // { [modelName: string]: number } — key present = downloading, value = pct 0-99
   let downloadProgress = $state({});
   // Moonshine / Parakeet model descriptors (loaded from backend on tab open)
@@ -333,6 +339,27 @@ Reply with only the single word, lowercase, no punctuation.
     }
   }
 
+  let bugNote          = $state('');
+  let bugReportMsg     = $state('');
+  let bugSending       = $state(false);
+
+  async function sendBugReport() {
+    if (bugSending) return;
+    bugSending = true;
+    bugReportMsg = 'Sending…';
+    try {
+      const res = await commands.submitBugReport(bugNote.trim());
+      bugReportMsg = `Sent — report #${res.report_id}. Thanks!`;
+      bugNote = '';
+      logUi('bug-report-sent', res.report_id);
+    } catch (e) {
+      bugReportMsg = String(e);
+      logUi('bug-report-failed', String(e));
+    } finally {
+      bugSending = false;
+    }
+  }
+
   let cfgHotkeyKey         = $state('right_option');
   let cfgHotkeyMode        = $state('hold');
   let cfgCancelOnEsc       = $state(true);
@@ -408,11 +435,31 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgBackend           = $state('parakeet'); // 'whisper' | 'moonshine' | 'parakeet'
   let cfgBackendVariant    = $state('');
   let readinessModelPresent = $state(false);
-  let modelConfigured = $derived(
-    cfgBackend === 'whisper'
-      ? (!!cfgModel && cfgModels.includes(cfgModel))
-      : readinessModelPresent
-  );
+
+  const DEFAULT_ALT_VARIANT = { moonshine: 'tiny', parakeet: 'tdt-0.6b-v2' };
+
+  function resolvedAltVariant() {
+    if (cfgBackendVariant) return cfgBackendVariant;
+    return DEFAULT_ALT_VARIANT[cfgBackend] ?? '';
+  }
+
+  function altModelVariant(m) {
+    return m.id.replace(/^moonshine-|^parakeet-/, '');
+  }
+
+  function altModelActive(m) {
+    return altModelVariant(m) === resolvedAltVariant();
+  }
+
+  let modelConfigured = $derived.by(() => {
+    if (cfgBackend === 'whisper') {
+      return !!cfgModel && cfgModels.includes(cfgModel);
+    }
+    const v = resolvedAltVariant();
+    if (!v) return false;
+    const m = altModels.find(x => altModelVariant(x) === v);
+    return !!m?.installed;
+  });
 
   async function syncAppStateFromBackend() {
     const [cfg, scanned, r] = await Promise.all([
@@ -425,98 +472,96 @@ Reply with only the single word, lowercase, no punctuation.
     cfgModel = cfg.whisper?.model ?? '';
     cfgModels = [...new Set([...(scanned ?? []), ...(cfg.whisper?.models ?? [])])].filter(Boolean);
     if (cfgModels.length === 0 && cfgModel) cfgModels = [cfgModel];
+    if (cfgBackend !== 'whisper') {
+      altModels = await commands.listModelsForFamily(cfgBackend).catch(() => []);
+    }
     readinessModelPresent = r.model_present;
   }
 
   let volumeSaveTimer      = null;
-  let showAdvanced         = $state(false);
-  // Captured once from the Modes tab in Chaperone mode (two-column tall layout).
-  // Used only for Modes when Chaperone is selected.
-  let settingsH            = $state(0);
-  // Captured once each for the other tabs so they auto-fit their natural content.
-  // History reuses modesH so the window stays at one consistent compact size.
-  let modesH               = $state(0);
-  let modelsTabH           = $state(0);
-  let settingsTabH         = $state(0);
-
-  // Ref to the outermost div — used to measure total natural content height.
-  let outerEl = $state(null);
-  // Ref to the settings tab inner content div — used for exact-fit height.
-  // The outer div has flex-1 which collapses in an unconstrained container,
-  // so we measure the inner div directly and add measured chrome.
-  let settingsInnerEl = $state(null);
-  // Refs to the fixed chrome (titlebar + bottom bar). Measured at the anchor
-  // zoom so chrome height is no longer a hardcoded 68 — h-10 + h-7 happens to
-  // equal 68 today, but any future change to either bar must not force a
-  // matching constant edit, and DOM-side measurement absorbs any subpixel
-  // rounding the browser introduces.
-  let titlebarEl   = $state(null);
-  let bottomBarEl  = $state(null);
-  // Captured during the unconstrained measurement pass alongside settingsTabH;
-  // see chromeHeight() below.
-  let chromeH      = $state(0);
-
-  const WINDOW_W  = 440;
-
-  // Visual anchor: at this zoom, every page is known to look correct today.
-  // Measurement is taken with style.zoom forced to 100%, so naturalH is in
-  // unscaled CSS pixels regardless of the user's saved zoom; the $effect
-  // below scales by the active zoom to produce Tauri logical pixels.
-  const ZOOM_ANCHOR = 1.25;
-  // Small guard band added once to the computed window height to absorb
-  // fractional WebKit/Tauri rounding at non-integer zoom (1.25, 1.75).
-  // Kept tiny on purpose — this is rounding slack, not design padding.
-  const WINDOW_SIZE_SLACK = 2;
-
-  // The window is "compact" (half the natural Modes-tab height) by default,
-  // and "expanded" (full natural height) only on the Modes tab with Advanced
-  // (Chaperone) selected — the only mode that genuinely needs the extra
-  // vertical room (Ollama URL + classifier model + vocabulary + prompt).
-  const COMPACT_HEIGHT_FACTOR = 0.5;
-
-  // Cache the last requested logical size so a no-op effect run (e.g. an
-  // unrelated $state read) doesn't re-issue setSize and risk a resize loop.
-  let lastWindowSize = { w: 0, h: 0 };
-
-  $effect(() => {
-    const zoom = ZOOM_LEVELS[zoomIdx] / 100;
-    if (settingsH === 0) return;
-    if (showOnboarding) return;
-    const isAdv = activeTab === 'modes' && cfgCleanupMode === 'chaperone';
-    const w = isAdv ? WINDOW_W * 2 : WINDOW_W;
-    const h =
-      isAdv ? settingsH :
-      activeTab === 'settings' && settingsTabH > 0 ? settingsTabH :
-      activeTab === 'models'   && modelsTabH   > 0 ? modelsTabH   :
-      modesH > 0 ? modesH :
-      settingsH;
-    const targetW = Math.ceil(w * zoom);
-    const targetH = Math.ceil(h * zoom) + WINDOW_SIZE_SLACK;
-    if (targetW === lastWindowSize.w && targetH === lastWindowSize.h) return;
-    lastWindowSize = { w: targetW, h: targetH };
-    getCurrentWindow().setSize(new LogicalSize(targetW, targetH)).then(() => {
-      // Repin after the shell reports the new outer size so Settings/Models
-      // tab height changes stay inside the desktop work area (Windows taskbar).
-      requestAnimationFrame(() => {
-        commands.repinMainWindow(targetW);
-      });
-    });
-  });
 
   // ── Zoom ──────────────────────────────────────────────────────────────────
 
   const ZOOM_LEVELS = [100, 125, 150, 175, 200];
   let zoomIdx = $state(parseInt(localStorage.getItem('tt-zoom') ?? '0'));
 
+  // Main window: 550px wide (fixed), height user-resizable with 560px floor.
+  const WINDOW_W = 550;
+  const WINDOW_H_DEFAULT = 560;
+  const WINDOW_HEIGHT_KEY = 'tt-window-height';
+  let suppressWindowResizeTrack = false;
+
+  function savedLogicalHeight() {
+    const raw = parseInt(localStorage.getItem(WINDOW_HEIGHT_KEY) ?? String(WINDOW_H_DEFAULT), 10);
+    return Number.isFinite(raw) ? Math.max(WINDOW_H_DEFAULT, raw) : WINDOW_H_DEFAULT;
+  }
+
+  function persistLogicalHeight(logicalH) {
+    localStorage.setItem(
+      WINDOW_HEIGHT_KEY,
+      String(Math.max(WINDOW_H_DEFAULT, Math.round(logicalH))),
+    );
+  }
+
+  async function applyWindowSizeLimits() {
+    const win = getCurrentWindow();
+    await win.setResizable(true);
+    await win.setMaximizable(false);
+    await win.setMinSize(new LogicalSize(WINDOW_W, WINDOW_H_DEFAULT));
+    await win.setMaxSize(new LogicalSize(WINDOW_W, 8192));
+  }
+
+  async function applyWindowSizeFromPrefs() {
+    const h = savedLogicalHeight();
+    suppressWindowResizeTrack = true;
+    try {
+      await getCurrentWindow().setSize(new LogicalSize(WINDOW_W, h));
+    } finally {
+      suppressWindowResizeTrack = false;
+    }
+  }
+
+  async function restoreMainWindowSize() {
+    await applyWindowSizeLimits();
+    await applyWindowSizeFromPrefs();
+  }
+
+  async function enforceWindowMinHeight() {
+    if (showOnboarding || suppressWindowResizeTrack) return;
+    const win = getCurrentWindow();
+    const size = await win.innerSize();
+    const factor = await win.scaleFactor();
+    const logicalW = size.width / factor;
+    const logicalH = size.height / factor;
+
+    if (logicalH < WINDOW_H_DEFAULT - 1) {
+      suppressWindowResizeTrack = true;
+      try {
+        // Preserve current width — only raise height to the spawn minimum.
+        await win.setSize(new LogicalSize(logicalW, WINDOW_H_DEFAULT));
+      } finally {
+        suppressWindowResizeTrack = false;
+      }
+      persistLogicalHeight(WINDOW_H_DEFAULT);
+    } else {
+      persistLogicalHeight(logicalH);
+    }
+  }
+
+  $effect(() => {
+    if (showOnboarding) return;
+    void applyWindowSizeLimits();
+  });
 
   $effect(() => {
     document.documentElement.style.zoom = `${ZOOM_LEVELS[zoomIdx]}%`;
     localStorage.setItem('tt-zoom', String(zoomIdx));
-    // The main sizing $effect re-runs on zoom change because it reads zoomIdx.
   });
 
   function zoomIn()  { if (zoomIdx < ZOOM_LEVELS.length - 1) zoomIdx++; }
   function zoomOut() { if (zoomIdx > 0) zoomIdx--; }
+
+  let outerEl = $state(null);
 
   // ── History ───────────────────────────────────────────────────────────────
 
@@ -542,6 +587,15 @@ Reply with only the single word, lowercase, no punctuation.
     ['whisper', 'Whisper'],
     ['moonshine', 'Moonshine'],
   ];
+
+  async function setTranscriptionEngine(v) {
+    cfgBackend = v;
+    await saveSettings();
+    await syncAppStateFromBackend();
+    if (activeTab === 'models') {
+      await openModels();
+    }
+  }
 
   // Whisper starter model — recommended when the Whisper engine is selected.
   const RECOMMENDED_MODEL = {
@@ -579,7 +633,6 @@ Reply with only the single word, lowercase, no punctuation.
     if (cfgModels.length === 0 && cfgModel) cfgModels = [cfgModel];
     cfgBackend        = cfg.backend          ?? 'parakeet';
     cfgBackendVariant = cfg.backend_variant  ?? '';
-    modelsSaveMsg = '';
     // Load model descriptors for the active non-Whisper backend
     if (cfgBackend !== 'whisper') {
       altModels = await commands.listModelsForFamily(cfgBackend).catch(() => []);
@@ -587,34 +640,26 @@ Reply with only the single word, lowercase, no punctuation.
   }
 
   async function startAltDownload(m) {
-    const key = m.id;
-    const progressKey = `${cfgBackend}-${m.id.replace(/^moonshine-|^parakeet-/, '')}`;
-    downloadProgress = { ...downloadProgress, [key]: 0, [progressKey]: 0 };
-    modelsSaveMsg = 'Downloading…';
+    downloadProgress = { ...downloadProgress, [m.id]: 0 };
     let res;
     if (cfgBackend === 'moonshine') {
-      const variant = m.id.replace(/^moonshine-/, '');
+      const variant = altModelVariant(m);
       res = await commands.downloadMoonshineModel(variant);
     } else {
-      const variant = m.id.replace(/^parakeet-/, '');
+      const variant = altModelVariant(m);
       res = await commands.downloadParakeetModel(variant);
     }
-    const { [key]: _r, [progressKey]: _p, ...rest } = downloadProgress;
+    const { [m.id]: _removed, ...rest } = downloadProgress;
     downloadProgress = rest;
     if (res.status === 'ok') {
-      modelsSaveMsg = 'Download complete — engine ready.';
-      cfgBackendVariant = m.id.replace(/^moonshine-|^parakeet-/, '');
+      cfgBackendVariant = altModelVariant(m);
       altModels = await commands.listModelsForFamily(cfgBackend).catch(() => []);
       await syncAppStateFromBackend();
-      setTimeout(() => { modelsSaveMsg = ''; }, 4000);
-    } else {
-      modelsSaveMsg = 'Download failed: ' + res.error;
-      setTimeout(() => { modelsSaveMsg = ''; }, 8000);
     }
   }
 
   async function selectAltModel(m) {
-    const variant = m.id.replace(/^moonshine-|^parakeet-/, '');
+    const variant = altModelVariant(m);
     const cfg = await commands.getConfig();
     cfg.backend = cfgBackend;
     cfg.backend_variant = variant;
@@ -623,16 +668,22 @@ Reply with only the single word, lowercase, no punctuation.
       cfgBackendVariant = variant;
       altModels = await commands.listModelsForFamily(cfgBackend).catch(() => []);
       await syncAppStateFromBackend();
-      modelsSaveMsg = 'Engine ready.';
-      setTimeout(() => { modelsSaveMsg = ''; }, 3000);
-    } else {
-      modelsSaveMsg = 'Error: ' + res.error;
     }
   }
 
-  function altModelActive(m) {
-    const variant = m.id.replace(/^moonshine-|^parakeet-/, '');
-    return cfgBackendVariant === variant;
+  async function removeAltModel(m) {
+    const variant = altModelVariant(m);
+    const res = await commands.deleteBackendModel(cfgBackend, variant);
+    if (res.status === 'error') return;
+    if (altModelActive(m)) cfgBackendVariant = '';
+    altModels = await commands.listModelsForFamily(cfgBackend).catch(() => []);
+    await syncAppStateFromBackend();
+  }
+
+  function cancelAltDownload(m) {
+    commands.cancelDownload(m.id);
+    const { [m.id]: _removed, ...rest } = downloadProgress;
+    downloadProgress = rest;
   }
 
   async function setCustomModel(path) {
@@ -655,11 +706,7 @@ Reply with only the single word, lowercase, no punctuation.
     // gone, custom path outside models dir); only genuine failures (permission,
     // bad extension) come back as errors. Either way we still drop the entry
     // from the user's config so the row disappears from the UI.
-    const res = await commands.deleteModelFile(path);
-    if (res.status === 'error') {
-      modelsSaveMsg = 'Could not delete file: ' + res.error;
-      setTimeout(() => { modelsSaveMsg = ''; }, 5000);
-    }
+    await commands.deleteModelFile(path);
     cfgModels = cfgModels.filter(m => m !== path);
     if (cfgModel === path) cfgModel = '';
     await saveModels();
@@ -675,8 +722,7 @@ Reply with only the single word, lowercase, no punctuation.
     if (!cfg.whisper) cfg.whisper = { bin: 'auto', model: '', models: [] };
     cfg.whisper.model  = cfgModel;
     cfg.whisper.models = cfgModels;
-    const res = await commands.saveConfig(cfg);
-    modelsSaveMsg = res.status === 'ok' ? 'Saved.' : 'Error: ' + res.error;
+    await commands.saveConfig(cfg);
   }
 
   async function startDownload(m) {
@@ -684,13 +730,7 @@ Reply with only the single word, lowercase, no punctuation.
     const res = await commands.downloadModel(m.name);
     const { [m.name]: _removed, ...rest } = downloadProgress;
     downloadProgress = rest;
-    if (res.status === 'error') {
-      if (res.error !== 'cancelled') {
-        modelsSaveMsg = 'Download failed: ' + res.error;
-        setTimeout(() => { modelsSaveMsg = ''; }, 5000);
-      }
-      return;
-    }
+    if (res.status === 'error') return;
     const path = res.data;
     if (!cfgModels.includes(path)) {
       cfgModels = [...cfgModels, path];
@@ -743,25 +783,6 @@ Reply with only the single word, lowercase, no punctuation.
   }
 
   async function handleModeClick(v) {
-    if (v === 'chaperone' && cfgCleanupMode !== 'chaperone') {
-      try {
-        const win = getCurrentWindow();
-        const [physPos, monitor] = await Promise.all([win.outerPosition(), win.currentMonitor()]);
-        if (monitor) {
-          const sf = monitor.scaleFactor;
-          const logX = physPos.x / sf;
-          const logY = physPos.y / sf;
-          const logMonLeft = monitor.position.x / sf;
-          const logMonRight = (monitor.position.x + monitor.size.width) / sf;
-          const zoom = ZOOM_LEVELS[zoomIdx] / 100;
-          const advW = Math.ceil(WINDOW_W * 2 * zoom);
-          if (logX + advW > logMonRight) {
-            const newX = Math.max(logMonLeft, logMonRight - advW);
-            await win.setPosition(new LogicalPosition(newX, logY));
-          }
-        }
-      } catch {}
-    }
     cfgCleanupMode = v;
     saveModes();
   }
@@ -905,38 +926,11 @@ Reply with only the single word, lowercase, no punctuation.
     }
   }
 
-  // Measure live chrome (titlebar + bottom bar) in unscaled CSS pixels.
-  // getBoundingClientRect is zoom-scaled in WebKit/Chromium, so divide by the
-  // currently-applied CSS zoom to recover the natural-space value the sizing
-  // $effect expects (it multiplies by zoom itself).
-  function chromeHeight() {
-    const tb = titlebarEl?.getBoundingClientRect().height ?? 0;
-    const bb = bottomBarEl?.getBoundingClientRect().height ?? 0;
-    const cssZoom = parseFloat(document.documentElement.style.zoom || '100') / 100 || 1;
-    return Math.ceil((tb + bb) / cssZoom);
-  }
-
   function switchTab(tab) {
     activeTab = tab;
     if (tab === 'models')   openModels();
-    if (tab === 'modes')    openModes().then(async () => {
-      // Fallback measurement: if the on-mount measure didn't run (e.g. user
-      // jumped to Modes before mount finished), capture the natural height
-      // here so the compact/expanded sizing has something to halve.
-      if (settingsH === 0 && outerEl) {
-        await tick();
-        await new Promise(r => requestAnimationFrame(r));
-        settingsH = outerEl.scrollHeight;
-      }
-    });
-    if (tab === 'settings') openSettings().then(async () => {
-      await tick();
-      await new Promise(r => requestAnimationFrame(r));
-      if (settingsInnerEl) {
-        const ch = chromeHeight() || chromeH;
-        settingsTabH = settingsInnerEl.scrollHeight + ch;
-      }
-    });
+    if (tab === 'modes')    openModes();
+    if (tab === 'settings') openSettings();
   }
 
   onMount(async () => {
@@ -949,73 +943,6 @@ Reply with only the single word, lowercase, no punctuation.
     cfgHotkeyKey  = initialCfg.hotkey?.key  ?? defaultHotkeyKey();
     cfgHotkeyMode = initialCfg.hotkey?.mode ?? 'hold';
     if (savedHistory.length) history = savedHistory;
-
-    // Measure natural content heights for tabs that need exact-fit window sizes.
-    // Both measurements must complete before settingsH is committed — once settingsH
-    // is non-zero the outermost div gets h-full overflow-hidden, making scrollHeight
-    // return the window height rather than the natural content height.
-    //
-    // Measurement is taken with style.zoom forced to 100% so scrollHeight is in
-    // canonical, unscaled CSS pixels regardless of the user's saved zoom. The
-    // sizing $effect then multiplies by the active zoom factor. Without this
-    // pin, scrollHeight at non-100% startup zoom can drift by a pixel or two
-    // and produce intermittent outer scrollbars at zooms other than the 125%
-    // anchor (TASK-39).
-    document.documentElement.style.opacity = '0';
-    const savedZoomCss = document.documentElement.style.zoom;
-    document.documentElement.style.zoom = '100%';
-    const savedMode = cfgCleanupMode;
-
-    // 1. Modes — non-chaperone (single-column Simple layout, taller of Off/Simple).
-    //    Used for both History and non-chaperone Modes tabs.
-    activeTab = 'modes';
-    await openModes();
-    cfgCleanupMode = 'regex';
-    await tick();
-    await new Promise(r => requestAnimationFrame(r));
-    const measuredModesH = outerEl ? outerEl.scrollHeight : 0;
-
-    // 2. Modes — Chaperone (two-column wide layout).
-    cfgCleanupMode = 'chaperone';
-    document.documentElement.style.minWidth = `${WINDOW_W * 2}px`;
-    await tick();
-    await new Promise(r => requestAnimationFrame(r));
-    const measuredChaperoneH = outerEl ? outerEl.scrollHeight : 0;
-    document.documentElement.style.minWidth = '';
-    cfgCleanupMode = savedMode;
-
-    // 3. Models tab (single-column, recommended + catalog + custom slot)
-    activeTab = 'models';
-    await openModels();
-    await tick();
-    await new Promise(r => requestAnimationFrame(r));
-    const measuredModelsH = outerEl ? outerEl.scrollHeight : 0;
-
-    // 4. Settings tab — measure the inner content div directly.
-    // The outer div has flex-1 which collapses in an unconstrained container,
-    // so outerEl.scrollHeight under-counts; inner div's scrollHeight is reliable.
-    activeTab = 'settings';
-    await openSettings(false);
-    await tick();
-    await new Promise(r => requestAnimationFrame(r));
-    const measuredChromeH = chromeHeight();
-    const measuredSettingsTabH = settingsInnerEl
-      ? settingsInnerEl.scrollHeight + measuredChromeH
-      : outerEl ? outerEl.scrollHeight : 0;
-
-    // Commit all heights — this activates the h-full constraint hereafter.
-    if (measuredChromeH)       chromeH      = measuredChromeH;
-    if (measuredChaperoneH)    settingsH    = measuredChaperoneH;
-    if (measuredModesH)        modesH       = measuredModesH;
-    if (measuredModelsH)       modelsTabH   = measuredModelsH;
-    if (measuredSettingsTabH)  settingsTabH = measuredSettingsTabH;
-
-    activeTab = 'history';
-    await tick();
-    // Restore the user's saved zoom (the $effect did not re-fire because we
-    // mutated style.zoom imperatively above without touching zoomIdx).
-    document.documentElement.style.zoom = savedZoomCss || `${ZOOM_LEVELS[zoomIdx]}%`;
-    document.documentElement.style.opacity = '';
 
     function handleKeydown(e) {
       if (e.metaKey || e.ctrlKey) {
@@ -1196,8 +1123,18 @@ Reply with only the single word, lowercase, no punctuation.
     window.addEventListener('focus', onFocus);
     // Initial check — replaces the default `showOnboarding = true` once the
     // backend confirms what's actually granted.
-    recheckReadiness().then(() => logUi('app-ready', platform));
+    recheckReadiness().then(async () => {
+      logUi('app-ready', platform);
+      if (!showOnboarding) {
+        await applyWindowSizeLimits();
+        await enforceWindowMinHeight();
+      }
+    });
     syncAppStateFromBackend();
+
+    getCurrentWindow().onResized(() => {
+      enforceWindowMinHeight();
+    }).then(u => unlisteners.push(u));
 
     const onKeydown = (e) => { if (e.key === 'Shift') shiftHeld = true; };
     const onKeyup   = (e) => { if (e.key === 'Shift') shiftHeld = false; };
@@ -1214,7 +1151,7 @@ Reply with only the single word, lowercase, no punctuation.
   });
 </script>
 
-<div bind:this={outerEl} class="flex flex-col bg-[var(--surface-raised)] {settingsH > 0 || activeTab === 'history' ? 'h-full overflow-hidden' : ''}"
+<div bind:this={outerEl} class="flex flex-col h-full overflow-hidden bg-[var(--surface-raised)]"
 >
 
   <!-- ui-error toast stack — fixed top-center. Permission-related kinds
@@ -1262,12 +1199,13 @@ Reply with only the single word, lowercase, no punctuation.
       onUnsupportedContinue={() => {
         unsupportedPlatformDismissed = true;
         showOnboarding = false;
+        restoreMainWindowSize();
       }}
     />
   {/if}
 
   <!-- Titlebar -->
-  <div bind:this={titlebarEl} data-tauri-drag-region class="relative h-10 shrink-0 flex items-end select-none bg-white dark:bg-[color-mix(in_srgb,#000_18%,var(--surface-raised))]">
+  <div data-tauri-drag-region class="relative h-10 shrink-0 flex items-end select-none bg-white dark:bg-[color-mix(in_srgb,#000_18%,var(--surface-raised))]">
 
     <!-- Traffic-light spacer (left) -->
     <div class="w-[76px] shrink-0 h-full" data-tauri-drag-region></div>
@@ -1285,10 +1223,8 @@ Reply with only the single word, lowercase, no punctuation.
       </div>
     {/if}
 
-    <!-- All tabs — centered in the left panel width (stays fixed even when window doubles) -->
-    <div class="absolute inset-y-0 left-0 flex items-end justify-center pointer-events-none"
-         style="{activeTab === 'modes' && cfgCleanupMode === 'chaperone' ? `width:${WINDOW_W}px` : 'right:0'}"
-    >
+    <!-- All tabs — centered in the titlebar -->
+    <div class="absolute inset-y-0 left-0 right-0 flex items-end justify-center pointer-events-none">
       {#each ['history', 'models', 'modes', 'settings'] as tab}
         <button
           onclick={() => switchTab(tab)}
@@ -1306,20 +1242,6 @@ Reply with only the single word, lowercase, no punctuation.
     </div>
 
   </div>
-
-  <!-- No-model banner — unmissable red bar above all tab content. Only
-       hidden when a whisper model is selected. -->
-  {#if !modelConfigured && !showOnboarding}
-    <button
-      onclick={() => switchTab('models')}
-      class="tt-no-model-banner"
-      title="Open Models tab"
-    >
-      <span class="tt-no-model-banner-icon">⚠</span>
-      <span class="tt-no-model-banner-msg">Install model before use.</span>
-      <span class="tt-no-model-banner-cta">Open Models →</span>
-    </button>
-  {/if}
 
   <!-- History tab -->
   {#if activeTab === 'history'}
@@ -1430,9 +1352,82 @@ Reply with only the single word, lowercase, no punctuation.
     </div>
   {/snippet}
 
+  {#snippet altModelActions(m, accent = false)}
+    {@const isDownloading = m.id in downloadProgress}
+    {@const pct           = downloadProgress[m.id] ?? 0}
+    {@const isInstalled   = m.installed}
+    {@const isActive      = altModelActive(m)}
+    {#if isDownloading}
+      <span class="tt-model-pct" class:tt-model-pct-lg={accent}>{pct}%</span>
+      <button onclick={() => cancelAltDownload(m)} class="tt-btn" class:tt-btn-md={accent} class:tt-btn-danger={accent}>Cancel</button>
+    {:else if !isInstalled}
+      <button onclick={() => startAltDownload(m)} class="tt-btn" class:tt-btn-md={accent} class:tt-btn-accent={accent}>Download</button>
+    {:else if isActive}
+      <button onclick={() => removeAltModel(m)} title="Remove" class="tt-model-x" class:tt-model-x-lg={accent}>×</button>
+      <button disabled class="tt-btn" class:tt-btn-md={accent} class:tt-btn-success={accent}>Selected</button>
+    {:else}
+      <button onclick={() => removeAltModel(m)} title="Remove" class="tt-model-x" class:tt-model-x-lg={accent}>×</button>
+      <button onclick={() => selectAltModel(m)} class="tt-btn" class:tt-btn-md={accent} class:tt-btn-accent={!accent}>Use</button>
+    {/if}
+  {/snippet}
+
+  {#snippet altModelRow(m, accent = false)}
+    {@const isActive = altModelActive(m)}
+    {#if accent}
+      <div class="tt-model-card group" class:tt-model-card-selected={isActive}>
+        <div class="tt-model-card-hd">
+          <span class="tt-model-star">★</span>
+          <span class="tt-model-star-lbl">Recommended</span>
+        </div>
+        <div class="tt-model-card-body">
+          <div class="tt-row-info">
+            <div class="tt-model-name-row">
+              <span class="tt-tier-name">{m.tier}</span>
+              <span class="tt-model-name-pill">{m.label}</span>
+            </div>
+            <span class="tt-desc">{m.description}</span>
+          </div>
+          <span class="tt-model-size">{m.size}</span>
+          {@render altModelActions(m, true)}
+        </div>
+      </div>
+    {:else}
+      <div class="tt-model-row group">
+        <div class="tt-row-info">
+          <div class="tt-model-name-row">
+            <span class="tt-tier-name">{m.tier}</span>
+            <span class="tt-model-name-pill">{m.label}</span>
+          </div>
+          <span class="tt-model-desc">{m.description}</span>
+        </div>
+        <span class="tt-model-size">{m.size}</span>
+        {@render altModelActions(m, false)}
+      </div>
+    {/if}
+  {/snippet}
+
   <!-- Models tab -->
   {#if activeTab === 'models'}
     <div class="tt-set flex-1 min-h-0 overflow-y-auto">
+
+    <!-- Transcription Engine -->
+    <div class="tt-section">
+      <div class="subsection-hd"><span class="subsection-hd-title">Transcription Engine</span></div>
+      <div class="tt-row tt-row-field" data-tip="Which local transcription engine to use. Download a model below after switching.">
+        <div class="tt-seg tt-seg-wide">
+          {#each ENGINE_OPTIONS as [v, lbl], i}
+            <button onclick={() => setTranscriptionEngine(v)} class={seg(cfgBackend === v, i, ENGINE_OPTIONS.length)}>{lbl}</button>
+          {/each}
+        </div>
+      </div>
+      {#if cfgBackend === 'parakeet'}
+        <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">Recommended default · English-only · fastest. Download the model below.</p>
+      {:else if cfgBackend === 'moonshine'}
+        <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">English-only · low hallucination on silence. Download Moonshine Tiny below.</p>
+      {:else}
+        <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">Multilingual · most accurate. Model managed below.</p>
+      {/if}
+    </div>
 
     {#if cfgBackend === 'whisper'}
       {@const rmFilename      = RECOMMENDED_MODEL.name + '.bin'}
@@ -1508,7 +1503,7 @@ Reply with only the single word, lowercase, no punctuation.
             <button onclick={browseCustomModel} class="tt-btn">Browse</button>
           </div>
         {/if}
-        {#if !cfgModel}
+        {#if !modelConfigured}
           <div class="tt-row">
             <p class="tt-warn">No model selected — transcription will fail.</p>
           </div>
@@ -1517,102 +1512,42 @@ Reply with only the single word, lowercase, no punctuation.
 
     {:else}
       <!-- Moonshine / Parakeet model catalog -->
-      {@const engineLabel = cfgBackend === 'moonshine' ? 'Moonshine' : 'Parakeet'}
-      {@const recAltModel = altModels.find(m => m.recommended)}
-      {@const altCatalog  = altModels.filter(m => !m.recommended)}
-
-      {#if modelsSaveMsg}
-        <div class="tt-section">
-          <div class="tt-row"><p class="tt-desc" class:tt-warn={modelsSaveMsg.includes('failed')}>{modelsSaveMsg}</p></div>
-        </div>
-      {/if}
-
       {#if altModels.length === 0}
         <div class="tt-section">
-          <div class="subsection-hd"><span class="subsection-hd-title">{engineLabel} Models</span></div>
+          <div class="subsection-hd"><span class="subsection-hd-title">{cfgBackend === 'moonshine' ? 'Moonshine' : 'Parakeet'} Models</span></div>
           <div class="tt-row"><p class="tt-desc">Loading…</p></div>
         </div>
-      {:else if recAltModel}
-        {@const m = recAltModel}
-        {@const isDownloading = m.id in downloadProgress || `moonshine-${m.id.replace(/^moonshine-/, '')}` in downloadProgress || `parakeet-${m.id.replace(/^parakeet-/, '')}` in downloadProgress}
-        {@const pct           = downloadProgress[m.id] ?? downloadProgress[`${cfgBackend}-${m.id.replace(/^moonshine-|^parakeet-/, '')}`] ?? 0}
-        {@const isInstalled   = m.installed}
-        {@const isActive      = altModelActive(m)}
+      {:else}
+        {@const recAltModel = altModels.find(m => m.recommended)}
+        {@const altCatalog  = altModels.filter(m => !m.recommended)}
 
-        <div class="tt-section">
-          <div class="subsection-hd"><span class="subsection-hd-title">Recommended</span></div>
-          <div class="tt-row tt-row-field">
-            <div class="tt-model-card group" class:tt-model-card-selected={isActive}>
-              <div class="tt-model-card-hd">
-                <span class="tt-model-star">★</span>
-                <span class="tt-model-star-lbl">Recommended</span>
-              </div>
-              <div class="tt-model-card-body">
-                <div class="tt-row-info">
-                  <div class="tt-model-name-row">
-                    <span class="tt-tier-name">{m.tier}</span>
-                    <span class="tt-model-name-pill">{m.label}</span>
-                  </div>
-                  <span class="tt-desc">{m.description}</span>
-                </div>
-                <span class="tt-model-size">{m.size}</span>
-                {#if isDownloading}
-                  <span class="tt-model-pct tt-model-pct-lg">{pct}%</span>
-                {:else if isInstalled}
-                  {#if isActive}
-                    <button disabled class="tt-btn tt-btn-md tt-btn-success">Active</button>
-                  {:else}
-                    <button onclick={() => selectAltModel(m)} class="tt-btn tt-btn-md tt-btn-accent">Use</button>
-                  {/if}
-                {:else}
-                  <button onclick={() => startAltDownload(m)} class="tt-btn tt-btn-md tt-btn-accent">Download</button>
-                {/if}
-              </div>
+        {#if recAltModel}
+          <div class="tt-section">
+            <div class="subsection-hd"><span class="subsection-hd-title">Recommended</span></div>
+            <div class="tt-row tt-row-field">
+              {@render altModelRow(recAltModel, true)}
             </div>
           </div>
-        </div>
-      {/if}
+        {/if}
 
-      {#if altCatalog.length > 0}
-        <div class="tt-section">
-          <div class="subsection-hd"><span class="subsection-hd-title">Available</span></div>
-          {#each altCatalog as m}
-            {@const isDownloading = m.id in downloadProgress || `moonshine-${m.id.replace(/^moonshine-/, '')}` in downloadProgress || `parakeet-${m.id.replace(/^parakeet-/, '')}` in downloadProgress}
-            {@const pct           = downloadProgress[m.id] ?? downloadProgress[`${cfgBackend}-${m.id.replace(/^moonshine-|^parakeet-/, '')}`] ?? 0}
-            {@const isInstalled   = m.installed}
-            {@const isActive      = altModelActive(m)}
-            <div class="tt-row tt-row-field">
-              <div class="tt-model-card group" class:tt-model-card-selected={isActive}>
-                <div class="tt-model-card-body">
-                  <div class="tt-row-info">
-                    <div class="tt-model-name-row">
-                      <span class="tt-tier-name">{m.tier}</span>
-                      <span class="tt-model-name-pill">{m.label}</span>
-                    </div>
-                    <span class="tt-desc">{m.description}</span>
-                  </div>
-                  <span class="tt-model-size">{m.size}</span>
-                  {#if isDownloading}
-                    <span class="tt-model-pct tt-model-pct-lg">{pct}%</span>
-                  {:else if isInstalled}
-                    {#if isActive}
-                      <button disabled class="tt-btn tt-btn-md tt-btn-success">Active</button>
-                    {:else}
-                      <button onclick={() => selectAltModel(m)} class="tt-btn tt-btn-md">Use</button>
-                    {/if}
-                  {:else}
-                    <button onclick={() => startAltDownload(m)} class="tt-btn tt-btn-md">Download</button>
-                  {/if}
-                </div>
-              </div>
-            </div>
-          {/each}
-        </div>
+        {#if altCatalog.length > 0}
+          <div class="tt-section">
+            <div class="subsection-hd"><span class="subsection-hd-title">Available</span></div>
+            {#each altCatalog as m}
+              {@render altModelRow(m, false)}
+            {/each}
+          </div>
+        {/if}
       {/if}
 
       <div class="tt-section tt-section-last">
+        {#if !modelConfigured}
+          <div class="tt-row">
+            <p class="tt-warn">No model selected — transcription will fail.</p>
+          </div>
+        {/if}
         <div class="tt-row tt-row-col">
-          <p class="tt-desc">Models are stored in <code>~/.config/librewin/turbotalk/models/{cfgBackend}/</code>. Switch engine in the Settings tab.</p>
+          <p class="tt-desc">Models are stored in <code>~/.config/librewin/turbotalk/models/{cfgBackend}/</code>.</p>
         </div>
       </div>
     {/if}
@@ -1623,12 +1558,9 @@ Reply with only the single word, lowercase, no punctuation.
   <!-- Modes tab -->
   {#if activeTab === 'modes'}
     {@const isAdv = cfgCleanupMode === 'chaperone'}
-    <div class="flex-1 min-h-0 flex {isAdv ? '' : 'flex-col overflow-y-auto'}">
+    <div class="flex-1 min-h-0 flex flex-col overflow-y-auto">
 
-      <!-- Left column: always visible -->
-      <div class="tt-set {isAdv ? 'overflow-y-auto shrink-0' : ''}"
-           style="{isAdv ? `width:${WINDOW_W}px` : ''}">
-
+      <div class="tt-set" style={isAdv ? 'min-height:auto' : ''}>
         <!-- Post-processing -->
         <div class="tt-section">
           <div class="subsection-hd"><span class="subsection-hd-title">Post-processing</span></div>
@@ -1676,7 +1608,7 @@ Reply with only the single word, lowercase, no punctuation.
         </div>
 
         <!-- Whisper bias prompt -->
-        <div class="tt-section tt-section-last">
+        <div class="tt-section {isAdv ? '' : 'tt-section-last'}">
           <div class="subsection-hd"><span class="subsection-hd-title">Whisper</span></div>
           <div class="tt-row tt-row-field" data-tip="Skip silent regions before transcription — prevents hallucination on silence and speeds up long recordings">
             <span class="tt-lbl">Silence Filter</span>
@@ -1701,12 +1633,11 @@ Reply with only the single word, lowercase, no punctuation.
             <p class="tt-desc">Domain terms Whisper tends to mishear. Applied as <code class="tt-code">--prompt</code> bias every transcription.</p>
           </div>
         </div>
-
       </div>
 
-      <!-- Right column: Chaperone connection + classifier prompt, slides in when Advanced -->
+      <!-- Advanced (Chaperone) — stacked below Post-processing + Whisper -->
       {#if isAdv}
-        <div class="tt-set flex-1 overflow-y-auto adv-panel-in">
+        <div class="tt-set adv-panel-in">
 
           <!-- Setup -->
           <div class="tt-section">
@@ -1818,7 +1749,7 @@ Reply with only the single word, lowercase, no punctuation.
     <div class="flex-1 min-h-0 overflow-y-auto text-[12px]">
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <!-- svelte-ignore a11y_mouse_events_have_key_events -->
-      <div bind:this={settingsInnerEl} class="tt-set"
+      <div class="tt-set"
         onmouseover={_onIndicatorOver}
         onmouseleave={_onIndicatorLeave}>
 
@@ -1883,25 +1814,6 @@ Reply with only the single word, lowercase, no punctuation.
                 data-tip="Hold the hotkey for ~1 second during recording to cancel">Hold key</button>
             </div>
           </div>
-        </div>
-
-        <!-- Transcription Engine -->
-        <div class="tt-section">
-          <div class="subsection-hd"><span class="subsection-hd-title">Transcription Engine</span></div>
-          <div class="tt-row tt-row-field" data-tip="Which local transcription engine to use. Download a model in the Models tab after switching.">
-            <div class="tt-seg tt-seg-wide">
-              {#each ENGINE_OPTIONS as [v, lbl], i}
-                <button onclick={async () => { cfgBackend = v; saveSettings(); if (v !== 'whisper') { altModels = await commands.listModelsForFamily(v).catch(() => []); } }} class={seg(cfgBackend === v, i, ENGINE_OPTIONS.length)}>{lbl}</button>
-              {/each}
-            </div>
-          </div>
-          {#if cfgBackend === 'parakeet'}
-            <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">Recommended default · English-only · fastest. Download the model in the Models tab.</p>
-          {:else if cfgBackend === 'moonshine'}
-            <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">English-only · low hallucination on silence. Download Moonshine Tiny in the Models tab.</p>
-          {:else}
-            <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">Multilingual · most accurate. Model managed in the Models tab.</p>
-          {/if}
         </div>
 
         <!-- Theme -->
@@ -2056,6 +1968,23 @@ Reply with only the single word, lowercase, no punctuation.
                 <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug">{diagnosticMsg}</p>
               {/if}
             </div>
+          </div>
+          <div class="tt-row tt-row-col" data-tip="Send accumulated diagnostics — config, UI events, and recent logs. No transcribed text is included. Add an optional note below if helpful.">
+            <label for="bug-note" class="tt-lbl tt-lbl-fixed">Report a bug</label>
+            <button
+              onclick={sendBugReport}
+              disabled={bugSending}
+              class="tt-btn w-full justify-center">{bugSending ? 'Sending…' : 'Send bug report'}</button>
+            <textarea
+              id="bug-note"
+              bind:value={bugNote}
+              rows="2"
+              placeholder="Optional — what happened? What were you trying to do?"
+              class="tt-input"
+            ></textarea>
+            {#if bugReportMsg}
+              <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug">{bugReportMsg}</p>
+            {/if}
           </div>
           <div class="tt-row tt-row-field" data-tip="Reset settings and history, or check for a newer version">
             <div class="flex gap-2 w-full">
@@ -2237,7 +2166,7 @@ Reply with only the single word, lowercase, no punctuation.
   {/if}
 
   <!-- Bottom bar — zoom left, about right; tooltip hint centered when hovering indicators -->
-  <div bind:this={bottomBarEl} class="shrink-0 h-7 flex items-center justify-between px-2
+  <div class="shrink-0 h-7 flex items-center justify-between px-2
               select-none relative">
     <div class="flex items-center gap-1">
       <button
@@ -2315,8 +2244,8 @@ Reply with only the single word, lowercase, no punctuation.
   .about-card-out { animation: about-card-out 0.35s ease-in              forwards; }
 
   @keyframes adv-panel-in {
-    from { opacity: 0; transform: translateX(16px); }
-    to   { opacity: 1; transform: translateX(0); }
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
   .adv-panel-in { animation: adv-panel-in 0.2s cubic-bezier(0.16,1,0.3,1) forwards; }
 
@@ -2867,43 +2796,6 @@ Reply with only the single word, lowercase, no punctuation.
     flex-shrink: 0;
   }
   /* .tt-btn-recording lives in src/app.css alongside the rest of the .tt-btn family. */
-
-  /* ── No-model red banner ─────────────────────────────────────────────── */
-  .tt-no-model-banner {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    width: 100%;
-    padding: 9px 14px;
-    background: #dc2626;
-    color: #fff;
-    border: none;
-    border-top: 1px solid color-mix(in srgb, #000 25%, #dc2626);
-    border-bottom: 1px solid color-mix(in srgb, #000 25%, #dc2626);
-    cursor: pointer;
-    text-align: left;
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.01em;
-    transition: background 0.15s ease;
-  }
-  .tt-no-model-banner:hover { background: #b91c1c; }
-  .tt-no-model-banner-icon {
-    flex-shrink: 0;
-    font-size: 14px;
-    line-height: 1;
-  }
-  .tt-no-model-banner-msg {
-    flex: 1;
-    line-height: 1.2;
-  }
-  .tt-no-model-banner-cta {
-    flex-shrink: 0;
-    font-size: 11px;
-    font-weight: 500;
-    opacity: 0.9;
-  }
 
   /* ── No-model yellow popup ───────────────────────────────────────────── */
   .no-model-card {

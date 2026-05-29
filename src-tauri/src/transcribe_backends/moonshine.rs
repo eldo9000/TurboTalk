@@ -316,10 +316,11 @@ impl TranscriptionBackend for MoonshineBackend {
         let rejection = crate::transcribe::detect_garbage(&text);
 
         tracing::info!(
-            "[moonshine] transcribed: {:?} (rejection={:?})",
-            text,
+            "[moonshine] transcribed ({} chars, rejection={:?})",
+            text.chars().count(),
             rejection
         );
+        crate::diagnostic_log::record_transcript("moonshine", &text, &format!("{rejection:?}"));
 
         Ok(TranscriptOutcome { text, rejection })
     }

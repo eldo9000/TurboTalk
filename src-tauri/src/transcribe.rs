@@ -824,15 +824,20 @@ impl WhisperBackend {
 
         let whisper_ms = t_whisper_start.elapsed().as_millis();
         tracing::info!("[transcribe] whisper took {} ms", whisper_ms);
-        tracing::info!("[transcribe] transcript: {:?}", text);
+        // Never log transcript content to the session log — it can contain anything
+        // the user dictated and that log is bundled into uploaded bug reports.
+        tracing::info!("[transcribe] transcript ready ({} chars)", text.chars().count());
 
         // TASK-55: post-hoc hallucination detection on the cleaned text.
         let rejection = detect_garbage(&text);
+
+        // Full transcript → local-only debug log (never uploaded). Temporary.
+        crate::diagnostic_log::record_transcript("whisper", &text, &format!("{rejection:?}"));
         if let Some(ref reason) = rejection {
             tracing::warn!(
-                "[transcribe] hallucination detected ({:?}) — text will not be pasted: {:?}",
+                "[transcribe] hallucination detected ({:?}) — text will not be pasted ({} chars)",
                 reason,
-                text
+                text.chars().count()
             );
         }
 

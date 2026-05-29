@@ -78,6 +78,15 @@ export const commands = {
 	 *  (permission denied, .bin extension check failed, etc).
 	 */
 	deleteModelFile: (path: string) => typedError<boolean, string>(__TAURI_INVOKE("delete_model_file", { path })),
+	/**
+	 *  Delete an ONNX model bundle directory for Moonshine or Parakeet.
+	 * 
+	 *  `family` is "moonshine" or "parakeet"; `variant` is the variant slug
+	 *  (e.g. "tiny", "tdt-0.6b-v2"). Clears `backend_variant` when the removed
+	 *  bundle was the active selection. Returns `Ok(true)` when a directory was
+	 *  removed, `Ok(false)` when it was already gone.
+	 */
+	deleteBackendModel: (family: string, variant: string) => typedError<boolean, string>(__TAURI_INVOKE("delete_backend_model", { family, variant })),
 	loadHistory: () => __TAURI_INVOKE<HistoryEntry[]>("load_history"),
 	saveHistory: (entries: HistoryEntry[]) => typedError<null, string>(__TAURI_INVOKE("save_history", { entries })),
 	copyHistoryItem: (text: string) => typedError<null, string>(__TAURI_INVOKE("copy_history_item", { text })),
@@ -134,6 +143,12 @@ export const commands = {
 	runDiagnostics: () => __TAURI_INVOKE<DiagnosticsResult>("run_diagnostics"),
 	logClientEvent: (event: string, detail: string | null) => typedError<null, string>(__TAURI_INVOKE("log_client_event", { event, detail })),
 	exportDiagnosticReport: () => typedError<ExportDiagnosticResult, string>(__TAURI_INVOKE("export_diagnostic_report")),
+	/**
+	 *  Bundle the diagnostic report (with the tester's note) and upload it to the
+	 *  configured webhook. Always writes a local copy first so nothing is lost when
+	 *  the network or webhook is unavailable.
+	 */
+	submitBugReport: (note: string) => typedError<BugReportResult, string>(__TAURI_INVOKE("submit_bug_report", { note })),
 	openLogsFolder: () => typedError<null, string>(__TAURI_INVOKE("open_logs_folder")),
 	checkReadiness: () => __TAURI_INVOKE<Readiness>("check_readiness"),
 	/**
@@ -196,12 +211,6 @@ export const commands = {
 	 *  `service` must be one of: "accessibility" | "input_monitoring"
 	 */
 	resetTccEntry: (service: string) => typedError<null, string>(__TAURI_INVOKE("reset_tcc_entry", { service })),
-	/**
-	 *  Called from the frontend after every `setSize`.
-	 *  `adv_width` is the *zoomed* advanced window width (e.g. 1100 at 125% zoom).
-	 *  Fixes x so the right edge stays flush regardless of zoom level.
-	 */
-	repinMainWindow: (advWidth: number) => __TAURI_INVOKE<void>("repin_main_window", { advWidth }),
 };
 
 /* Types */
@@ -223,6 +232,13 @@ export type AudioConfig = {
  *  Persisted as lowercase ("whisper" / "moonshine" / "parakeet").
  */
 export type BackendFamily = "whisper" | "moonshine" | "parakeet";
+
+export type BugReportResult = {
+	// Short, human-quotable id the tester can reference (e.g. "A1B3C5").
+	report_id: string,
+	// Whether the report was uploaded (vs. only saved locally).
+	uploaded: boolean,
+};
 
 export type CleanupConfig = {
 	mode: CleanupMode,

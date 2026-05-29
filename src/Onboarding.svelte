@@ -9,10 +9,8 @@
   //
   // Closes itself by calling `onComplete()` when readiness is fully green.
 
-  import { onMount, onDestroy, tick } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
-  import { LogicalSize } from '@tauri-apps/api/dpi';
-  import { getCurrentWindow } from '@tauri-apps/api/window';
   import { commands } from './bindings.ts';
 
   let { onComplete, onUnsupportedContinue } = $props();
@@ -29,10 +27,6 @@
   let downloadPct        = $state(0);
   let downloadError      = $state('');
   let restartArmed       = $state(false);
-  let contentEl          = $state(null);
-  let resizeObserver     = null;
-  let resizeRaf          = null;
-  let lastWindowHeight   = 0;
 
   // Stale-entry fix: track whether user has already clicked "Open System
   // Settings" for a given step. Once set, show the fix-stale-entry UI if
@@ -50,80 +44,34 @@
   // Populated from listModelsForFamily — we show the recommended variant only.
   let altModels = $state([]);
   let onboardingModel = $derived(altModels.find(m => m.recommended) ?? altModels[0] ?? null);
-  const WINDOW_W = 440;
-  const WINDOW_SIZE_SLACK = 18;
 
-  let selectedModelReady = $derived(readiness?.model_present ?? false);
-
-  function currentZoom() {
-    return (parseFloat(document.documentElement.style.zoom || '100') || 100) / 100;
-  }
-
-  async function resizeToContent() {
-    await tick();
-    if (!contentEl) return;
-    const zoom = currentZoom();
-    const contentHeight = Math.ceil(contentEl.scrollHeight * zoom) + WINDOW_SIZE_SLACK;
-    const targetHeight = Math.max(360, contentHeight);
-    if (Math.abs(targetHeight - lastWindowHeight) < 2) return;
-    lastWindowHeight = targetHeight;
-    await getCurrentWindow().setSize(new LogicalSize(Math.ceil(WINDOW_W * zoom), targetHeight));
-  }
-
-  function scheduleResize() {
-    if (resizeRaf) cancelAnimationFrame(resizeRaf);
-    resizeRaf = requestAnimationFrame(() => {
-      resizeRaf = null;
-      resizeToContent();
-    });
-  }
-
-  function observeContentSize() {
-    resizeObserver?.disconnect();
-    resizeObserver = null;
-    if (!contentEl) return;
-    resizeObserver = new ResizeObserver(scheduleResize);
-    resizeObserver.observe(contentEl);
-    scheduleResize();
-  }
-
-  $effect(() => {
-    if (!contentEl) return;
-    observeContentSize();
-    return () => {
-      resizeObserver?.disconnect();
-      resizeObserver = null;
-    };
-  });
-
-  $effect(() => {
-    readiness;
-    launchAtLogin;
-    downloadingModel;
-    downloadPct;
-    downloadError;
-    restartArmed;
-    unsupportedPlatform;
-    imOpenedSettings;
-    axOpenedSettings;
-    fixImError;
-    fixAxError;
-    onboardingModel;
-    scheduleResize();
-  });
+  let selectedModelReady = $derived(
+    (readiness?.model_present ?? false) || (onboardingModel?.installed ?? false)
+  );
 
   async function loadAltModels() {
     altModels = await commands.listModelsForFamily(ONBOARDING_BACKEND).catch(() => []);
+    return altModels;
   }
 
   async function ensureParakeetBackend() {
     try {
       const cfg = await commands.getConfig();
+      const models = await loadAltModels();
+      const rec = models.find(m => m.recommended) ?? models[0];
+      let changed = false;
       if (cfg.backend !== ONBOARDING_BACKEND) {
         cfg.backend = ONBOARDING_BACKEND;
-        await commands.saveConfig(cfg);
+        changed = true;
       }
-      await loadAltModels();
+      if (rec?.installed) {
+        const variant = rec.id.replace(/^parakeet-/, '');
+        if (cfg.backend_variant !== variant) {
+          cfg.backend_variant = variant;
+          changed = true;
+        }
+      }
+      if (changed) await commands.saveConfig(cfg);
     } catch (e) {
       console.warn('ensureParakeetBackend failed', e);
     }
@@ -133,26 +81,20 @@
     return status === 'granted' || status === 'unsupported';
   }
 
-  function modelReadyForBackend(r) {
-    return r?.model_present ?? false;
-  }
-
   async function refresh() {
-    const [nextReadiness, nextLaunchAtLogin] = await Promise.all([
-      commands.checkReadiness(),
-      commands.getLaunchAtLogin(),
-    ]);
-    readiness = nextReadiness;
-    launchAtLogin = nextLaunchAtLogin;
+    launchAtLogin = await commands.getLaunchAtLogin();
     await ensureParakeetBackend();
-    const nextModelReady = modelReadyForBackend(nextReadiness);
+    const nextReadiness = await commands.checkReadiness();
+    readiness = nextReadiness;
+    const rec = altModels.find(m => m.recommended) ?? altModels[0];
+    const modelReady = nextReadiness.model_present || !!rec?.installed;
     if (
       !downloadingModel
       && permissionSatisfied(nextReadiness.accessibility)
       && permissionSatisfied(nextReadiness.input_monitoring)
       && permissionSatisfied(nextReadiness.microphone)
-      && nextModelReady
-      && nextLaunchAtLogin
+      && modelReady
+      && launchAtLogin
       && !nextReadiness.force_onboarding
     ) {
       stopPolling();
@@ -172,12 +114,9 @@
     await ensureParakeetBackend();
     await refresh();
     startPolling();
-    scheduleResize();
   });
   onDestroy(() => {
     stopPolling();
-    resizeObserver?.disconnect();
-    if (resizeRaf) cancelAnimationFrame(resizeRaf);
   });
 
   async function openAccessibility() {
@@ -248,8 +187,7 @@
         launchError = res.error || 'Could not enable launch at login.';
       } else {
         launchAtLogin = true;
-        stopPolling();
-        if (!downloadingModel) onComplete?.();
+        await refresh();
       }
     } finally {
       launchPromptInFlight = false;
@@ -358,7 +296,7 @@
 </script>
 
 <div class="fixed inset-0 z-[100] bg-[var(--surface)] text-[var(--text-primary)] flex flex-col overflow-y-auto">
-  <div bind:this={contentEl} class="max-w-[420px] w-full mx-auto px-6 py-6 pb-6 flex flex-col gap-3.5">
+  <div class="max-w-[420px] w-full mx-auto px-6 py-6 pb-6 flex flex-col gap-3.5">
 
     <div class="flex flex-col gap-1.5">
       <h1 class="text-[18px] font-semibold leading-tight text-[var(--text-primary)]">Welcome to Turbo Talk</h1>
@@ -626,6 +564,18 @@
         </div>
 
       </div>
+      {/if}
+
+      {#if readiness && !unsupportedPlatform && !readiness.force_onboarding}
+        {@const allDone = Object.values(stepStates).every(s => s === 'done')}
+        {#if allDone}
+          <button
+            onclick={() => { stopPolling(); onComplete?.(); }}
+            class="mt-1 px-5 py-2 rounded-md bg-green-600 hover:bg-green-500 text-white text-[13px] font-semibold transition-colors"
+          >
+            Get started
+          </button>
+        {/if}
       {/if}
     {:else}
       <p class="text-[12px] text-[var(--text-secondary)]">Checking system…</p>
