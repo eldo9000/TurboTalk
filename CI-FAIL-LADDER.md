@@ -19,3 +19,13 @@
 - **Next:** `hotkey.rs:1344` — add `#[path = "hotkey_win32.rs"]` on the mod declaration
 
 ## Fail arc closed — 2026-05-28 — 2 entries — green CI 26606830689
+
+## Fail #3 — 2026-05-29 — Windows build: onnxruntime.dll missing at resource path
+
+- **Q1 in-last-commit:** yes — `src-tauri/tauri.windows.conf.json`
+- **Q2 named-error:** yes — `resource path 'binaries\onnxruntime.dll' doesn't exist`
+- **Q3 seen-before:** no — new failure class (missing resource, not compile error)
+- **Q4 broken-vs-missing:** **missing** — declared the resource but no CI step fetches `onnxruntime.dll`
+- **Verdict:** **ARC**
+- **Hypothesis:** The Windows CI runner has no `binaries/onnxruntime.dll`. `npm run fetch-sidecars` only grabs Whisper/ggml DLLs. Need a fetch step or an npm script that downloads the ONNX Runtime native DLL before `npm run package`.
+- **Next:** surface to user — decide: add npm script + CI step to download onnxruntime.dll, or package the DLL into the repo? Most portable: add a `fetch-onnxruntime` npm script that downloads from the ONNX Runtime GitHub releases.
