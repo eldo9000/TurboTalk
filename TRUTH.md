@@ -51,9 +51,11 @@ Marks end of macOS feature development. v0.9 → v1.0 arc is Windows/Linux porti
 Bug fixes landed this session:
 - Onboarding bounce during model download on window focus (`recheckReadiness` download-in-flight guard)
 - Silent recording rejection / tail-empty segment-lost bug (`StopOutcome::Wav` speech_detected propagation)
-- Whisper hallucination on `speech_detected=false` (tail Whisper call gated on flag)
+- Whisper hallucination on `speech_detected=false` (tail Whisper call gated on flag) — **re-fixed 2026-05-29:** gate removed; trimmed WAV always transcribed, `detect_garbage` catches silence hallucinations
+- Paste-miss false positive on Electron editors (Cursor/Zed) — **fixed 2026-05-29:** AX role no longer gates success; osascript Cmd+V success = paste ok
 - Overlay stuck in recording mode during seg-recovery Whisper wait (emit `ptt-up` before `join_segments()`)
 - New recording UI corrupted by delayed seg-recovery events (`CURRENT_JOB_ID` race check after join)
+- Segment recovery (tail-too-short) leaks partial chunk text into history — emits `transcript` which frontend adds to `history.json`. Fixed: emit `recording-cancelled` instead in the segment recovery path so partial chunks are pasted but not persisted.
 
 Model lineup: Recommended = `ggml-large-v3-turbo` (1.6 GB) · Small = `ggml-large-v3-turbo-q5_0` (574 MB) · Large = `ggml-large-v3` (3.1 GB).
 

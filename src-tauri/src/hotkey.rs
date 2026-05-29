@@ -143,7 +143,7 @@ pub(crate) mod common {
     /// than typical tap-to-toggle latency so a normal toggle stop never trips
     /// the cancel.
     pub(super) const HOLD_CANCEL_DURATION: std::time::Duration =
-        std::time::Duration::from_millis(500);
+        std::time::Duration::from_millis(1000);
 
     /// Generation counter for hold-to-cancel candidate presses. Each qualifying
     /// trigger-key down stroke increments this; the timer thread captures its
@@ -348,6 +348,15 @@ pub(crate) mod common {
             // tile only fills (red border, canvas, word pills) once we're
             // actually capturing.
             if !crate::transcribe::is_ready() {
+                // If prewarm is already in flight from a prior press, this
+                // press is interpreted as a cancel — dismiss the arming
+                // overlay instead of queuing a second polling loop.
+                if crate::transcribe::prewarm_in_flight() {
+                    tracing::info!("[hotkey] arm cancelled — user pressed again during warmup");
+                    emit_critical(&app, "recording-cancelled", ());
+                    return;
+                }
+
                 crate::transcribe::prewarm(crate::settings::load(), app.clone());
 
                 // Pin the overlay to the cursor's monitor up front so the
@@ -527,17 +536,18 @@ pub(crate) mod common {
                     // Stage 1: transcribe the tail WAV (audio after the last
                     // segment cut, or the whole recording if no segments were
                     // emitted — identical to pre-TASK-54 batch behavior).
-                    // Skip Whisper when VAD detected no speech: Whisper
-                    // hallucinating on silence is worse than an empty result.
-                    let tail_result = if speech_detected {
-                        crate::transcribe::run_raw(&path)
-                    } else {
+                    // Always transcribe the tail when we have a WAV. The streaming
+                    // finalizer already trimmed silence and enforced MIN_RECORDING_MS;
+                    // gating on `speech_detected` caused VAD false-negatives to drop
+                    // real speech (5+ s of audio written with speech_detected=false).
+                    // Hallucinations on true silence are caught by detect_garbage().
+                    if !speech_detected {
                         tracing::info!(
-                            "[hotkey job_id={:?}] tail speech_detected=false — skipping Whisper",
+                            "[hotkey job_id={:?}] tail speech_detected=false — transcribing anyway",
                             job_id_opt
                         );
-                        Ok(crate::transcribe::TranscriptOutcome { text: String::new(), rejection: None })
-                    };
+                    }
+                    let tail_result = crate::transcribe::run_raw(&path);
 
                     // Stage 2: wait for any in-flight concurrent segment
                     // transcriptions (started at key-down) to finish, then
@@ -547,17 +557,21 @@ pub(crate) mod common {
                         .map(|st| st.join_segments())
                         .unwrap_or_default();
 
-                    // TASK-55: the assembled transcript carries the tail's
-                    // rejection status. Segment rejections are not checked
-                    // per-segment (see transcribe_one_segment comment); only
-                    // the tail's detect_garbage result is propagated here.
+                    // TASK-55: run garbage detection on the fully assembled
+                    // transcript (segments + tail), not just the tail outcome.
                     let transcribe_result: anyhow::Result<(String, Option<crate::transcribe::RejectReason>)> = match tail_result {
                         Ok(outcome) => {
                             let parts: Vec<&str> = [seg_text.as_str(), outcome.text.as_str()]
                                 .into_iter()
                                 .filter(|s| !s.is_empty())
                                 .collect();
-                            Ok((parts.join(" "), outcome.rejection))
+                            let assembled = parts.join(" ");
+                            let rejection = if assembled.is_empty() {
+                                None
+                            } else {
+                                crate::transcribe::detect_garbage(&assembled)
+                            };
+                            Ok((assembled, rejection))
                         }
                         Err(e) => {
                             if !seg_text.is_empty() {
@@ -774,7 +788,12 @@ pub(crate) mod common {
                                     emit_critical(&app, "recording-discarded", "empty-final-text");
                                     play_chime(ChimeEvent::Finish);
                                 } else {
-                                    emit_critical(&app, "transcript", final_text.clone());
+                                    // TASK-57: segment recovery only has partial text
+                                    // (segments cut mid-recording; tail was too short).
+                                    // Emit recording-cancelled instead of transcript so
+                                    // the partial chunk does not create a history entry.
+                                    // The text is still pasted to the active app below.
+                                    emit_critical(&app, "recording-cancelled", ());
                                     if let Some(job_id) = job_id_opt {
                                         emit_stage(&app, job_id, "pasting");
                                     }
@@ -984,7 +1003,7 @@ mod imp {
                                 let is_key_down = flags.contains(target_flag);
                                 // Hold-to-cancel: any trigger-key down stroke
                                 // while the recorder is busy (Recording or
-                                // Transcribing) arms a 500 ms timer. If the
+                                // Transcribing) arms a 1 s timer. If the
                                 // user keeps holding past the deadline, the
                                 // in-flight job is cancelled. Released early
                                 // → timer no-ops, normal PTT semantics apply.
@@ -1284,7 +1303,7 @@ mod imp {
                         if was_down {
                             return;
                         }
-                        // Hold-to-cancel: arm a 500 ms timer if the recorder
+                        // Hold-to-cancel: arm a 1 s timer if the recorder
                         // is busy. Held past the deadline → cancel; released
                         // early → no-op and normal PTT semantics apply.
                         if cancel_on_hold {

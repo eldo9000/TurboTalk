@@ -19,16 +19,16 @@
 // We deliberately do NOT block paste on a focus mismatch — see ARCHITECTURE.md
 // "Paste Target Policy". Future queueing work must revisit this rule.
 //
-// Clipboard / miss detection
+// Clipboard / paste success
 // ──────────────────────────
-// Before each paste, we query the macOS Accessibility API for the focused UI
-// element role of the frontmost application. If a text-input-capable element
-// is focused (AXTextField, AXTextArea, AXComboBox, AXSearchField) we restore
-// the original clipboard after paste lands. If no such element is detected —
-// either because focus is on a non-text surface or the app doesn't expose AX —
-// we leave the transcribed text in the clipboard and return `Ok(false)` so the
-// caller can surface a "text is in clipboard" hint. Cmd+V is always sent
-// regardless of the AX result.
+// We query the macOS Accessibility API for the focused element role before
+// paste purely for diagnostics — many modern editors (Cursor, Zed, VS Code,
+// Electron webviews) accept Cmd+V fine but expose AXWebArea, AXGroup, or no
+// focused element at all. A pre-paste AX role check therefore produces
+// constant false "paste miss" reports even when injection succeeded.
+//
+// Success is defined by a successful osascript Cmd+V keystroke; the prior
+// clipboard is always restored afterward (same policy as the Windows branch).
 
 #[cfg(target_os = "macos")]
 use arboard::Clipboard;
@@ -136,35 +136,18 @@ fn focused_ax_role() -> Option<String> {
     }
 }
 
-/// Returns `true` when the AX API reports a text-input-capable element has
-/// focus in the frontmost application. Returns `false` on any AX failure or
-/// when the focused element is not a text surface — the caller treats this as
-/// a probable miss and leaves the transcribed text in the clipboard.
-#[cfg(target_os = "macos")]
-fn has_focused_text_element() -> bool {
-    match focused_ax_role() {
-        None => false,
-        Some(role) => matches!(
-            role.as_str(),
-            "AXTextField" | "AXTextArea" | "AXComboBox" | "AXSearchField"
-        ),
-    }
-}
-
 /// Pastes `text` into the frontmost application.
 ///
-/// Returns `Ok(true)` when a text-input element was detected and paste likely
-/// landed — original clipboard is restored. Returns `Ok(false)` when no
-/// text-input element was detected — Cmd+V was still sent but the transcribed
-/// text is left in the clipboard for manual recovery. Returns `Err` on a hard
-/// failure (osascript non-zero exit).
+/// Returns `Ok(true)` when the osascript Cmd+V keystroke succeeds — original
+/// clipboard is restored. Returns `Err` on a hard failure (osascript non-zero
+/// exit). AX role is logged at debug level for diagnostics only.
 #[cfg(target_os = "macos")]
 pub fn paste(text: &str) -> anyhow::Result<bool> {
     let mut cb = Clipboard::new()?;
     let prior = cb.get_text().ok();
 
-    // AX check before clipboard write — determines clipboard restore behaviour.
-    let text_field_present = has_focused_text_element();
+    let ax_role = focused_ax_role();
+    tracing::debug!("[paste] AX focused role before paste: {:?}", ax_role);
 
     cb.set_text(text)?;
 
@@ -188,16 +171,10 @@ pub fn paste(text: &str) -> anyhow::Result<bool> {
 
     std::thread::sleep(std::time::Duration::from_millis(150));
 
-    if text_field_present {
-        // Paste likely landed — restore original clipboard.
-        if let Some(prev) = prior {
-            let _ = cb.set_text(prev);
-        }
-        Ok(true)
-    } else {
-        // Paste likely missed — leave transcribed text in clipboard.
-        Ok(false)
+    if let Some(prev) = prior {
+        let _ = cb.set_text(prev);
     }
+    Ok(true)
 }
 
 /// Windows + Linux/X11 paste implementation.

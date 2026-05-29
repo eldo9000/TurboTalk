@@ -1,15 +1,16 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-05-26  
-**Current state:** macOS dictation feature-complete. Windows hotkey fix landed locally: default Right Control + hold mode, full rdev key mapping, auto-migration from macOS-style `right_option`. Awaiting user retest on real Windows hardware.
+**Last updated:** 2026-05-29  
+**Current state:** Segment recovery path no longer leaks partial chunk text into history. When tail audio is too short after streaming trim, the recovered segment text is still pasted to the active app but no longer creates a persistent history entry (replaced `transcript` event with `recording-cancelled` in the recovery path).
 
-**Next action:** Windows test with **Export test log** (Settings → System): flip controls, exercise PTT/hotkey/paste, export report, attach file.
+**Next action:** Rebuild / retest — verify that partial-segment dictations no longer appear as separate history entries when the tail is too short.
 
 ## Open backlog
 
 | Item | Status |
 |------|--------|
 | TASK-25/26 — Windows hotkey + paste | Hotkey fix ready for retest; paste still unproven E2E |
+| TASK-57 — Segment recovery pollutes history | Fixed — partial chunks no longer added to history |
 | TASK-48 — CoreML / Neural Engine | Phase 1 built; phase 2 blocked on dyld-init hang — mitigated via Metal-only default + preflight guard |
 | Developer ID signing + notarization | Deferred until credentials available |
 | Parakeet v3 multilingual | In catalog; end-to-end not user-confirmed |

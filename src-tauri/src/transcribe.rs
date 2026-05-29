@@ -1029,6 +1029,13 @@ pub fn prewarm_failed() -> bool {
     PREWARM_FAILED.load(Ordering::Acquire)
 }
 
+/// True while a background prewarm thread is currently building the worker.
+/// The hotkey path uses this to detect when a second press arrives during
+/// the arming wait and interrupts it instead of queuing a second loop.
+pub fn prewarm_in_flight() -> bool {
+    PREWARM_IN_FLIGHT.load(Ordering::Acquire)
+}
+
 /// Kill any whisper-server processes left over from a previous run that was
 /// terminated before its `RunEvent::Exit` cleanup fired (e.g. SIGKILL from
 /// Tauri's dev runner during rapid file-change rebuilds). Best-effort: logs

@@ -5,9 +5,9 @@
   import { commands } from './bindings.ts';
 
   // 'arming' = backend received the press but whisper-server hasn't finished
-  // loading yet. Pill chrome shows with a yellow border but the internals
-  // (canvas, label, word pills) are hidden — the user can see their press
-  // registered without being misled into speaking before capture starts.
+  // loading yet. Pill chrome shows with a yellow breathing border, a spinner,
+  // and a "Starting… / 0:05" elapsed counter so the user sees their press
+  // registered and that something is happening while the model loads.
   let mode      = $state('idle'); // 'idle' | 'arming' | 'recording' | 'transcribing' | 'error'
   let canvasEl  = $state(null);
   let wordCount = $state(0);
@@ -348,18 +348,32 @@
     animation: pulse-yellow 10s ease-in-out infinite;
   }
   /* Arming = press registered, whisper-server still loading. Steady yellow
-     border (no pulse) so it visually distinguishes from the transcribing
-     pulse. Internals (canvas, label, word pills) are hidden via the
-     .pill-inner.hidden rule below — only the chrome is visible. */
+     border with a soft breathing pulse so the user can see the press landed.
+     Internals show a "Starting…" label with elapsed seconds so they know
+     something is happening. Replaces the arming state — the pill chrome is
+     always visible while loading. */
   .pill.arming {
     border-color: rgba(251, 191, 36, 0.85);
+    animation: pulse-arming 2s ease-in-out infinite;
+  }
+  @keyframes pulse-arming {
+    0%, 100% { border-color: rgba(251, 191, 36, 0.35); }
+    50%       { border-color: rgba(251, 191, 36, 0.95); }
+  }
+  .arming-spinner {
+    width: 10px;
+    height: 10px;
+    border: 2px solid rgba(251, 191, 36, 0.25);
+    border-top-color: rgba(251, 191, 36, 0.95);
+    border-radius: 50%;
+    animation: arming-spin 1s linear infinite;
+  }
+  @keyframes arming-spin {
+    to { transform: rotate(360deg); }
   }
   .pill-inner {
     display: contents;
     transition: opacity 120ms ease-out;
-  }
-  .pill-inner.hidden > * {
-    visibility: hidden;
   }
 
   canvas { display: block; }
@@ -412,7 +426,19 @@
     style:-webkit-backdrop-filter={isPeeking ? 'blur(1px) saturate(100%)' : 'blur(18px) saturate(160%)'}
     style:opacity={mode === 'idle' ? 0 : isPeeking ? 0.24 : 1}
   >
-    <div class="pill-inner" class:hidden={mode === 'arming'}>
+    <div class="pill-inner">
+    {#if mode === 'arming'}
+      <div class="flex items-center gap-2 px-1">
+        <div class="arming-spinner"></div>
+        <div class="flex flex-col items-start gap-[1px]">
+          <span class="text-[11px] font-semibold tracking-wide leading-tight"
+                style="color: #fbbf24;">Starting…</span>
+          <span class="text-[9px] tabular-nums leading-tight" style="color: rgba(255,255,255,0.4);">
+            {fmtElapsed(elapsedSecs)}
+          </span>
+        </div>
+      </div>
+    {:else}
     <canvas
       bind:this={canvasEl}
       style="width: {CANVAS_W}px; height: {CANVAS_H}px;"
@@ -436,6 +462,7 @@
         </span>
       {/if}
     </div>
+    {/if}
     </div>
 
   </div>
