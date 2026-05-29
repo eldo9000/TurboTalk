@@ -6,14 +6,16 @@
 // but Tauri's bundle-resources check needs the DLL in src-tauri/binaries/
 // *before* the build starts. This script provides it.
 //
-// Uses Python's built-in lzma module for decompression so there are no
-// Node.js dependency requirements. Python is available on all CI runners.
+// Steps:
+//   1. Download .tar.lzma2 archive via Python's urllib
+//   2. Extract via 7z (pre-installed on windows-latest GitHub runners)
+//   3. Find onnxruntime.dll in the extracted tree, copy to binariesDir
 //
 // Wired via package.json: `npm run fetch-onnxruntime`.
 // Safe to run on any platform — skips silently on non-Windows.
 
-import { mkdirSync, statSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { mkdirSync, statSync, copyFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
+import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -41,45 +43,67 @@ try {
 
 mkdirSync(binariesDir, { recursive: true });
 
-// Use Python to download + decompress lzma2 tar.
-// Python's built-in lzma + tarfile modules handle this natively.
+// Use Python to download (built-in, no deps).
+// 7z does NOT handle HTTPS -> URL resolution on its own in all environments.
+const archiveLocal = join(tmpdir(), 'onnxruntime.tar.lzma2');
 execFileSync('python3', [
   '-c', `
-import urllib.request, tarfile, lzma, os, sys
-
+import urllib.request, os, sys
 url = ${JSON.stringify(ARCHIVE_URL)}
-dest = os.path.join(${JSON.stringify(binariesDir)}, 'onnxruntime.tar.lzma2')
-
+dest = ${JSON.stringify(archiveLocal)}
 try:
     urllib.request.urlretrieve(url, dest)
 except Exception as e:
     print(f'download failed: {e}', file=sys.stderr)
     sys.exit(1)
-
 sz = os.path.getsize(dest)
 print(f'downloaded {sz} bytes')
-
-try:
-    with lzma.open(dest) as f:
-        with tarfile.open(fileobj=f, mode='r|') as tar:
-            tar.extractall(path=${JSON.stringify(binariesDir)})
-except Exception as e:
-    print(f'extract failed: {e}', file=sys.stderr)
-    # Clean up partial download
-    try: os.remove(dest)
-    except: pass
-    sys.exit(1)
-
-os.remove(dest)
-print('onnxruntime.dll extracted to ' + ${JSON.stringify(binariesDir)})
 `,
 ], { stdio: 'inherit' });
 
-// Verify the DLL landed
-try {
-  statSync(dllPath);
-  console.log(`[fetch-onnxruntime] done — ${dllPath}`);
-} catch {
-  console.error('[fetch-onnxruntime] onnxruntime.dll not found after extraction');
+if (!existsSync(archiveLocal)) {
+  console.error('[fetch-onnxruntime] archive was not downloaded');
   process.exit(1);
+}
+
+// Extract using 7z — pre-installed on windows-latest GitHub runners.
+// .tar.lzma2 is raw LZMA2; 7z handles the single-step extraction to a tar,
+// then extracts the tar, all in one pass.
+const extractDir = join(tmpdir(), 'turbotalk-onnxruntime-x');
+rmSync(extractDir, { recursive: true, force: true });
+mkdirSync(extractDir, { recursive: true });
+
+console.log('[fetch-onnxruntime] extracting via 7z …');
+execFileSync('7z', ['x', archiveLocal, `-o${extractDir}`, '-y'], { stdio: 'inherit' });
+
+// Find onnxruntime.dll in the extracted tree — the archive contains a
+// nested directory structure (e.g. lib/onnxruntime.dll or bin/onnxruntime.dll).
+const files = findFiles(extractDir, 'onnxruntime.dll');
+if (files.length === 0) {
+  console.error('[fetch-onnxruntime] onnxruntime.dll not found in extracted archive');
+  process.exit(1);
+}
+
+copyFileSync(files[0], dllPath);
+console.log(`[fetch-onnxruntime] done — ${dllPath}`);
+
+// Cleanup temp files
+rmSync(extractDir, { recursive: true, force: true });
+rmSync(archiveLocal, { force: true });
+
+// --- helpers ---
+
+function findFiles(dir, name) {
+  const results = [];
+  try {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        results.push(...findFiles(full, name));
+      } else if (entry.name === name) {
+        results.push(full);
+      }
+    }
+  } catch { /* permission or missing dir — skip */ }
+  return results;
 }

@@ -29,3 +29,14 @@
 - **Verdict:** **ARC**
 - **Hypothesis:** The Windows CI runner has no `binaries/onnxruntime.dll`. `npm run fetch-sidecars` only grabs Whisper/ggml DLLs. Need a fetch step or an npm script that downloads the ONNX Runtime native DLL before `npm run package`.
 - **Next:** created `scripts/fetch-onnxruntime.mjs` + `npm run fetch-onnxruntime` — downloads ONNX Runtime 1.26.0 DLL from pyke.io CDN, extracts via Python3 lzma, places in `src-tauri/binaries/`. Chained in `package` script before `tauri build`. Pushed as `2f61295`, triggering `Dev Build (All Platforms)` via `gh workflow run`.
+- **Result:** Red — Python `lzma.open()` uses FORMAT_XZ, archive is raw LZMA2. Download worked (30 MB), extract failed: `Input format not supported by decoder`.
+
+## Fail #4 — 2026-05-29 — Windows build: LZMA2 extraction failed in fetch-onnxruntime
+
+- **Q1 in-last-commit:** no — failing script was in `2f61295`, last commit `e14a55f` touched `hotkey.rs` only
+- **Q2 named-error:** yes — `extract failed: Input format not supported by decoder`
+- **Q3 seen-before:** yes — same arc as Fail #3 (onnxruntime delivery to binaries/)
+- **Q4 broken-vs-missing:** broken — extraction code uses wrong decompression method
+- **Verdict:** **ARC**
+- **Hypothesis:** Python built-in `lzma` module doesn't handle raw LZMA2 archives (no XZ container). 7z is available on `windows-latest` runners and handles this format natively.
+- **Next:** rewritten `scripts/fetch-onnxruntime.mjs` to use Python for HTTPS download + 7z for extraction. Also handles nested directory finding in the archive (DLL may be in `bin/` or `lib/` subdir). Pushed with this ladder update.
