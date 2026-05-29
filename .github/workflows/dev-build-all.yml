@@ -1,0 +1,163 @@
+# TurboTalk — Dev build (macOS + Windows)
+#
+# Builds both platforms on demand and uploads artifacts to the Actions tab.
+# No GitHub Release is created. Download artifacts from the Actions tab.
+#
+# Retention: 7 days.
+
+name: Dev Build (All Platforms)
+
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  build-macos:
+    name: Build (darwin-aarch64)
+    runs-on: macos-14
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Configure git auth for private cargo deps
+        env:
+          LIBRE_APPS_TOKEN: ${{ secrets.LIBRE_APPS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LIBRE_APPS_TOKEN:-}" ]; then
+            echo "::error::LIBRE_APPS_TOKEN secret is not set."
+            exit 1
+          fi
+          git config --global \
+            "url.https://oauth2:${LIBRE_APPS_TOKEN}@github.com/.insteadOf" \
+            "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: macos-dev-cargo-aarch64-apple-darwin-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            macos-dev-cargo-aarch64-apple-darwin-
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Install whisper.cpp (provides whisper-server sidecar)
+        run: brew install whisper-cpp
+
+      - name: Patch Homebrew whisper-server rpath for bundle layout
+        run: install_name_tool -add_rpath @executable_path/../Resources/ /opt/homebrew/bin/whisper-server
+
+      - name: Fetch Whisper sidecars
+        run: npm run fetch-sidecars
+
+      - name: Fetch Silero VAD model
+        run: npm run fetch-vad-model
+
+      - name: Build Tauri app
+        run: npm run tauri build -- --target aarch64-apple-darwin
+
+      - name: Collect DMG
+        run: |
+          mkdir -p dist-artifacts
+          cp target/aarch64-apple-darwin/release/bundle/dmg/*.dmg dist-artifacts/
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: TurboTalk-macos-arm64-dev
+          path: dist-artifacts/*
+          if-no-files-found: error
+          retention-days: 7
+
+  build-windows:
+    name: Build (windows-x64)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Configure git auth for private cargo deps
+        env:
+          LIBRE_APPS_TOKEN: ${{ secrets.LIBRE_APPS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LIBRE_APPS_TOKEN:-}" ]; then
+            echo "::error::LIBRE_APPS_TOKEN secret is not set."
+            exit 1
+          fi
+          git config --global \
+            "url.https://oauth2:${LIBRE_APPS_TOKEN}@github.com/.insteadOf" \
+            "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-dev-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            windows-dev-cargo-
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Fetch Whisper sidecars
+        run: npm run fetch-sidecars
+
+      - name: Build
+        run: npm run package
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: TurboTalk-windows-x64-dev
+          path: dist-artifacts/*
+          if-no-files-found: error
+          retention-days: 7
