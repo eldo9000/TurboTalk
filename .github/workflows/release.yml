@@ -171,6 +171,9 @@ jobs:
       - name: Fetch Whisper sidecars
         run: npm run fetch-sidecars
 
+      - name: Fetch Silero VAD model
+        run: npm run fetch-vad-model
+
       - name: Build Tauri app
         run: npm run tauri build -- --target aarch64-apple-darwin
 
