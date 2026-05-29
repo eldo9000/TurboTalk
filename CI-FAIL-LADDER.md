@@ -40,3 +40,14 @@
 - **Verdict:** **ARC**
 - **Hypothesis:** Python built-in `lzma` module doesn't handle raw LZMA2 archives (no XZ container). 7z is available on `windows-latest` runners and handles this format natively.
 - **Next:** rewritten `scripts/fetch-onnxruntime.mjs` to use Python for HTTPS download + 7z for extraction. Also handles nested directory finding in the archive (DLL may be in `bin/` or `lib/` subdir). Pushed with this ladder update.
+- **Result:** Red — 7z doesn't recognize `.tar.lzma2` extension on Windows (`Cannot open the file as archive`).
+
+## Fail #5 — 2026-05-29 — Windows build: 7z can't open .tar.lzma2 archive
+
+- **Q1 in-last-commit:** yes — `scripts/fetch-onnxruntime.mjs`
+- **Q2 named-error:** yes — `7-Zip: Cannot open the file as archive`
+- **Q3 seen-before:** yes — same arc as Fail #3/#4 (onnxruntime delivery to binaries/)
+- **Q4 broken-vs-missing:** broken — extraction uses format 7z can't detect
+- **Verdict:** **ARC** (third attempt, same arc)
+- **Hypothesis:** The `.tar.lzma2` extension is non-standard — 7z 26.00 on Windows can't autodetect the inner LZMA2 format from the filename. The pyke.io dist archives use raw LZMA2 compression (not XZ container, not legacy .lzma) which neither Python's `lzma` module nor 7z's autodetect handles well.
+- **Next:** switched strategy — download `Microsoft.ML.OnnxRuntime` NuGet package (official Microsoft distribution, standard .zip format) and extract `runtimes/win-x64/native/onnxruntime.dll` via 7z. NuGet version pinned to 1.26.0 matching the ort-sys dist.txt. Pushed with this ladder update.
