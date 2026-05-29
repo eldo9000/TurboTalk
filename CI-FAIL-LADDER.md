@@ -28,4 +28,4 @@
 - **Q4 broken-vs-missing:** **missing** — declared the resource but no CI step fetches `onnxruntime.dll`
 - **Verdict:** **ARC**
 - **Hypothesis:** The Windows CI runner has no `binaries/onnxruntime.dll`. `npm run fetch-sidecars` only grabs Whisper/ggml DLLs. Need a fetch step or an npm script that downloads the ONNX Runtime native DLL before `npm run package`.
-- **Next:** surface to user — decide: add npm script + CI step to download onnxruntime.dll, or package the DLL into the repo? Most portable: add a `fetch-onnxruntime` npm script that downloads from the ONNX Runtime GitHub releases.
+- **Next:** created `scripts/fetch-onnxruntime.mjs` + `npm run fetch-onnxruntime` — downloads ONNX Runtime 1.26.0 DLL from pyke.io CDN, extracts via Python3 lzma, places in `src-tauri/binaries/`. Chained in `package` script before `tauri build`. Pushed as `2f61295`, triggering `Dev Build (All Platforms)` via `gh workflow run`.
