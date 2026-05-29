@@ -1,7 +1,7 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-05-29  
-**Current state:** Segment recovery path no longer leaks partial chunk text into history. When tail audio is too short after streaming trim, the recovered segment text is still pasted to the active app but no longer creates a persistent history entry (replaced `transcript` event with `recording-cancelled` in the recovery path).
+**Current state:** Garbage detection (trigram repetition) no longer blocks paste or history. The `transcription-rejected` badge still shows in the UI as a warning, but the text is pasted to the active app and saved to history. ONNX Runtime DLL fetch added for Windows CI (`fetch-onnxruntime.mjs`). Build green CI pending.
 
 **Next action:** Rebuild / retest — verify that partial-segment dictations no longer appear as separate history entries when the tail is too short.
 

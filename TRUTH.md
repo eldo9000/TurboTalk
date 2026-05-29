@@ -153,3 +153,10 @@ TurboTalk is a personal-use tool, not a Libre product. Promotion happens only if
 - Used daily for two consecutive weeks, AND
 - Demonstrably works for at least one non-Eldo person, AND
 - Chaperone Layer proves out and is worth shipping
+
+## Known tradeoffs
+
+- **Garbage detection (trigram repetition)** is a heuristic that catches
+  hallucinations (repeating "lo lo lo...") but also fires on legitimate speech
+  (stuttering, repeated S's, etc.). It no longer blocks paste or history — the
+  `transcription-rejected` badge is just a UI warning.

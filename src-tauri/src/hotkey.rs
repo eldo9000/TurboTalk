@@ -616,12 +616,16 @@ pub(crate) mod common {
                             );
 
                             // TASK-55: if the transcript was flagged as a
-                            // hallucination, emit `transcription-rejected` and
-                            // skip paste entirely. The frontend displays the
-                            // text in the main window with a "⚠ filtered" badge.
+                            // hallucination, emit `transcription-rejected` as a
+                            // UI badge but continue to paste and save to history.
+                            // The garbage detector is a heuristic that catches
+                            // legitimate speech (stuttering, repeated S's, etc.)
+                            // as false positives — blocking paste/history for
+                            // those is worse than the occasional hallucination
+                            // that slips through.
                             if let Some(reason) = rejection {
                                 tracing::warn!(
-                                    "[cleanup job_id={:?}] transcript rejected ({:?}) — skipping paste",
+                                    "[cleanup job_id={:?}] transcript rejected ({:?}) — continuing to paste",
                                     job_id_opt,
                                     reason
                                 );
@@ -633,12 +637,8 @@ pub(crate) mod common {
                                         "reason": reason.description(),
                                     }),
                                 );
-                                rec.finish();
-                                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                                if let Some(job_id) = job_id_opt {
-                                    emit_stage(&app, job_id, "ready");
-                                }
-                                return;
+                                // fall through — still emit transcript event
+                                // (history) and paste the text.
                             }
 
                             // Stage 2: cleanup as its own explicit call site.
