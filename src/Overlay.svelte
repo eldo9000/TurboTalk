@@ -82,6 +82,18 @@
   let cursorInZone = $state(false);
   let isPeeking = $derived(mode === 'recording' && cursorInZone);
 
+  // Visual AGC — track a rolling maximum RMS so quiet mics still show
+  // full-scale bars. Attack is instant; decay halves every ~34 frames
+  // (~1.7 s at 20 Hz). This only affects the visual meter — the
+  // speech-threshold check below still uses the raw, unnormalized RMS.
+  let meterPeak = 0.02; // start at a reasonable floor (~1% of full scale)
+  const METER_FLOOR = 0.005; // never divide by smaller than this
+  const METER_DECAY = 0.98;  // per-frame decay factor at 20 Hz
+
+  function resetMeterPeak() {
+    meterPeak = METER_FLOOR;
+  }
+
   function draw() {
     if (!canvasEl) return;
     const ctx = canvasEl.getContext('2d');
@@ -97,8 +109,11 @@
       ? 'rgba(255,255,255,0.95)'
       : 'rgba(255,255,255,0.35)';
 
+    const peak = Math.max(meterPeak, METER_FLOOR);
+
     for (let i = 0; i < HISTORY; i++) {
-      const norm = Math.sqrt(Math.min(1, levels[i])); // sqrt for perceptual scaling
+      const gainNorm = Math.min(1, levels[i] / peak); // normalize against rolling peak
+      const norm = Math.sqrt(gainNorm); // sqrt for perceptual scaling
       const barH = Math.max(2 * dpr, norm * H);
       ctx.fillRect(
         Math.round(i * barW),
@@ -177,6 +192,7 @@
       levels = Array(HISTORY).fill(0);
       speechFrames = 0;
       wordCount = 0;
+      resetMeterPeak();
       startElapsed();
       mode = 'arming';
       draw();
@@ -192,6 +208,7 @@
       levels = Array(HISTORY).fill(0);
       speechFrames = 0;
       wordCount = 0;
+      resetMeterPeak();
       startElapsed();
       mode = 'recording';
       draw();
@@ -260,6 +277,14 @@
       if (mode !== 'recording') return;
       const v = Math.min(1.0, e.payload);
       levels = [...levels.slice(1), v];
+
+      // Visual AGC: instant attack, slow decay.
+      if (v > meterPeak) {
+        meterPeak = v;
+      } else {
+        meterPeak = Math.max(METER_FLOOR, meterPeak * METER_DECAY);
+      }
+
       if (v > SPEECH_THRESHOLD) {
         speechFrames++;
         const newCount = Math.round(speechFrames * 0.05 * 140 / 60);

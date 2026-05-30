@@ -1,7 +1,7 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-05-29  
-**Current state:** Garbage detection (trigram repetition) no longer blocks paste or history. The `transcription-rejected` badge still shows in the UI as a warning, but the text is pasted to the active app and saved to history. ONNX Runtime DLL fetch added for Windows CI (`fetch-onnxruntime.mjs`). Build green CI pending.
+**Last updated:** 2026-05-30  
+**Current state:** Added visual AGC to the overlay audio meter. Quiet mics (Windows I16, crappy headsets) now show full-scale bars. A rolling peak normalizer with instant attack + slow decay (~1.7s halving) normalizes bar heights against recent maximum amplitude. Speech threshold and transcription paths are unaffected — this is purely cosmetic. Garbage detection no longer blocks paste/history. ONNX Runtime NuGet fetch for Windows CI (pending green).
 
 **Next action:** Rebuild / retest — verify that partial-segment dictations no longer appear as separate history entries when the tail is too short.
 

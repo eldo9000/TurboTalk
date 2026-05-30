@@ -1734,7 +1734,15 @@ pub fn run() {
                         }
                     }
                     "restart" => app.restart(),
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        // Release the warmed transcription backend before the
+                        // process starts tearing down. `RunEvent::Exit` also
+                        // handles this, but doing it here makes tray Quit
+                        // deterministic and avoids carrying model-sized memory
+                        // until the final event-loop tick.
+                        transcribe::abort_active();
+                        app.exit(0);
+                    }
                     _ => {}
                 })
                 .build(app)?;
@@ -2014,16 +2022,18 @@ pub fn run() {
             hotkey::spawn(recorder, tray_icon, app.handle().clone(), hotkey_state);
 
             // Kill any whisper-server orphans left by a previous SIGKILL or
-            // rapid dev-mode restart before prewarming a fresh one.
+            // rapid dev-mode restart before this run can build a fresh one.
             transcribe::kill_orphans();
-            // Eagerly warm whisper-server only after first-run setup is done.
-            // Onboarding should be passive until the user clicks each step;
-            // avoid normal warmed-up-agent work while permissions or a usable
-            // model are still missing.
+            // Do not eagerly warm the transcription model on ordinary launch.
+            // large-v3-turbo and the ONNX backends can reserve hundreds of MB
+            // to multiple GB, so a quit/relaunch cycle can push macOS memory
+            // pressure yellow before the user has dictated anything. The
+            // hotkey path already performs the same prewarm on first press and
+            // shows the yellow arming tile while it loads.
             if crate::permissions::check_readiness().ready {
-                transcribe::prewarm(cfg.clone(), app.handle().clone());
+                tracing::info!("[transcribe] startup prewarm deferred until first dictation");
             } else {
-                tracing::info!("[transcribe] skipping startup prewarm until onboarding is complete");
+                tracing::info!("[transcribe] startup prewarm skipped until onboarding is complete");
             }
 
             Ok(())
@@ -2042,8 +2052,11 @@ pub fn run() {
             // do not run Drop on process termination, so without this the
             // setsid'd child survives every quit and accumulates ~1.6 GB
             // resident per leak.
-            if let RunEvent::Exit = event {
-                transcribe::abort_active();
+            match event {
+                RunEvent::ExitRequested { .. } | RunEvent::Exit => {
+                    transcribe::abort_active();
+                }
+                _ => {}
             }
         });
 }
