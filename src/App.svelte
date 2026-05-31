@@ -156,6 +156,8 @@
   let resetBusy    = $state(false);
   let resetError   = $state('');
   let shiftHeld    = $state(false);
+  let warmupResetBusy = $state(false);
+  let warmupResetMsg  = $state('');
 
   function closeAbout() {
     aboutClosing = true;
@@ -186,6 +188,21 @@
     await recheckReadiness();
   }
 
+  async function clearWarmupCache() {
+    warmupResetBusy = true;
+    warmupResetMsg = '';
+    const res = await commands.resetWarmupCache();
+    warmupResetBusy = false;
+    if (res.status === 'error') {
+      warmupResetMsg = res.error;
+      return;
+    }
+    warmupResetMsg = 'Warmup cleared. Next dictation will show the warm-up overlay.';
+    setTimeout(() => {
+      if (warmupResetMsg.startsWith('Warmup cleared.')) warmupResetMsg = '';
+    }, 4000);
+  }
+
   async function completeOnboarding() {
     await commands.clearForceOnboarding();
     await syncAppStateFromBackend();
@@ -196,6 +213,7 @@
     if (res.status === 'error') {
       console.warn('[onboarding] prewarm skipped:', res.error);
     }
+    commands.prewarmOllama(); // fire-and-forget — no await
   }
 
   // History
@@ -302,7 +320,8 @@ Reply with only the single word, lowercase, no punctuation.
   // Ollama setup state (Advanced panel)
   let ollamaReachable         = $state(null);  // null = not yet probed
   let ollamaModelPresent      = $state(null);
-  let ollamaPullState         = $state({ inFlight: false, pct: 0, status: '' });
+  let ollamaModelPartial      = $state(false); // partial blobs detected
+  let ollamaPullState         = $state({ inFlight: false, pct: 0, status: '', error: '' });
 
   // Active preset = the one whose prompt exactly equals the textarea's
   // current content. Edits of any kind drop this back to null, which the
@@ -785,6 +804,7 @@ Reply with only the single word, lowercase, no punctuation.
   async function handleModeClick(v) {
     cfgCleanupMode = v;
     saveModes();
+    if (v === 'chaperone') commands.prewarmOllama(); // fire-and-forget
   }
 
   // ── Ollama setup helpers ───────────────────────────────────────────────────
@@ -794,6 +814,7 @@ Reply with only the single word, lowercase, no punctuation.
     if (ping.status === 'error') {
       ollamaReachable = false;
       ollamaModelPresent = null;
+      ollamaModelPartial = false;
       return;
     }
     ollamaReachable = ping.data.reachable;
@@ -801,21 +822,33 @@ Reply with only the single word, lowercase, no punctuation.
       const model = cfgLlmModel || 'llama3.2:3b';
       const res = await commands.checkOllamaModel(model);
       ollamaModelPresent = res.status === 'ok' ? res.data : false;
+      ollamaModelPartial = ollamaModelPresent
+        ? await commands.checkOllamaPartialBlobs()
+        : false;
     } else {
       ollamaModelPresent = null;
+      ollamaModelPartial = false;
     }
   }
 
   async function startOllamaPull() {
     const model = cfgLlmModel || 'llama3.2:3b';
-    ollamaPullState = { inFlight: true, pct: 0, status: 'starting…' };
-    const res = await commands.pullOllamaModel(model);
-    if (res.status === 'ok') {
-      ollamaPullState = { inFlight: false, pct: 100, status: 'success' };
-      await refreshOllamaSetup();
-    } else {
-      uiErrors = [...uiErrors, { kind: 'ollama-pull-error', message: `Model pull failed: ${res.error}`, recoverable: true }];
-      ollamaPullState = { inFlight: false, pct: 0, status: '' };
+    ollamaPullState = { inFlight: true, pct: 0, status: 'starting…', error: '' };
+    try {
+      const res = await commands.pullOllamaModel(model);
+      if (res.status === 'ok') {
+        ollamaPullState = { inFlight: false, pct: 100, status: 'success', error: '' };
+        await refreshOllamaSetup();
+        commands.prewarmOllama(); // fire-and-forget — warm immediately after download
+      } else {
+        const msg = String(res.error ?? 'unknown error');
+        console.error('[ollama-pull] error:', msg);
+        ollamaPullState = { inFlight: false, pct: 0, status: '', error: msg };
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('[ollama-pull] threw:', msg);
+      ollamaPullState = { inFlight: false, pct: 0, status: '', error: msg };
     }
   }
 
@@ -1128,6 +1161,7 @@ Reply with only the single word, lowercase, no punctuation.
       if (!showOnboarding) {
         await applyWindowSizeLimits();
         await enforceWindowMinHeight();
+        commands.prewarmOllama(); // fire-and-forget — loads LLM before first dictation
       }
     });
     syncAppStateFromBackend();
@@ -1558,7 +1592,7 @@ Reply with only the single word, lowercase, no punctuation.
   <!-- Modes tab -->
   {#if activeTab === 'modes'}
     {@const isAdv = cfgCleanupMode === 'chaperone'}
-    <div class="flex-1 min-h-0 flex flex-col overflow-y-auto">
+    <div class="flex-1 min-h-0 overflow-y-auto pb-4 bg-[var(--surface)]">
 
       <div class="tt-set" style={isAdv ? 'min-height:auto' : ''}>
         <!-- Post-processing -->
@@ -1635,9 +1669,10 @@ Reply with only the single word, lowercase, no punctuation.
         </div>
       </div>
 
+      <!-- TODO: test Advanced tab Ollama buttons (Install Ollama, Download model) on Windows — ensure buttons are reachable and functional -->
       <!-- Advanced (Chaperone) — stacked below Post-processing + Whisper -->
       {#if isAdv}
-        <div class="tt-set adv-panel-in">
+        <div class="tt-set adv-panel-in" style="min-height:auto">
 
           <!-- Setup -->
           <div class="tt-section">
@@ -1648,13 +1683,23 @@ Reply with only the single word, lowercase, no punctuation.
               {/if}
             </div>
 
-            {#if ollamaReachable === false}
+            {#if ollamaReachable === null}
               <div class="tt-row tt-row-action">
                 <div class="tt-row-info">
-                  <span class="tt-check-lbl tt-check-lbl-strong">ollama not detected</span>
-                  <p class="tt-check-desc">Install Ollama to enable advanced cleanup.</p>
+                  <span class="tt-check-lbl tt-check-lbl-strong">Checking Ollama…</span>
                 </div>
-                <button onclick={installOllama} class="tt-btn">Install Ollama</button>
+                <button onclick={refreshOllamaSetup} class="tt-btn">Refresh</button>
+              </div>
+            {:else if ollamaReachable === false}
+              <div class="tt-row tt-row-action">
+                <div class="tt-row-info">
+                  <span class="tt-check-lbl tt-check-lbl-strong">Ollama not running</span>
+                  <p class="tt-check-desc">Start the Ollama app, then click Refresh. Or install it if you haven't yet.</p>
+                </div>
+                <div class="flex flex-col gap-1.5 items-end">
+                  <button onclick={refreshOllamaSetup} class="tt-btn">Refresh</button>
+                  <button onclick={installOllama} class="tt-btn" style="font-size:10px;opacity:0.7">Install Ollama</button>
+                </div>
               </div>
             {:else if ollamaReachable === true && !ollamaModelPresent}
               <div class="tt-row tt-row-action">
@@ -1672,9 +1717,41 @@ Reply with only the single word, lowercase, no punctuation.
                       <p class="tt-check-desc tt-truncate">{ollamaPullState.status}</p>
                     {/if}
                   {/if}
+                  {#if ollamaPullState.error}
+                    <p class="tt-check-desc" style="color:var(--error,#f87171)">{ollamaPullState.error}</p>
+                  {/if}
                 </div>
                 <button onclick={startOllamaPull} disabled={ollamaPullState.inFlight} class="tt-btn">
                   {ollamaPullState.inFlight ? '↓ …' : 'Download (~2GB)'}
+                </button>
+              </div>
+            {:else if ollamaReachable === true && ollamaModelPresent}
+              <div class="tt-row tt-row-action">
+                <div class="tt-row-info">
+                  {#if ollamaModelPartial}
+                    <span class="tt-check-lbl tt-check-lbl-strong" style="color:var(--error,#f87171)">Incomplete download detected</span>
+                    <p class="tt-check-desc">The previous download was interrupted. Re-pull to fix.</p>
+                  {:else}
+                    <span class="tt-check-lbl tt-check-lbl-strong">Model present</span>
+                    <p class="tt-check-desc">Re-pull if the model is behaving incorrectly.</p>
+                  {/if}
+                  {#if ollamaPullState.inFlight}
+                    <div class="tt-progress-row">
+                      <div class="tt-progress-track">
+                        <div class="tt-progress-fill" style="width:{ollamaPullState.pct}%"></div>
+                      </div>
+                      <span class="tt-progress-pct">{ollamaPullState.pct}%</span>
+                    </div>
+                    {#if ollamaPullState.status}
+                      <p class="tt-check-desc tt-truncate">{ollamaPullState.status}</p>
+                    {/if}
+                  {/if}
+                  {#if ollamaPullState.error}
+                    <p class="tt-check-desc" style="color:var(--error,#f87171)">{ollamaPullState.error}</p>
+                  {/if}
+                </div>
+                <button onclick={startOllamaPull} disabled={ollamaPullState.inFlight} class="tt-btn" class:tt-btn-danger-hover={ollamaModelPartial && !ollamaPullState.inFlight}>
+                  {ollamaPullState.inFlight ? '↓ …' : ollamaModelPartial ? 'Fix Download' : 'Re-pull'}
                 </button>
               </div>
             {/if}
@@ -1951,12 +2028,46 @@ Reply with only the single word, lowercase, no punctuation.
         </div>
 
         <!-- System -->
-        <div class="tt-section tt-section-last">
+        <div class="tt-section">
           <div class="subsection-hd"><span class="subsection-hd-title">System</span></div>
           <div class="tt-row tt-row-field justify-center" data-tip="Start TurboTalk automatically when you log in to macOS">
             <button
               onclick={() => { cfgLaunchLogin = !cfgLaunchLogin; saveSettings(); }}
               class="tt-multi-btn" class:tt-multi-on={cfgLaunchLogin}>Automatically launch TurboTalk at login</button>
+          </div>
+          <div class="tt-row tt-row-field" data-tip="Reset settings and history, or check for a newer version">
+            <div class="flex gap-2 w-full">
+              <button
+                onclick={() => shiftHeld ? (commands.resetOnboarding(), recheckReadiness()) : (resetOpen = true, resetClosing = false, resetError = '')}
+                class="tt-btn flex-1 justify-center"
+                class:tt-btn-danger-hover={!shiftHeld}
+                class:tt-btn-success={shiftHeld}
+              >
+                {shiftHeld ? 'Re-run Welcome Screen' : 'Reset TurboTalk'}
+              </button>
+              <div class="flex-1">
+                <UpdateManager />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Developer -->
+        <div class="tt-section tt-section-last">
+          <div class="subsection-hd subsection-hd-dev"><span class="subsection-hd-title">Developer</span></div>
+          <div class="tt-row tt-row-field" data-tip="Clear the warmed transcription backend so the next dictation cold-starts and shows the warm-up overlay">
+            <div class="flex flex-col gap-1.5 w-full">
+              <button
+                onclick={clearWarmupCache}
+                disabled={warmupResetBusy}
+                class="tt-btn w-full justify-center"
+              >
+                {warmupResetBusy ? 'Clearing…' : 'Clear warmup cache'}
+              </button>
+              {#if warmupResetMsg}
+                <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug">{warmupResetMsg}</p>
+              {/if}
+            </div>
           </div>
           <div class="tt-row tt-row-field" data-tip="Export a text file with config, UI events, and backend logs — attach when reporting Windows/macOS test results">
             <div class="flex flex-col gap-1.5 w-full">
@@ -1985,21 +2096,6 @@ Reply with only the single word, lowercase, no punctuation.
             {#if bugReportMsg}
               <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug">{bugReportMsg}</p>
             {/if}
-          </div>
-          <div class="tt-row tt-row-field" data-tip="Reset settings and history, or check for a newer version">
-            <div class="flex gap-2 w-full">
-              <button
-                onclick={() => shiftHeld ? (commands.resetOnboarding(), recheckReadiness()) : (resetOpen = true, resetClosing = false, resetError = '')}
-                class="tt-btn flex-1 justify-center"
-                class:tt-btn-danger-hover={!shiftHeld}
-                class:tt-btn-success={shiftHeld}
-              >
-                {shiftHeld ? 'Re-run Welcome Screen' : 'Reset TurboTalk'}
-              </button>
-              <div class="flex-1">
-                <UpdateManager />
-              </div>
-            </div>
           </div>
         </div>
 
@@ -2265,6 +2361,7 @@ Reply with only the single word, lowercase, no punctuation.
     padding-bottom: 10px;
   }
   .tt-section-last { border-bottom: none; padding-bottom: 0; }
+  .subsection-hd-dev { background: color-mix(in srgb, var(--surface-raised) 30%, #7a0000); }
   .tt-section-last .tt-row:last-child { padding-bottom: 0; }
   .tt-section-last .tt-row-field:last-child { padding-bottom: 4px; }
 

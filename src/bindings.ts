@@ -11,6 +11,7 @@ export const commands = {
 	getConfig: () => __TAURI_INVOKE<Config>("get_config"),
 	saveConfig: (cfg: Config) => typedError<null, string>(__TAURI_INVOKE("save_config", { cfg })),
 	prewarmModel: () => typedError<null, string>(__TAURI_INVOKE("prewarm_model")),
+	resetWarmupCache: () => typedError<null, string>(__TAURI_INVOKE("reset_warmup_cache")),
 	scanModelsDir: () => __TAURI_INVOKE<string[]>("scan_models_dir"),
 	/**
 	 *  Return the available models for a given backend family.
@@ -112,6 +113,13 @@ export const commands = {
 	 */
 	checkOllamaModel: (modelName: string) => typedError<boolean, string>(__TAURI_INVOKE("check_ollama_model", { modelName })),
 	/**
+	 *  Scan `~/.ollama/models/blobs/` for any `*-partial*` files, which are left
+	 *  behind when an `ollama pull` is interrupted mid-download. Returns `true` if
+	 *  any partial blobs are found — the model manifest may exist but the model
+	 *  is unusable until the blobs are complete.
+	 */
+	checkOllamaPartialBlobs: () => __TAURI_INVOKE<boolean>("check_ollama_partial_blobs"),
+	/**
 	 *  Open a validated `https://*.ollama.com` URL in the user's default browser.
 	 * 
 	 *  Validation:
@@ -129,6 +137,14 @@ export const commands = {
 	 *  failure modes — only panics or Tauri framework issues produce `Err`.
 	 */
 	pingOllama: () => typedError<Reachable, string>(__TAURI_INVOKE("ping_ollama")),
+	/**
+	 *  Fire-and-forget: loads the configured classifier model into Ollama's memory
+	 *  so the first real dictation doesn't cold-start. Returns immediately — the
+	 *  generate runs on a background thread and its result is discarded.
+	 * 
+	 *  Only does anything when cleanup mode is Chaperone; safe to call at any time.
+	 */
+	prewarmOllama: () => __TAURI_INVOKE<void>("prewarm_ollama"),
 	/**
 	 *  Download a model into the user's local Ollama instance by streaming
 	 *  `POST {ollama_url}/api/pull`. Emits incremental `ollama-pull-progress`

@@ -198,8 +198,20 @@ pub fn check_ollama_model(model_name: String) -> Result<bool, String> {
 /// connect near-instantly). Cancellation is out of scope for this task.
 #[tauri::command]
 #[specta::specta]
-pub fn pull_ollama_model(app: tauri::AppHandle, model_name: String) -> Result<(), String> {
+pub async fn pull_ollama_model(app: tauri::AppHandle, model_name: String) -> Result<(), String> {
+    // reqwest::blocking creates its own tokio runtime internally and must not
+    // run on a tokio async thread — doing so panics. Offload to spawn_blocking
+    // so the streaming download runs on a dedicated OS thread outside the
+    // async executor, identical to how download_model handles this.
+    tokio::task::spawn_blocking(move || pull_ollama_model_blocking(app, model_name))
+        .await
+        .map_err(|e| format!("pull task panicked: {e}"))?
+}
+
+fn pull_ollama_model_blocking(app: tauri::AppHandle, model_name: String) -> Result<(), String> {
     use tauri::Emitter;
+
+    tracing::info!("[ollama-pull] starting pull for model={model_name}");
 
     let cfg = crate::settings::load();
     let base = crate::cleanup::validate_ollama_url(&cfg.cleanup.ollama_url)
@@ -208,6 +220,8 @@ pub fn pull_ollama_model(app: tauri::AppHandle, model_name: String) -> Result<()
     let endpoint = base
         .join("api/pull")
         .map_err(|e| format!("could not build pull endpoint: {e}"))?;
+
+    tracing::info!("[ollama-pull] POST {endpoint}");
 
     // Connect timeout only — read must be unbounded for multi-GB transfers.
     let client = reqwest::blocking::Client::builder()
@@ -225,10 +239,18 @@ pub fn pull_ollama_model(app: tauri::AppHandle, model_name: String) -> Result<()
         .post(endpoint)
         .json(&body)
         .send()
-        .map_err(|e| format!("pull request failed: {e}"))?;
+        .map_err(|e| {
+            tracing::error!("[ollama-pull] request failed: {e}");
+            format!("pull request failed: {e}")
+        })?;
 
-    if !resp.status().is_success() {
-        return Err(format!("Ollama returned HTTP {}", resp.status()));
+    let http_status = resp.status();
+    tracing::info!("[ollama-pull] HTTP {http_status}");
+
+    if !http_status.is_success() {
+        let body_text = resp.text().unwrap_or_default();
+        tracing::error!("[ollama-pull] server error: {body_text}");
+        return Err(format!("Ollama returned HTTP {http_status}: {body_text}"));
     }
 
     // Wrap the response body in a BufReader so we can read line-by-line.
@@ -293,7 +315,7 @@ pub fn pull_ollama_model(app: tauri::AppHandle, model_name: String) -> Result<()
         last_pct = pct;
 
         if status_str == "success" {
-            // Emit a final 100% success event before returning.
+            tracing::info!("[ollama-pull] complete — model={model_name}");
             let payload = OllamaPullProgress {
                 model: model_name.clone(),
                 pct: 100,
@@ -304,8 +326,75 @@ pub fn pull_ollama_model(app: tauri::AppHandle, model_name: String) -> Result<()
         }
     }
 
-    // Stream ended without a "success" line — treat as failure.
-    Err("pull stream ended without a success confirmation".into())
+    let msg = "pull stream ended without a success confirmation";
+    tracing::error!("[ollama-pull] {msg} model={model_name}");
+    Err(msg.into())
+}
+
+/// Fire-and-forget: loads the configured classifier model into Ollama's memory
+/// so the first real dictation doesn't cold-start. Returns immediately — the
+/// generate runs on a background thread and its result is discarded.
+///
+/// Only does anything when cleanup mode is Chaperone; safe to call at any time.
+#[tauri::command]
+#[specta::specta]
+pub async fn prewarm_ollama() {
+    let cfg = crate::settings::load();
+    if cfg.cleanup.mode != crate::settings::CleanupMode::Chaperone {
+        return;
+    }
+    let model = cfg.cleanup.classifier_model.clone();
+    let url   = cfg.cleanup.ollama_url.clone();
+
+    // Spawn on the blocking thread pool and immediately drop the handle —
+    // caller returns before the generate completes.
+    let _ = tokio::task::spawn_blocking(move || {
+        let base = match crate::cleanup::validate_ollama_url(&url) {
+            Ok(u) => u,
+            Err(_) => return,
+        };
+        let endpoint = match base.join("api/generate") {
+            Ok(u) => u,
+            Err(_) => return,
+        };
+        let client = match reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(3))
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let body = serde_json::json!({
+            "model": model,
+            "prompt": "hi",
+            "stream": false,
+            "options": { "num_predict": 1 },
+        });
+        match client.post(endpoint).json(&body).send() {
+            Ok(_)  => tracing::info!("[ollama-prewarm] model loaded"),
+            Err(e) => tracing::debug!("[ollama-prewarm] skipped: {e}"),
+        }
+    });
+}
+
+/// Scan `~/.ollama/models/blobs/` for any `*-partial*` files, which are left
+/// behind when an `ollama pull` is interrupted mid-download. Returns `true` if
+/// any partial blobs are found — the model manifest may exist but the model
+/// is unusable until the blobs are complete.
+#[tauri::command]
+#[specta::specta]
+pub fn check_ollama_partial_blobs() -> bool {
+    let blobs_dir = match dirs::home_dir() {
+        Some(h) => h.join(".ollama/models/blobs"),
+        None => return false,
+    };
+    match std::fs::read_dir(&blobs_dir) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().contains("-partial")),
+        Err(_) => false,
+    }
 }
 
 /// Open a validated `https://*.ollama.com` URL in the user's default browser.

@@ -5,9 +5,8 @@
   import { commands } from './bindings.ts';
 
   // 'arming' = backend received the press but whisper-server hasn't finished
-  // loading yet. Pill chrome shows with a yellow breathing border, a spinner,
-  // and a "Starting… / 0:05" elapsed counter so the user sees their press
-  // registered and that something is happening while the model loads.
+  // loading yet. The normal overlay surface stays the same size and carries a
+  // spinner + flashing yellow outline so there is no second tiny warm-up pop.
   let mode      = $state('idle'); // 'idle' | 'arming' | 'recording' | 'transcribing' | 'error'
   let canvasEl  = $state(null);
   let wordCount = $state(0);
@@ -82,16 +81,22 @@
   let cursorInZone = $state(false);
   let isPeeking = $derived(mode === 'recording' && cursorInZone);
 
-  // Visual AGC — track a rolling maximum RMS so quiet mics still show
-  // full-scale bars. Attack is instant; decay halves every ~34 frames
-  // (~1.7 s at 20 Hz). This only affects the visual meter — the
-  // speech-threshold check below still uses the raw, unnormalized RMS.
-  let meterPeak = 0.02; // start at a reasonable floor (~1% of full scale)
+  // Visual AGC — track a rolling target RMS so quiet mics still show
+  // full-scale bars, then ease the visual scale toward that target. The
+  // target stays responsive; the displayed scale avoids "all bars resized
+  // this frame" snaps when the first word or trailing quiet speech changes
+  // the normalization baseline. Speech detection still uses raw RMS below.
+  const METER_START = 0.02;  // start at a reasonable floor (~2% of full scale)
   const METER_FLOOR = 0.005; // never divide by smaller than this
-  const METER_DECAY = 0.98;  // per-frame decay factor at 20 Hz
+  const METER_DECAY = 0.98;  // target peak decay per frame at 20 Hz
+  const METER_ATTACK_SMOOTH = 0.16;
+  const METER_RELEASE_SMOOTH = 0.045;
+  let meterPeak = METER_START;
+  let meterVisualPeak = METER_START;
 
   function resetMeterPeak() {
-    meterPeak = METER_FLOOR;
+    meterPeak = METER_START;
+    meterVisualPeak = METER_START;
   }
 
   function draw() {
@@ -109,7 +114,7 @@
       ? 'rgba(255,255,255,0.95)'
       : 'rgba(255,255,255,0.35)';
 
-    const peak = Math.max(meterPeak, METER_FLOOR);
+    const peak = Math.max(meterVisualPeak, METER_FLOOR);
 
     for (let i = 0; i < HISTORY; i++) {
       const gainNorm = Math.min(1, levels[i] / peak); // normalize against rolling peak
@@ -278,12 +283,14 @@
       const v = Math.min(1.0, e.payload);
       levels = [...levels.slice(1), v];
 
-      // Visual AGC: instant attack, slow decay.
+      // Visual AGC: responsive target, smoothed display scale.
       if (v > meterPeak) {
         meterPeak = v;
       } else {
         meterPeak = Math.max(METER_FLOOR, meterPeak * METER_DECAY);
       }
+      const smooth = meterPeak > meterVisualPeak ? METER_ATTACK_SMOOTH : METER_RELEASE_SMOOTH;
+      meterVisualPeak += (meterPeak - meterVisualPeak) * smooth;
 
       if (v > SPEECH_THRESHOLD) {
         speechFrames++;
@@ -372,23 +379,32 @@
   .pill.transcribing {
     animation: pulse-yellow 10s ease-in-out infinite;
   }
-  /* Arming = press registered, whisper-server still loading. Steady yellow
-     border with a soft breathing pulse so the user can see the press landed.
-     Internals show a "Starting…" label with elapsed seconds so they know
-     something is happening. Replaces the arming state — the pill chrome is
-     always visible while loading. */
+  /* Arming = press registered, whisper-server still loading. Same overlay
+     size as recording, with a deliberately obvious yellow outline pulse. */
   .pill.arming {
+    width: 260px;
+    height: 80px;
+    box-sizing: border-box;
+    justify-content: center;
     border-color: rgba(251, 191, 36, 0.85);
-    animation: pulse-arming 2s ease-in-out infinite;
+    animation: pulse-arming 1.15s ease-in-out infinite;
   }
   @keyframes pulse-arming {
-    0%, 100% { border-color: rgba(251, 191, 36, 0.35); }
-    50%       { border-color: rgba(251, 191, 36, 0.95); }
+    0%, 100% {
+      border-color: rgba(251, 191, 36, 0.28);
+      box-shadow: 0 0 0 0 rgba(251, 191, 36, 0);
+    }
+    45%, 55% {
+      border-color: rgba(251, 191, 36, 1);
+      box-shadow:
+        0 0 0 3px rgba(251, 191, 36, 0.22),
+        0 0 22px 5px rgba(251, 191, 36, 0.34);
+    }
   }
   .arming-spinner {
-    width: 10px;
-    height: 10px;
-    border: 2px solid rgba(251, 191, 36, 0.25);
+    width: 24px;
+    height: 24px;
+    border: 2.5px solid rgba(251, 191, 36, 0.22);
     border-top-color: rgba(251, 191, 36, 0.95);
     border-radius: 50%;
     animation: arming-spin 1s linear infinite;
@@ -399,6 +415,13 @@
   .pill-inner {
     display: contents;
     transition: opacity 120ms ease-out;
+  }
+  .pill.arming .pill-inner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    width: 100%;
   }
 
   canvas { display: block; }
@@ -453,7 +476,7 @@
   >
     <div class="pill-inner">
     {#if mode === 'arming'}
-      <div class="flex items-center gap-2 px-1">
+      <div class="flex items-center justify-center gap-3.5 w-full">
         <div class="arming-spinner"></div>
         <div class="flex flex-col items-start gap-[1px]">
           <span class="text-[11px] font-semibold tracking-wide leading-tight"

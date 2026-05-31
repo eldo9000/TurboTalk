@@ -104,6 +104,21 @@ fn prewarm_model(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn reset_warmup_cache_inner(recorder: &recorder::Recorder) -> Result<(), String> {
+    let state = recorder.state();
+    if state.is_busy() {
+        return Err(format!("cannot clear warmup cache while dictation is {}", state));
+    }
+    transcribe::abort_active();
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+fn reset_warmup_cache(recorder_state: tauri::State<'_, RecorderState>) -> Result<(), String> {
+    reset_warmup_cache_inner(recorder_state.inner())
+}
+
 /// After an alt-backend model download, persist the variant, invalidate the
 /// worker, and prewarm against the new backend.
 fn apply_alt_backend_after_download(
@@ -299,6 +314,135 @@ pub fn reposition_overlay_to_cursor_monitor(app: &tauri::AppHandle) {
 
     if let Ok(post) = overlay.outer_position() {
         tracing::info!("[overlay] post_outer={:?}", post);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn position_main_window_on_cursor_monitor(app: &tauri::AppHandle) {
+    use tauri::{LogicalPosition, Manager};
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    let cursor = match app.cursor_position() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("[main-window] cursor_position failed: {:?}", e);
+            return;
+        }
+    };
+    let monitors = match win.available_monitors() {
+        Ok(m) if !m.is_empty() => m,
+        Ok(_) => {
+            tracing::warn!("[main-window] available_monitors empty — skip first placement");
+            return;
+        }
+        Err(e) => {
+            tracing::warn!("[main-window] available_monitors failed: {:?}", e);
+            return;
+        }
+    };
+
+    let primary_scale = win
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.scale_factor())
+        .unwrap_or(1.0);
+    let cx = cursor.x / primary_scale;
+    let cy = cursor.y / primary_scale;
+
+    let monitor = monitors
+        .iter()
+        .find(|m| {
+            let p = m.position();
+            let s = m.size();
+            let logical_w = s.width as f64 / m.scale_factor();
+            let logical_h = s.height as f64 / m.scale_factor();
+            cx >= p.x as f64
+                && cx < p.x as f64 + logical_w
+                && cy >= p.y as f64
+                && cy < p.y as f64 + logical_h
+        })
+        .cloned()
+        .or_else(|| win.primary_monitor().ok().flatten());
+
+    let Some(monitor) = monitor else {
+        return;
+    };
+    let mp = monitor.position();
+    let ms = monitor.size();
+    let scale = monitor.scale_factor();
+    let mon_w_logical = ms.width as f64 / scale;
+    let mon_h_logical = ms.height as f64 / scale;
+    let size = win
+        .outer_size()
+        .ok()
+        .map(|s| (s.width as f64 / scale, s.height as f64 / scale))
+        .unwrap_or((550.0, 560.0));
+    let x = mp.x as f64 + (mon_w_logical - size.0) / 2.0;
+    let y = mp.y as f64 + (mon_h_logical - size.1) / 2.0;
+
+    tracing::info!(
+        "[main-window] first tray placement logical=({:.0},{:.0}) monitor pos=({},{}) scale={:.2}",
+        x,
+        y,
+        mp.x,
+        mp.y,
+        scale
+    );
+    let _ = win.set_position(LogicalPosition::new(x, y));
+}
+
+#[cfg(not(target_os = "macos"))]
+fn position_main_window_on_cursor_monitor(app: &tauri::AppHandle) {
+    use tauri::{LogicalPosition, Manager};
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(cursor) = app.cursor_position() else {
+        return;
+    };
+    let Ok(monitors) = win.available_monitors() else {
+        return;
+    };
+    let monitor = monitors
+        .into_iter()
+        .find(|m| {
+            let p = m.position();
+            let s = m.size();
+            cursor.x >= p.x as f64
+                && cursor.x < (p.x + s.width as i32) as f64
+                && cursor.y >= p.y as f64
+                && cursor.y < (p.y + s.height as i32) as f64
+        })
+        .or_else(|| win.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else {
+        return;
+    };
+    let mp = monitor.position();
+    let ms = monitor.size();
+    let scale = monitor.scale_factor();
+    let size = win
+        .outer_size()
+        .ok()
+        .map(|s| (s.width as f64 / scale, s.height as f64 / scale))
+        .unwrap_or((550.0, 560.0));
+    let x = mp.x as f64 / scale + (ms.width as f64 / scale - size.0) / 2.0;
+    let y = mp.y as f64 / scale + (ms.height as f64 / scale - size.1) / 2.0;
+    let _ = win.set_position(LogicalPosition::new(x, y));
+}
+
+fn show_main_window(app: &tauri::AppHandle, first_manual_show: &std::sync::atomic::AtomicBool) {
+    use std::sync::atomic::Ordering;
+    if let Some(win) = app.get_webview_window("main") {
+        let visible = win.is_visible().unwrap_or(false);
+        if !visible
+            && !first_manual_show.swap(true, Ordering::AcqRel)
+        {
+            position_main_window_on_cursor_monitor(app);
+        }
+        let _ = win.show();
+        let _ = win.set_focus();
     }
 }
 
@@ -1449,6 +1593,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         get_config,
         save_config,
         prewarm_model,
+        reset_warmup_cache,
         scan_models_dir,
         list_models_for_family,
         get_launch_at_login,
@@ -1469,8 +1614,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         stop_recording,
         open_data_folder,
         ollama::check_ollama_model,
+        ollama::check_ollama_partial_blobs,
         ollama::open_url,
         ollama::ping_ollama,
+        ollama::prewarm_ollama,
         ollama::pull_ollama_model,
         diagnostics::run_diagnostics,
         diagnostic_log::log_client_event,
@@ -1599,6 +1746,7 @@ pub fn run() {
             get_config,
             save_config,
             prewarm_model,
+            reset_warmup_cache,
             scan_models_dir,
             list_models_for_family,
             get_launch_at_login,
@@ -1619,8 +1767,10 @@ pub fn run() {
             stop_recording,
             open_data_folder,
             ollama::check_ollama_model,
+            ollama::check_ollama_partial_blobs,
             ollama::open_url,
             ollama::ping_ollama,
+            ollama::prewarm_ollama,
             ollama::pull_ollama_model,
             diagnostics::run_diagnostics,
             diagnostic_log::log_client_event,
@@ -1663,10 +1813,13 @@ pub fn run() {
                 None::<&str>,
             )?;
             let show_item = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;
+            let reset_warmup_item =
+                MenuItem::with_id(app, "reset-warmup", "Clear Warmup Cache", true, None::<&str>)?;
             let restart_item = MenuItem::with_id(app, "restart", "Restart", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let sep1 = PredefinedMenuItem::separator(app)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
+            let sep3 = PredefinedMenuItem::separator(app)?;
             let menu = Menu::with_items(
                 app,
                 &[
@@ -1674,18 +1827,23 @@ pub fn run() {
                     &sep1,
                     &show_item,
                     &sep2,
+                    &reset_warmup_item,
+                    &sep3,
                     &restart_item,
                     &quit_item,
                 ],
             )?;
 
             let launch_item_ref = launch_item.clone();
+            let first_manual_main_show = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let tray_first_manual_main_show = first_manual_main_show.clone();
+            let menu_first_manual_main_show = first_manual_main_show.clone();
             let tray_icon: TrayIcon = TrayIconBuilder::new()
                 .icon(tray::make_icon(tray::TrayState::Idle))
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .tooltip("TurboTalk")
-                .on_tray_icon_event(|tray, event| {
+                .on_tray_icon_event(move |tray, event| {
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
                         button_state: MouseButtonState::Up,
@@ -1708,10 +1866,7 @@ pub fn run() {
                             hotkey::trigger_cancel(rec.inner(), tray, app);
                             return;
                         }
-                        if let Some(win) = app.get_webview_window("main") {
-                            let _ = win.show();
-                            let _ = win.set_focus();
-                        }
+                        show_main_window(app, &tray_first_manual_main_show);
                         let _ = app.emit("open-history", ());
                     }
                 })
@@ -1728,9 +1883,17 @@ pub fn run() {
                         let _ = launch_item_ref.set_checked(new_state);
                     }
                     "show" => {
-                        if let Some(win) = app.get_webview_window("main") {
-                            let _ = win.show();
-                            let _ = win.set_focus();
+                        show_main_window(app, &menu_first_manual_main_show);
+                    }
+                    "reset-warmup" => {
+                        let recorder = app.state::<RecorderState>();
+                        match reset_warmup_cache_inner(recorder.inner()) {
+                            Ok(()) => {
+                                tracing::info!("[transcribe] warmup cache cleared from tray menu");
+                            }
+                            Err(message) => {
+                                emit_ui_error(app, "warmup-cache", message, true);
+                            }
                         }
                     }
                     "restart" => app.restart(),

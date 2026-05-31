@@ -148,6 +148,10 @@ fn handle_prose(text: &str, cfg: &crate::settings::CleanupConfig) -> String {
     if cfg.strip_fillers {
         s = strip_filler_words(&s);
     }
+    // Repeated-single-char cleaning is unconditional — isolated repeated
+    // letters (e.g. "f f f f f fix") are always Whisper stuttering artifacts,
+    // never legitimate speech content.
+    s = collapse_repeated_single_chars(&s);
     s = capitalize_first(&s);
     if cfg.append_period {
         s = append_period(s);
@@ -237,6 +241,54 @@ fn strip_filler_words(text: &str) -> String {
     filtered.join(" ")
 }
 
+/// Collapse sequences of 3+ identical single-alphabetic characters that
+/// are not valid standalone English words. Whisper often decodes stuttering
+/// as repeated single letters ("f f f f f fix") — this collapses them so
+/// the intended word (usually the following token) surfaces.
+///
+/// Valid single-letter words "a" and "I" are preserved; all other repeated
+/// single-character tokens are removed entirely.
+fn collapse_repeated_single_chars(text: &str) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut result: Vec<&str> = Vec::with_capacity(words.len());
+    let mut i = 0;
+    while i < words.len() {
+        let word = words[i];
+        // Only consider single alphabetic characters.
+        if word.len() == 1 && word.chars().all(|c| c.is_ascii_alphabetic()) {
+            let lower = word.to_ascii_lowercase();
+            // Preserve valid English single-letter words.
+            if lower == "a" || lower == "i" {
+                result.push(word);
+                i += 1;
+                continue;
+            }
+            // Count consecutive identical single-char tokens (case-insensitive).
+            let mut repeat_count = 1;
+            let mut j = i + 1;
+            while j < words.len() {
+                if words[j].len() == 1
+                    && words[j].chars().all(|c| c.is_ascii_alphabetic())
+                    && words[j].eq_ignore_ascii_case(word)
+                {
+                    repeat_count += 1;
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            if repeat_count >= 3 {
+                // Stutter artifact — skip the entire run.
+                i = j;
+                continue;
+            }
+        }
+        result.push(word);
+        i += 1;
+    }
+    result.join(" ")
+}
+
 fn append_period(mut s: String) -> String {
     if s.is_empty() {
         return s;
@@ -285,8 +337,11 @@ struct OllamaResponse {
     response: String,
 }
 
-/// Hard cap on time spent waiting for Ollama. Bounds connect + read combined.
-const OLLAMA_TIMEOUT: Duration = Duration::from_secs(2);
+/// Connect timeout for reaching Ollama — should be near-instant on loopback.
+const OLLAMA_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+/// Read timeout for a classify response. llama3.2:3b cold-starts in ~20s on
+/// Apple Silicon; allow 60s so the first inference after launch always lands.
+const OLLAMA_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Reject any URL that does not point at a loopback address. This is an
 /// allowlist, not a denylist: only `localhost`, `127.0.0.1`, and `::1` are
@@ -363,8 +418,8 @@ fn classify_blocking(text: &str, cfg: &crate::settings::CleanupConfig) -> anyhow
     };
 
     let client = reqwest::blocking::Client::builder()
-        .timeout(OLLAMA_TIMEOUT)
-        .connect_timeout(OLLAMA_TIMEOUT)
+        .connect_timeout(OLLAMA_CONNECT_TIMEOUT)
+        .timeout(OLLAMA_READ_TIMEOUT)
         .build()?;
 
     let resp: OllamaResponse = client
@@ -642,5 +697,103 @@ mod tests {
         assert!(parse_mode_strict("random LLM ramble").is_err());
         assert!(parse_mode_strict("unknown").is_err());
         assert!(parse_mode_strict("").is_err());
+    }
+
+    // ── collapse_repeated_single_chars tests ───────────────────────────────
+
+    #[test]
+    fn repeated_single_char_collapse_basic() {
+        // The user's reported case: repeated "f" stutter before "fix".
+        let input = "attempting to f f f f f f f f f f f f f f f f f f f f fix the download";
+        let expected = "attempting to fix the download";
+        assert_eq!(collapse_repeated_single_chars(input), expected);
+    }
+
+    #[test]
+    fn repeated_single_char_mixed_case() {
+        // Case-insensitive matching: "F" and "f" are the same character.
+        let input = "trying to F f F f f fix it";
+        let expected = "trying to fix it";
+        assert_eq!(collapse_repeated_single_chars(input), expected);
+    }
+
+    #[test]
+    fn repeated_single_char_only_two_preserved() {
+        // Two consecutive single chars is not enough to trigger collapse.
+        let input = "type s s for save";
+        assert_eq!(collapse_repeated_single_chars(input), "type s s for save");
+    }
+
+    #[test]
+    fn repeated_s_char_stutter() {
+        // Common: "s s s" stutter.
+        let input = "s s s s so I was thinking";
+        let expected = "so I was thinking";
+        assert_eq!(collapse_repeated_single_chars(input), expected);
+    }
+
+    #[test]
+    fn valid_single_word_a_preserved() {
+        // "a" is a valid English word and must not be collapsed.
+        let input = "this is a a a test sentence";
+        assert_eq!(collapse_repeated_single_chars(input), "this is a a a test sentence");
+    }
+
+    #[test]
+    fn valid_single_word_i_preserved() {
+        // "I" is a valid English word and must not be collapsed.
+        let input = "I I I think so";
+        assert_eq!(collapse_repeated_single_chars(input), "I I I think so");
+    }
+
+    #[test]
+    fn valid_single_word_i_lowercase_preserved() {
+        // Lowercase "i" is also common in informal transcription.
+        let input = "i i i don't know";
+        assert_eq!(collapse_repeated_single_chars(input), "i i i don't know");
+    }
+
+    #[test]
+    fn repeated_single_char_at_end() {
+        // Stutter at the very end of the text.
+        let input = "hello world f f f f f";
+        let expected = "hello world";
+        assert_eq!(collapse_repeated_single_chars(input), expected);
+    }
+
+    #[test]
+    fn repeated_single_char_at_start() {
+        // Stutter at the very beginning.
+        let input = "f f f f hello world";
+        let expected = "hello world";
+        assert_eq!(collapse_repeated_single_chars(input), expected);
+    }
+
+    #[test]
+    fn multiple_different_stutter_runs() {
+        // Two separate stutter sequences in the same text.
+        let input = "f f f f fix the s s s s system";
+        let expected = "fix the system";
+        assert_eq!(collapse_repeated_single_chars(input), expected);
+    }
+
+    #[test]
+    fn normal_text_passes_through() {
+        // Normal text with no repeated single chars should be unchanged.
+        let input = "hello world, this is a normal dictation.";
+        assert_eq!(collapse_repeated_single_chars(input), input);
+    }
+
+    #[test]
+    fn repeated_single_char_in_prose_handler() {
+        // Integration test: handle_prose must call collapse_repeated_single_chars.
+        let cfg = crate::settings::CleanupConfig {
+            strip_fillers: false,
+            append_period: false,
+            strip_whisper_artifacts: false,
+            ..Default::default()
+        };
+        let input = "f f f f fix the download";
+        assert_eq!(handle_prose(input, &cfg), "Fix the download");
     }
 }
