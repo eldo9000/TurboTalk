@@ -213,7 +213,13 @@ jobs:
           APP='${{ steps.mac_artifacts.outputs.app_path }}'
           xattr -cr "$APP"
           codesign --force --deep --sign - "$APP"
-          codesign --verify --deep --strict --verbose=2 "$APP" || true
+
+      - name: Verify macOS bundle (signature + linkage + contents)
+        # Gates on the same checks the local `package` flow runs: required files,
+        # no Homebrew/CoreML linkage leaks, and a valid code signature. This
+        # previously only ran locally, so a bad release bundle could ship; the
+        # inline `codesign --verify … || true` here was a no-op. Now it fails hard.
+        run: node scripts/verify-macos-bundle.mjs '${{ steps.mac_artifacts.outputs.app_path }}'
 
       - name: Re-pack updater tarball from signed .app
         run: |

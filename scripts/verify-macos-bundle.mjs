@@ -69,4 +69,21 @@ try {
   process.exit(1);
 }
 
+// Code signature must verify. Ad-hoc (`signingIdentity: "-"`) is fine — but a
+// broken or missing signature makes Gatekeeper hard-block launch even after the
+// documented `xattr -cr` workaround, so a bad signature is a release blocker.
+// `--deep --strict` matches what the release workflow signs the bundle with.
+try {
+  execFileSync(
+    'codesign',
+    ['--verify', '--deep', '--strict', '--verbose=2', appPath],
+    { stdio: 'pipe', encoding: 'utf8' },
+  );
+} catch (err) {
+  console.error('[verify-macos-bundle] codesign verification failed:');
+  console.error(String(err.stderr || err.message || '').trim());
+  process.exit(1);
+}
+console.log('[verify-macos-bundle] codesign --verify passed');
+
 console.log(`[verify-macos-bundle] verified ${appPath}`);

@@ -96,7 +96,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "externalBin": ["binaries/whisper-cli", "binaries/whisper-server"],
     "macOS": {
       "signingIdentity": "-",
