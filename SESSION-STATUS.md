@@ -1,9 +1,9 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-05-30  
-**Current state:** Added visual AGC to the overlay audio meter. Quiet mics (Windows I16, crappy headsets) now show full-scale bars. A rolling peak normalizer with instant attack + slow decay (~1.7s halving) normalizes bar heights against recent maximum amplitude. Speech threshold and transcription paths are unaffected — this is purely cosmetic. Garbage detection no longer blocks paste/history. ONNX Runtime NuGet fetch for Windows CI (pending green).
+**Last updated:** 2026-06-02  
+**Current state:** Pre-release scan sweep complete (diagnostics/privacy, packaging/update, regression). Reports in `docs/pre-release-scans/SCAN-{1,2,3}-FINDINGS.md`. Scan 1 (privacy) clean — dictated text cannot reach an uploaded report. Four fixes applied and staged: (1) `createUpdaterArtifacts: true` — was blocking the release workflow's Locate step; (2) macOS bundle codesign now gated in `verify-macos-bundle.mjs` + wired into the mac release job (was a `|| true` no-op); (3) device-lost mid-hold no longer defers a fake `recording-cancelled` onto the next press (`lib.rs:2286` arms ptt_up suppression in hold mode); (4) launch-agent plist id corrected in docs (`com.*` → `io.librewin.turbotalk`) + privacy guard comment at `record_client_event`.
 
-**Next action:** Rebuild / retest — verify that partial-segment dictations no longer appear as separate history entries when the tail is too short.
+**Next action:** Two verifications remain, both off the local box — (a) trigger a release CI run to confirm updater artifacts emit + codesign gate passes on the signed bundle; (b) manually verify the device-lost fix: hold key → unplug/switch mic mid-recording → release → next press must start a normal recording (no instant "recording-cancelled").
 
 ## Open backlog
 
