@@ -1,8 +1,7 @@
 <script>
-  import { invoke } from '@tauri-apps/api/core';
   import { check as checkUpdate } from '@tauri-apps/plugin-updater';
+  import { commands } from './bindings.ts';
 
-  const RELEASES_URL = 'https://github.com/eldo9000/TurboTalk-App/releases/latest';
   const LS_KEY = 'turbotalk.lastUpdateCheck';
   const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -10,12 +9,7 @@
   let updateVersion = $state('');
 
   async function openReleasesPage() {
-    try {
-      await invoke('open_url', { url: RELEASES_URL });
-    } catch {
-      // Fallback: open via shell if invoke fails
-      window.open(RELEASES_URL, '_blank');
-    }
+    await commands.openReleasesPage();
   }
 
   export async function checkForUpdate() {

@@ -104,8 +104,12 @@ For the next beta, run a coordinated scan pass before tagging. Treat each item a
 - [ ] Version consistency scan: all version-bearing files, tag names, artifact names, and release notes agree.
 - [ ] Updater/manual-update contradiction scan: the documented manual-update policy matches `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, and `src-tauri/src/lib.rs`.
 - [ ] Local-only/privacy scan: runtime transcript and cleanup paths call only loopback services; any external URL is user-initiated, documented, and non-telemetry.
+- [ ] Transcript persistence scan: full transcript text is written only through intentional user-facing history or an explicitly enabled debug/beta path; diagnostic exports and bug-report uploads exclude transcript debug logs.
+- [ ] Runtime model download scan: every app-initiated model download has an allowlisted host/path, a bounded destination under the models directory, cancellation cleanup, and size/hash validation appropriate to the catalog entry.
+- [ ] Browser-open scan: user-facing links are opened through narrow backend commands or fixed allowlisted URLs; there is no generic arbitrary URL opener in the frontend fallback path.
 - [ ] IPC/permissions scan: Tauri capabilities and commands expose only the minimum app surface needed for settings, model selection/download, diagnostics, paste, tray, and local cleanup.
 - [ ] Rust risk scan: all non-test `unwrap()`, `expect()`, `unsafe`, `dbg!`, `println!`, `TODO`, and `FIXME` hits are reviewed.
+- [ ] Dependency advisory scan: `npm audit --omit=dev` and `cargo audit` have been run. Any warnings accepted for the release are listed below with their scope.
 - [ ] Bundle asset scan: sidecars, libraries, model resources, app icons, artifact outputs, and checksums are present and valid for the release host.
 - [ ] Unsigned-beta scan: artifacts are intentionally unsigned/not notarized and release notes warn users exactly how to launch them.
 - [ ] Installed-artifact scan: the packaged app passes the clean-account smoke path, including permission prompts and uninstall/data cleanup.
@@ -113,6 +117,17 @@ For the next beta, run a coordinated scan pass before tagging. Treat each item a
 - [ ] Docs-reality scan: README, privacy, build, releasing, and smoke-test docs match the exact app behavior being shipped.
 
 If any item fails, fix or document the failure before tagging the version. A documented known issue is acceptable; an undocumented broken path is not.
+
+### 8. Security notes for the current release
+
+Record the outcome of each release security sweep here before tagging:
+
+- Transcript privacy: diagnostic reports must include readiness, sanitized config, UI events, and recent non-transcript session logs only. Full transcript debug logs, if enabled for beta diagnosis, must remain local-only and must not be uploaded.
+- Runtime network allowlist: expected runtime external hosts are GitHub releases for updates and Hugging Face for explicit model downloads. Cleanup/classifier traffic must remain loopback-only through the configured Ollama URL validator.
+- Runtime model downloads: catalog downloads should be constrained by host/path, destination canonicalization, cancellation cleanup, and file size or SHA-256 checks. Build-time sidecar/VAD downloads are already SHA-256 pinned in scripts.
+- macOS entitlements: `audio-input`, Apple Events automation, WebView JIT, unsigned executable memory, and disabled library validation are accepted for the current architecture because the app captures microphone audio, pastes through System Events, and bundles ML/WebView sidecars. Do not add new entitlements without a release-note justification.
+- Updater posture: Tauri updater metadata must remain signed with the configured public key. Manual release-page links should be fixed/allowlisted, not arbitrary URL opens.
+- Dependency audit: `npm audit --omit=dev` should be clean. `cargo audit` warnings from Tauri's Linux GTK/WebKit stack, `paste`, or Unicode helper crates may be accepted for a macOS-first beta only when no direct vulnerable code path is introduced and the warning is documented in the release notes/checklist.
 
 ---
 

@@ -92,6 +92,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tempfile        = "3"
 flate2          = "1"
+sha2            = "0.10"
 
 # Typed Rust↔TS config contract. `specta::Type` is derived on every type
 # crossing the Tauri IPC boundary; `tauri-specta` wraps the commands with

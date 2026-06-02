@@ -13,8 +13,8 @@
 pub mod audio;
 pub mod audio_finalizer;
 pub mod cleanup;
-pub mod diagnostics;
 pub mod diagnostic_log;
+pub mod diagnostics;
 pub mod hotkey;
 pub mod ollama;
 pub mod paste;
@@ -95,9 +95,7 @@ fn save_config(
 #[specta::specta]
 fn prewarm_model(app: tauri::AppHandle) -> Result<(), String> {
     if !permissions::check_readiness().model_present {
-        return Err(
-            "No transcription model is installed for the selected engine.".to_string(),
-        );
+        return Err("No transcription model is installed for the selected engine.".to_string());
     }
     let cfg = settings::load();
     transcribe::prewarm(cfg, app);
@@ -107,7 +105,10 @@ fn prewarm_model(app: tauri::AppHandle) -> Result<(), String> {
 fn reset_warmup_cache_inner(recorder: &recorder::Recorder) -> Result<(), String> {
     let state = recorder.state();
     if state.is_busy() {
-        return Err(format!("cannot clear warmup cache while dictation is {}", state));
+        return Err(format!(
+            "cannot clear warmup cache while dictation is {}",
+            state
+        ));
     }
     transcribe::abort_active();
     Ok(())
@@ -436,9 +437,7 @@ fn show_main_window(app: &tauri::AppHandle, first_manual_show: &std::sync::atomi
     use std::sync::atomic::Ordering;
     if let Some(win) = app.get_webview_window("main") {
         let visible = win.is_visible().unwrap_or(false);
-        if !visible
-            && !first_manual_show.swap(true, Ordering::AcqRel)
-        {
+        if !visible && !first_manual_show.swap(true, Ordering::AcqRel) {
             position_main_window_on_cursor_monitor(app);
         }
         let _ = win.show();
@@ -642,10 +641,10 @@ fn delete_backend_model(family: String, variant: String) -> Result<bool, String>
     let Some(base) = base else {
         return Ok(false);
     };
-    let canon = dir.canonicalize().map_err(|e| format!("path error: {}", e))?;
-    let canon_base = base
+    let canon = dir
         .canonicalize()
-        .unwrap_or(base);
+        .map_err(|e| format!("path error: {}", e))?;
+    let canon_base = base.canonicalize().unwrap_or(base);
     if !canon.starts_with(&canon_base) {
         return Err("refusing to delete path outside the models directory".into());
     }
@@ -732,6 +731,39 @@ fn open_data_folder() -> Result<(), String> {
         .arg(&path)
         .spawn()
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Open the canonical TurboTalk GitHub releases page in the user's browser.
+#[tauri::command]
+#[specta::specta]
+fn open_releases_page() -> Result<(), String> {
+    const RELEASES_URL: &str = "https://github.com/eldo9000/TurboTalk-App/releases/latest";
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(RELEASES_URL)
+            .spawn()
+            .map_err(|e| format!("failed to open releases page: {e}"))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", RELEASES_URL])
+            .spawn()
+            .map_err(|e| format!("failed to open releases page: {e}"))?;
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(RELEASES_URL)
+            .spawn()
+            .map_err(|e| format!("failed to open releases page: {e}"))?;
+    }
+
     Ok(())
 }
 
@@ -896,6 +928,68 @@ fn cancel_download(model_id: String, cancel_set: tauri::State<'_, DownloadCancel
     cancel_set.lock().insert(model_id);
 }
 
+struct RuntimeModelFileSpec {
+    remote_path: &'static str,
+    local_name: &'static str,
+    max_bytes: u64,
+    sha256: Option<&'static str>,
+}
+
+const KIB: u64 = 1024;
+const MIB: u64 = 1024 * KIB;
+
+async fn sha256_file_hex(path: &std::path::Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    use tokio::io::AsyncReadExt;
+
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| format!("Failed to open {} for hashing: {}", path.display(), e))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .await
+            .map_err(|e| format!("Failed to hash {}: {}", path.display(), e))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut out, "{:02x}", byte).map_err(|e| e.to_string())?;
+    }
+    Ok(out)
+}
+
+async fn verify_runtime_model_file(
+    path: &std::path::Path,
+    spec: &RuntimeModelFileSpec,
+) -> Result<(), String> {
+    let len = tokio::fs::metadata(path)
+        .await
+        .map_err(|e| format!("Failed to inspect {}: {}", spec.local_name, e))?
+        .len();
+    if len > spec.max_bytes {
+        return Err(format!(
+            "{} is larger than the allowed limit ({} > {} bytes)",
+            spec.local_name, len, spec.max_bytes
+        ));
+    }
+    if let Some(expected) = spec.sha256 {
+        let actual = sha256_file_hex(path).await?;
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err(format!("{} failed SHA-256 verification", spec.local_name));
+        }
+    }
+    Ok(())
+}
+
 /// Download a Moonshine ONNX model bundle from HuggingFace (TASK-58).
 ///
 /// `variant` must be "tiny" or "base". Files are stored under:
@@ -942,11 +1036,49 @@ async fn download_moonshine_model(
     // FP32 ONNX files live under `onnx/` on HuggingFace. Int8 exports proved
     // unreliable in practice (empty transcripts on real mic audio despite
     // healthy peak levels). transcribe-rs's own Moonshine tests use FP32.
-    let files: &[(&str, &str)] = &[
-        ("onnx/encoder_model.onnx", "encoder_model.onnx"),
-        ("onnx/decoder_model_merged.onnx", "decoder_model_merged.onnx"),
-        ("tokenizer.json", "tokenizer.json"),
-    ];
+    let files: &[RuntimeModelFileSpec] = match variant.as_str() {
+        "tiny" => &[
+            RuntimeModelFileSpec {
+                remote_path: "onnx/encoder_model.onnx",
+                local_name: "encoder_model.onnx",
+                max_bytes: 40 * MIB,
+                sha256: Some("cbbf580f703b2af2137e0f6d14cd87f31cc67bd858bfd8715403a9489982d1a5"),
+            },
+            RuntimeModelFileSpec {
+                remote_path: "onnx/decoder_model_merged.onnx",
+                local_name: "decoder_model_merged.onnx",
+                max_bytes: 100 * MIB,
+                sha256: Some("4131cef00b62942e9cdef691101f2cc7dbbcd828d71eee8c6c46c28fd051d6cb"),
+            },
+            RuntimeModelFileSpec {
+                remote_path: "tokenizer.json",
+                local_name: "tokenizer.json",
+                max_bytes: 8 * MIB,
+                sha256: None,
+            },
+        ],
+        "base" => &[
+            RuntimeModelFileSpec {
+                remote_path: "onnx/encoder_model.onnx",
+                local_name: "encoder_model.onnx",
+                max_bytes: 100 * MIB,
+                sha256: Some("153e128e7abd64a74ee47f2c3f585c3171c4d46cbb368b032827934c4e01e779"),
+            },
+            RuntimeModelFileSpec {
+                remote_path: "onnx/decoder_model_merged.onnx",
+                local_name: "decoder_model_merged.onnx",
+                max_bytes: 200 * MIB,
+                sha256: Some("58778763ca8438963190244d6b26572bdca2cedec56a4b91e828f3f2d69ef3c5"),
+            },
+            RuntimeModelFileSpec {
+                remote_path: "tokenizer.json",
+                local_name: "tokenizer.json",
+                max_bytes: 8 * MIB,
+                sha256: None,
+            },
+        ],
+        _ => unreachable!(),
+    };
 
     // Build destination directory.
     let mut dest_dir =
@@ -984,10 +1116,7 @@ async fn download_moonshine_model(
     );
 
     // Drop deprecated int8-only bundles so re-download picks up FP32 weights.
-    for legacy in &[
-        "encoder_model.int8.onnx",
-        "decoder_model_merged.int8.onnx",
-    ] {
+    for legacy in &["encoder_model.int8.onnx", "decoder_model_merged.int8.onnx"] {
         let p = canon_dir.join(legacy);
         if p.exists() {
             let _ = tokio::fs::remove_file(&p).await;
@@ -995,7 +1124,9 @@ async fn download_moonshine_model(
         }
     }
 
-    for (file_idx, (remote_path, local_name)) in files.iter().enumerate() {
+    for (file_idx, spec) in files.iter().enumerate() {
+        let remote_path = spec.remote_path;
+        let local_name = spec.local_name;
         let download_key = format!("{}-{}", event_name, local_name);
 
         // Check for cancellation before starting each file.
@@ -1027,14 +1158,26 @@ async fn download_moonshine_model(
 
         // Skip if already downloaded (idempotent re-runs).
         if dest_path.exists() {
-            tracing::info!("[moonshine-dl] {} already present — skipping", local_name);
-            // Still emit progress for the file.
-            let base_pct = ((file_idx + 1) * 100 / files.len()).min(99) as u8;
-            let _ = app.emit(
-                "download-progress",
-                serde_json::json!({ "name": &event_name, "pct": base_pct }),
-            );
-            continue;
+            match verify_runtime_model_file(&dest_path, spec).await {
+                Ok(()) => {
+                    tracing::info!("[moonshine-dl] {} already present — skipping", local_name);
+                    // Still emit progress for the file.
+                    let base_pct = ((file_idx + 1) * 100 / files.len()).min(99) as u8;
+                    let _ = app.emit(
+                        "download-progress",
+                        serde_json::json!({ "name": &event_name, "pct": base_pct }),
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    let _ = tokio::fs::remove_file(&dest_path).await;
+                    tracing::warn!(
+                        "[moonshine-dl] removed invalid existing {}: {}",
+                        local_name,
+                        e
+                    );
+                }
+            }
         }
 
         tracing::info!("[moonshine-dl] downloading {} from {}", local_name, url);
@@ -1050,6 +1193,9 @@ async fn download_moonshine_model(
         }
 
         let total = resp.content_length();
+        if total.is_some_and(|t| t > spec.max_bytes) {
+            return Err(format!("{} is larger than the allowed limit", local_name));
+        }
         let mut downloaded: u64 = 0;
 
         let temp_path = tempfile::Builder::new()
@@ -1078,6 +1224,12 @@ async fn download_moonshine_model(
             match resp.chunk().await {
                 Ok(Some(chunk)) => {
                     downloaded += chunk.len() as u64;
+                    if downloaded > spec.max_bytes {
+                        drop(file);
+                        let _ = tokio::fs::remove_file(&temp_file_path).await;
+                        let _ = tokio::fs::remove_file(&dest_path).await;
+                        return Err(format!("{} is larger than the allowed limit", local_name));
+                    }
                     if let Err(e) = file.write_all(&chunk).await {
                         drop(file);
                         let _ = tokio::fs::remove_file(&temp_file_path).await;
@@ -1089,8 +1241,7 @@ async fn download_moonshine_model(
                         .filter(|&t| t > 0)
                         .map(|t| (downloaded * 100 / t).min(100) as u8)
                         .unwrap_or(50u8);
-                    let overall_pct = ((file_idx as u32 * 100
-                        + file_pct as u32)
+                    let overall_pct = ((file_idx as u32 * 100 + file_pct as u32)
                         / files.len() as u32)
                         .min(99) as u8;
                     let _ = app.emit(
@@ -1109,6 +1260,12 @@ async fn download_moonshine_model(
 
         file.flush().await.map_err(|e| e.to_string())?;
         drop(file);
+
+        if let Err(e) = verify_runtime_model_file(&temp_file_path, spec).await {
+            let _ = tokio::fs::remove_file(&temp_file_path).await;
+            let _ = tokio::fs::remove_file(&dest_path).await;
+            return Err(e);
+        }
 
         tokio::fs::rename(&temp_file_path, &dest_path)
             .await
@@ -1179,12 +1336,61 @@ async fn download_parakeet_model(
     };
 
     // Int8 ONNX bundle — matches transcribe-rs ParakeetModel::load(..., Int8).
-    let files: &[&str] = &[
-        "encoder-model.int8.onnx",
-        "decoder_joint-model.int8.onnx",
-        "nemo128.onnx",
-        "vocab.txt",
-    ];
+    let files: &[RuntimeModelFileSpec] = match variant.as_str() {
+        "tdt-0.6b-v2" => &[
+            RuntimeModelFileSpec {
+                remote_path: "encoder-model.int8.onnx",
+                local_name: "encoder-model.int8.onnx",
+                max_bytes: 750 * MIB,
+                sha256: Some("3e0581fda6ab843888b51e56d7ee78b6d5bc3237ec113af1f732d1d5286aa155"),
+            },
+            RuntimeModelFileSpec {
+                remote_path: "decoder_joint-model.int8.onnx",
+                local_name: "decoder_joint-model.int8.onnx",
+                max_bytes: 16 * MIB,
+                sha256: Some("a449f49acd68979d418651dd2dcb737cc0f1bf0225e009e29ee326354edbf7d3"),
+            },
+            RuntimeModelFileSpec {
+                remote_path: "nemo128.onnx",
+                local_name: "nemo128.onnx",
+                max_bytes: 512 * KIB,
+                sha256: Some("a9fde1486ebfcc08f328d75ad4610c67835fea58c73ba57e3209a6f6cf019e9f"),
+            },
+            RuntimeModelFileSpec {
+                remote_path: "vocab.txt",
+                local_name: "vocab.txt",
+                max_bytes: 64 * KIB,
+                sha256: None,
+            },
+        ],
+        "tdt-0.6b-v3" => &[
+            RuntimeModelFileSpec {
+                remote_path: "encoder-model.int8.onnx",
+                local_name: "encoder-model.int8.onnx",
+                max_bytes: 750 * MIB,
+                sha256: Some("6139d2fa7e1b086097b277c7149725edbab89cc7c7ae64b23c741be4055aff09"),
+            },
+            RuntimeModelFileSpec {
+                remote_path: "decoder_joint-model.int8.onnx",
+                local_name: "decoder_joint-model.int8.onnx",
+                max_bytes: 32 * MIB,
+                sha256: Some("eea7483ee3d1a30375daedc8ed83e3960c91b098812127a0d99d1c8977667a70"),
+            },
+            RuntimeModelFileSpec {
+                remote_path: "nemo128.onnx",
+                local_name: "nemo128.onnx",
+                max_bytes: 512 * KIB,
+                sha256: Some("a9fde1486ebfcc08f328d75ad4610c67835fea58c73ba57e3209a6f6cf019e9f"),
+            },
+            RuntimeModelFileSpec {
+                remote_path: "vocab.txt",
+                local_name: "vocab.txt",
+                max_bytes: 256 * KIB,
+                sha256: None,
+            },
+        ],
+        _ => unreachable!(),
+    };
 
     // Build destination directory.
     let mut dest_dir =
@@ -1221,7 +1427,8 @@ async fn download_parakeet_model(
         serde_json::json!({ "name": &event_name, "pct": 0u8 }),
     );
 
-    for (file_idx, filename) in files.iter().enumerate() {
+    for (file_idx, spec) in files.iter().enumerate() {
+        let filename = spec.local_name;
         let download_key = format!("{}-{}", event_name, filename);
 
         // Check for cancellation before starting each file.
@@ -1229,10 +1436,7 @@ async fn download_parakeet_model(
             return Err("cancelled".into());
         }
 
-        let url = format!(
-            "https://huggingface.co/{}/resolve/main/{}",
-            repo, filename
-        );
+        let url = format!("https://huggingface.co/{}/resolve/main/{}", repo, spec.remote_path);
 
         // Validate URL shape — must be huggingface.co.
         {
@@ -1253,14 +1457,26 @@ async fn download_parakeet_model(
 
         // Skip if already downloaded (idempotent re-runs).
         if dest_path.exists() {
-            tracing::info!("[parakeet-dl] {} already present — skipping", filename);
-            // Still emit progress for the file.
-            let base_pct = ((file_idx + 1) * 100 / files.len()).min(99) as u8;
-            let _ = app.emit(
-                "download-progress",
-                serde_json::json!({ "name": &event_name, "pct": base_pct }),
-            );
-            continue;
+            match verify_runtime_model_file(&dest_path, spec).await {
+                Ok(()) => {
+                    tracing::info!("[parakeet-dl] {} already present — skipping", filename);
+                    // Still emit progress for the file.
+                    let base_pct = ((file_idx + 1) * 100 / files.len()).min(99) as u8;
+                    let _ = app.emit(
+                        "download-progress",
+                        serde_json::json!({ "name": &event_name, "pct": base_pct }),
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    let _ = tokio::fs::remove_file(&dest_path).await;
+                    tracing::warn!(
+                        "[parakeet-dl] removed invalid existing {}: {}",
+                        filename,
+                        e
+                    );
+                }
+            }
         }
 
         tracing::info!("[parakeet-dl] downloading {} from {}", filename, url);
@@ -1276,6 +1492,9 @@ async fn download_parakeet_model(
         }
 
         let total = resp.content_length();
+        if total.is_some_and(|t| t > spec.max_bytes) {
+            return Err(format!("{} is larger than the allowed limit", filename));
+        }
         let mut downloaded: u64 = 0;
 
         let temp_path = tempfile::Builder::new()
@@ -1304,6 +1523,12 @@ async fn download_parakeet_model(
             match resp.chunk().await {
                 Ok(Some(chunk)) => {
                     downloaded += chunk.len() as u64;
+                    if downloaded > spec.max_bytes {
+                        drop(file);
+                        let _ = tokio::fs::remove_file(&temp_file_path).await;
+                        let _ = tokio::fs::remove_file(&dest_path).await;
+                        return Err(format!("{} is larger than the allowed limit", filename));
+                    }
                     if let Err(e) = file.write_all(&chunk).await {
                         drop(file);
                         let _ = tokio::fs::remove_file(&temp_file_path).await;
@@ -1315,8 +1540,7 @@ async fn download_parakeet_model(
                         .filter(|&t| t > 0)
                         .map(|t| (downloaded * 100 / t).min(100) as u8)
                         .unwrap_or(50u8);
-                    let overall_pct = ((file_idx as u32 * 100
-                        + file_pct as u32)
+                    let overall_pct = ((file_idx as u32 * 100 + file_pct as u32)
                         / files.len() as u32)
                         .min(99) as u8;
                     let _ = app.emit(
@@ -1335,6 +1559,12 @@ async fn download_parakeet_model(
 
         file.flush().await.map_err(|e| e.to_string())?;
         drop(file);
+
+        if let Err(e) = verify_runtime_model_file(&temp_file_path, spec).await {
+            let _ = tokio::fs::remove_file(&temp_file_path).await;
+            let _ = tokio::fs::remove_file(&dest_path).await;
+            return Err(e);
+        }
 
         tokio::fs::rename(&temp_file_path, &dest_path)
             .await
@@ -1613,6 +1843,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         start_recording,
         stop_recording,
         open_data_folder,
+        open_releases_page,
         ollama::check_ollama_model,
         ollama::check_ollama_partial_blobs,
         ollama::open_url,
@@ -1664,33 +1895,39 @@ pub fn run() {
         .expect("init error log appender");
     let (error_nb, error_guard) = tracing_appender::non_blocking(error_appender);
 
-    // Transcript debug log: a dedicated, local-only sink kept off the tracing
-    // pipeline entirely (see diagnostic_log::TRANSCRIPT_LOG_PREFIX). TEMPORARY —
-    // used to chase transcription quirks; never included in uploaded reports.
-    let transcript_appender = RollingFileAppender::builder()
-        .rotation(Rotation::DAILY)
-        .filename_prefix(diagnostic_log::TRANSCRIPT_LOG_PREFIX)
-        .filename_suffix(diagnostic_log::LOG_SUFFIX)
-        .max_log_files(14)
-        .build(&log_dir)
-        .expect("init transcript log appender");
-    let (transcript_nb, transcript_guard) = tracing_appender::non_blocking(transcript_appender);
-    diagnostic_log::init_transcript_writer(transcript_nb);
-
     // Keep all non-blocking writers alive for the process lifetime so logs flush.
-    static LOG_GUARDS: std::sync::OnceLock<(
-        tracing_appender::non_blocking::WorkerGuard,
-        tracing_appender::non_blocking::WorkerGuard,
-        tracing_appender::non_blocking::WorkerGuard,
-    )> = std::sync::OnceLock::new();
-    let _ = LOG_GUARDS.set((main_guard, error_guard, transcript_guard));
+    static LOG_GUARDS: std::sync::OnceLock<Vec<tracing_appender::non_blocking::WorkerGuard>> =
+        std::sync::OnceLock::new();
+    #[cfg(debug_assertions)]
+    let mut log_guards = vec![main_guard, error_guard];
+    #[cfg(not(debug_assertions))]
+    let log_guards = vec![main_guard, error_guard];
+
+    #[cfg(debug_assertions)]
+    {
+        // Transcript debug log: a dedicated, local-only sink kept off the
+        // tracing pipeline entirely (see diagnostic_log::TRANSCRIPT_LOG_PREFIX).
+        // TEMPORARY — used to chase transcription quirks in dev builds; never
+        // included in uploaded reports.
+        let transcript_appender = RollingFileAppender::builder()
+            .rotation(Rotation::DAILY)
+            .filename_prefix(diagnostic_log::TRANSCRIPT_LOG_PREFIX)
+            .filename_suffix(diagnostic_log::LOG_SUFFIX)
+            .max_log_files(14)
+            .build(&log_dir)
+            .expect("init transcript log appender");
+        let (transcript_nb, transcript_guard) = tracing_appender::non_blocking(transcript_appender);
+        diagnostic_log::init_transcript_writer(transcript_nb);
+        log_guards.push(transcript_guard);
+    }
+
+    let _ = LOG_GUARDS.set(log_guards);
 
     use tracing_subscriber::{
         filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt, Layer,
     };
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        tracing_subscriber::EnvFilter::new("turbotalk_lib=debug,warn")
-    });
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("turbotalk_lib=debug,warn"));
     tracing_subscriber::registry()
         .with(filter)
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
@@ -1766,6 +2003,7 @@ pub fn run() {
             start_recording,
             stop_recording,
             open_data_folder,
+            open_releases_page,
             ollama::check_ollama_model,
             ollama::check_ollama_partial_blobs,
             ollama::open_url,

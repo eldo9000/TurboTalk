@@ -106,6 +106,8 @@ export const commands = {
 	 *  macOS only — uses the system `open` command.
 	 */
 	openDataFolder: () => typedError<null, string>(__TAURI_INVOKE("open_data_folder")),
+	// Open the canonical TurboTalk GitHub releases page in the user's browser.
+	openReleasesPage: () => typedError<null, string>(__TAURI_INVOKE("open_releases_page")),
 	/**
 	 *  Check whether `model_name` is present in the configured Ollama instance's
 	 *  pulled-model list. Returns `Ok(false)` for all network / URL failures.

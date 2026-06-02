@@ -28,27 +28,27 @@ pub const ERROR_LOG_PREFIX: &str = "errors";
 /// Filename prefix for the transcript debug log (`transcripts.YYYY-MM-DD.log`).
 ///
 /// TEMPORARY (planned removal): captures full transcript text so we can chase
-/// repetition / cut-off / mistranslation quirks locally. This file is
-/// **local-only** — it is written through a dedicated sink (never `tracing`),
-/// uses its own filename prefix, and is deliberately excluded from every
-/// uploaded diagnostic/bug report. Nothing a user dictates leaves their machine.
+/// repetition / cut-off / mistranslation quirks locally in debug builds. This
+/// file is **local-only** — it is written through a dedicated sink (never
+/// `tracing`), uses its own filename prefix, and is deliberately excluded from
+/// every uploaded diagnostic/bug report. Nothing a user dictates leaves their
+/// machine.
 pub const TRANSCRIPT_LOG_PREFIX: &str = "transcripts";
 pub const LOG_SUFFIX: &str = "log";
 
 /// Dedicated writer for the transcript debug log. Set once at startup. Kept
 /// entirely separate from the tracing pipeline so transcript content cannot
 /// leak into the session log, errors log, console, or uploaded reports.
-static TRANSCRIPT_WRITER: LazyLock<Mutex<Option<NonBlocking>>> =
-    LazyLock::new(|| Mutex::new(None));
+static TRANSCRIPT_WRITER: LazyLock<Mutex<Option<NonBlocking>>> = LazyLock::new(|| Mutex::new(None));
 
 /// Install the transcript-log writer (called once during logging init).
 pub fn init_transcript_writer(writer: NonBlocking) {
     *TRANSCRIPT_WRITER.lock() = Some(writer);
 }
 
-/// Append one transcript to the local-only transcript debug log. No-op until
-/// the writer is installed. See [`TRANSCRIPT_LOG_PREFIX`] for the privacy
-/// contract — this content is never uploaded.
+/// Append one transcript to the local-only transcript debug log. No-op unless
+/// the debug-only writer is installed. See [`TRANSCRIPT_LOG_PREFIX`] for the
+/// privacy contract — this content is never uploaded.
 pub fn record_transcript(backend: &str, text: &str, rejection_dbg: &str) {
     let guard = TRANSCRIPT_WRITER.lock();
     if let Some(writer) = guard.as_ref() {
@@ -167,7 +167,9 @@ fn read_recent_logs(prefix: &str, cap: usize) -> String {
             truncated = true;
             break;
         }
-        let Ok(bytes) = std::fs::read(path) else { continue };
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
         total += bytes.len();
         let name = path
             .file_name()
