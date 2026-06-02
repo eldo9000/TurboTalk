@@ -103,6 +103,12 @@ fn epoch_ms() -> u128 {
 
 /// Append a frontend-originated line to the in-memory ring buffer and mirror it
 /// into the tracing log so it lands in `turbotalk.log`.
+///
+/// PRIVACY: `event`/`detail` are bundled verbatim into uploaded bug reports via
+/// `build_report_text`'s "UI events" section. Callers must NEVER pass dictated
+/// transcript text or LLM cleanup output here — log a char count or a category,
+/// not the content. See `TRANSCRIPT_LOG_PREFIX` for the local-only sink that is
+/// the *only* place raw transcript text may be written.
 pub fn record_client_event(event: &str, detail: &str) {
     let line = format!("{} [ui] {event} {detail}", epoch_ms());
     let mut buf = CLIENT_EVENTS.lock();

@@ -333,7 +333,7 @@ Run this section after every release build (unsigned/ad-hoc DMG for this beta) a
 
     **Action:** Follow `PRIVACY.md` → "How to delete everything." Specifically:
 
-    - If you enabled autostart at any point, run `launchctl unload ~/Library/LaunchAgents/com.librewin.turbotalk.plist` and then delete that plist file.
+    - If you enabled autostart at any point, run `launchctl unload ~/Library/LaunchAgents/io.librewin.turbotalk.plist` and then delete that plist file.
     - Delete `~/.config/librewin/turbotalk/config.toml`.
     - Delete `~/.config/librewin/turbotalk/history.json`.
     - Delete `~/.config/librewin/turbotalk/models/` (entire directory, or whichever model path you configured).
@@ -342,7 +342,7 @@ Run this section after every release build (unsigned/ad-hoc DMG for this beta) a
 
     ```
     ls ~/.config/librewin/turbotalk/ 2>/dev/null
-    ls ~/Library/LaunchAgents/com.librewin.turbotalk.plist 2>/dev/null
+    ls ~/Library/LaunchAgents/io.librewin.turbotalk.plist 2>/dev/null
     ```
 
     **Expected:** Both commands report no such file or directory. Every path PRIVACY.md lists is gone after running its documented commands. If any path remains that PRIVACY.md does not mention, that is a documentation gap — note it for follow-up.

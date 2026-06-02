@@ -66,9 +66,9 @@ To remove all data TurboTalk stores on your machine:
 | History | `~/.config/librewin/turbotalk/history.json` |
 | Model files | `~/.config/librewin/turbotalk/models/` (entire directory, or whichever path you configured) |
 | App bundle | Move TurboTalk.app from `/Applications` to Trash |
-| Launch Agent (if autostart was enabled) | `~/Library/LaunchAgents/com.librewin.turbotalk.plist` |
+| Launch Agent (if autostart was enabled) | `~/Library/LaunchAgents/io.librewin.turbotalk.plist` |
 
-After removing the Launch Agent plist, run `launchctl unload ~/Library/LaunchAgents/com.librewin.turbotalk.plist` (before deleting it) to stop the agent from being loaded in the current session.
+After removing the Launch Agent plist, run `launchctl unload ~/Library/LaunchAgents/io.librewin.turbotalk.plist` (before deleting it) to stop the agent from being loaded in the current session.
 
 Temp audio files are deleted automatically after each recording. If a recording was interrupted abnormally, any leftover `.wav` file in your system temp directory can be deleted safely.
 
