@@ -253,6 +253,10 @@
       stopTranscribing('idle');
     }).then(u => uns.push(u));
 
+    listen('recording-recovered', () => {
+      stopTranscribing('idle');
+    }).then(u => uns.push(u));
+
     listen('recording-too-short', () => {
       stopTranscribing('idle');
     }).then(u => uns.push(u));

@@ -790,10 +790,10 @@ pub(crate) mod common {
                                 } else {
                                     // TASK-57: segment recovery only has partial text
                                     // (segments cut mid-recording; tail was too short).
-                                    // Emit recording-cancelled instead of transcript so
+                                    // Emit a recovery event instead of `transcript` so
                                     // the partial chunk does not create a history entry.
                                     // The text is still pasted to the active app below.
-                                    emit_critical(&app, "recording-cancelled", ());
+                                    emit_critical(&app, "recording-recovered", ());
                                     if let Some(job_id) = job_id_opt {
                                         emit_stage(&app, job_id, "pasting");
                                     }

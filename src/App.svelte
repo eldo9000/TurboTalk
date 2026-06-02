@@ -966,221 +966,246 @@ Reply with only the single word, lowercase, no punctuation.
     if (tab === 'settings') openSettings();
   }
 
-  onMount(async () => {
-    // Load saved theme + history before anything renders
-    const [initialCfg, savedHistory] = await Promise.all([
-      commands.getConfig(),
-      commands.loadHistory(),
-    ]);
-    cfgTheme      = initialCfg.theme        ?? 'auto';
-    cfgHotkeyKey  = initialCfg.hotkey?.key  ?? defaultHotkeyKey();
-    cfgHotkeyMode = initialCfg.hotkey?.mode ?? 'hold';
-    if (savedHistory.length) history = savedHistory;
-
-    function handleKeydown(e) {
-      if (e.metaKey || e.ctrlKey) {
-        if (e.key === '=' || e.key === '+') { e.preventDefault(); zoomIn(); }
-        else if (e.key === '-')             { e.preventDefault(); zoomOut(); }
-        else if (e.key === '0')             { e.preventDefault(); zoomIdx = 0; }
+  onMount(() => {
+    let disposed = false;
+    const cleanups = [];
+    const addCleanup = (cleanup) => {
+      if (disposed) {
+        cleanup();
+        return;
       }
-    }
-    window.addEventListener('keydown', handleKeydown);
+      cleanups.push(cleanup);
+    };
+    const listenTracked = (eventName, handler) => {
+      listen(eventName, handler).then(addCleanup);
+    };
 
-    const unlisteners = [];
-    listen('ptt-down',         () => {
-      recording = true;
-      transcribing = false;
-      filteredEntry = null; // clear any previous filtered-entry badge
-      logUi('ptt-down');
-    }).then(u => unlisteners.push(u));
-    listen('ptt-up',           () => {
-      recording = false;
-      transcribing = true;
-      logUi('ptt-up');
-    }).then(u => unlisteners.push(u));
-    listen('download-progress', (e) => {
-      const { name, pct } = e.payload;
-      // Alt-backend downloads emit "moonshine-base" / "parakeet-tdt-0.6b-v2".
-      const altKey = name.startsWith('moonshine-') ? `moonshine-${name.slice('moonshine-'.length)}`
-        : name.startsWith('parakeet-') ? `parakeet-${name.slice('parakeet-'.length)}`
-        : null;
-      if (pct >= 100) {
-        const next = { ...downloadProgress };
-        delete next[name];
-        if (altKey) delete next[altKey];
-        downloadProgress = next;
-        syncAppStateFromBackend();
-      } else {
-        const patch = { [name]: pct };
-        if (altKey) patch[altKey] = pct;
-        downloadProgress = { ...downloadProgress, ...patch };
-      }
-    }).then(u => unlisteners.push(u));
-    listen('transcript',  (e) => {
-      recording = false;
-      transcribing = false;
-      const text = e.payload;
-      logUi('transcript', text ? `${text.length} chars` : 'empty');
-      if (text) {
-        // Backend enforces the 50-entry on-disk cap; the frontend keeps the
-        // full in-memory list. `await` so save failures surface — the backend
-        // also emits a `ui-error` event, this catch is belt-and-suspenders.
-        history = [{ text, ts: Date.now() }, ...history];
-        (async () => {
-          // ui-error already emitted by backend on failure; we ignore the
-          // result here (belt-and-suspenders).
-          await commands.saveHistory(history);
-        })();
-      }
-    }).then(u => unlisteners.push(u));
-    listen('ui-error', (e) => {
-      const id = ++uiErrorId;
-      const payload = e.payload || {};
-      logUi('ui-error', `${payload.kind || 'unknown'}: ${payload.message || ''}`);
-      uiErrors = [...uiErrors, {
-        id,
-        kind: payload.kind || 'unknown',
-        message: payload.message || 'An error occurred',
-        recoverable: payload.recoverable !== false,
-      }];
-      setTimeout(() => {
-        uiErrors = uiErrors.filter(x => x.id !== id);
-      }, 5000);
-    }).then(u => unlisteners.push(u));
-    // TASK-55: hallucination rejection. Show the text in the main window with
-    // a "⚠ filtered" badge; emit a toast with the reason. Paste is skipped
-    // by the backend — we only observe the result here.
-    listen('transcription-rejected', (e) => {
-      recording = false;
-      transcribing = false;
-      const p = e.payload || {};
-      logUi('transcription-rejected', p.reason || 'filtered');
-      filteredEntry = { text: p.text || '', reason: p.reason || 'Hallucination detected' };
-      const id = ++uiErrorId;
-      uiErrors = [...uiErrors, {
-        id,
-        kind: 'transcription-rejected',
-        message: `⚠ Filtered: ${p.reason || 'Hallucination detected'} — nothing was pasted.`,
-        recoverable: true,
-      }];
-      setTimeout(() => {
-        uiErrors = uiErrors.filter(x => x.id !== id);
-      }, 8000);
-    }).then(u => unlisteners.push(u));
-    listen('transcript-error', (e) => {
-      recording = false;
-      transcribing = false;
-      transcriptError = e.payload || 'Transcription failed.';
-      setTimeout(() => { transcriptError = ''; }, 5000);
-    }).then(u => unlisteners.push(u));
-    listen('paste-miss', (e) => {
-      logUi('paste-miss', String(e.payload ?? ''));
-      recording = false;
-      transcribing = false;
-      transcriptError = e.payload || 'Paste missed — text is in your clipboard.';
-      setTimeout(() => { transcriptError = ''; }, 4000);
-    }).then(u => unlisteners.push(u));
-    listen('paste-error', (e) => {
-      recording = false;
-      transcribing = false;
-      // Transcript still appears in history; surface a distinct banner so the
-      // user knows nothing was actually pasted into the focused app.
-      transcriptError = e.payload || "Couldn't paste — check Accessibility permission";
-      setTimeout(() => { transcriptError = ''; }, 5000);
-    }).then(u => unlisteners.push(u));
-    listen('focus-changed-before-paste', (e) => {
-      // TASK-16: gentle, recoverable banner when the frontmost app at
-      // recording start differs from the one at paste time. Default policy
-      // is "paste anyway, observe the change" — the paste already happened
-      // by the time this event arrives, so the banner is informational, not
-      // an error. Shorter dwell than transcript errors.
-      const p     = e.payload || {};
-      const start = p.focus_at_start ?? 'unknown';
-      const now   = p.focus_at_paste ?? 'unknown';
-      transcriptError = `Focus changed: pasted into ${now} (started in ${start}).`;
-      setTimeout(() => { transcriptError = ''; }, 4000);
-    }).then(u => unlisteners.push(u));
-    listen('recording-discarded', (e) => {
-      logUi('recording-discarded', String(e.payload ?? ''));
-      recording = false;
-      transcribing = false;
-      // empty-final-text: whisper produced only noise/annotations that were
-      // stripped. Surface a soft hint so the user knows why nothing was pasted.
-      if (e.payload === 'empty-final-text') {
-        transcriptError = 'Nothing to paste — try speaking more clearly.';
-        setTimeout(() => { transcriptError = ''; }, 3000);
-      }
-    }).then(u => unlisteners.push(u));
-    listen('recording-cancelled', () => {
-      logUi('recording-cancelled');
-      // User cancelled mid-recording (Esc, hold-to-cancel, UI cancel, tray
-      // click). The hotkey path swallows the matching ptt_up, so without this
-      // listener the main window's recording/transcribing flags would stay
-      // pinned and the red dot + "Transcribing…" label never clear.
-      recording = false;
-      transcribing = false;
-    }).then(u => unlisteners.push(u));
-    listen('recording-too-short', (e) => {
-      // More specific subtype of recording-discarded. The overlay is already
-      // cleared by the recording-discarded listener; here we surface a
-      // gentle, time-aware hint in the main-window banner so the user
-      // understands why nothing was pasted.
-      recording = false;
-      transcribing = false;
-      const ms = typeof e.payload === 'number' ? e.payload : 0;
-      transcriptError = ms > 0
-        ? `Too short (${ms} ms) — try holding the hotkey a bit longer.`
-        : 'Too short — try holding the hotkey a bit longer.';
-      setTimeout(() => { transcriptError = ''; }, 3500);
-    }).then(u => unlisteners.push(u));
-    listen('device-lost', () => {
-      // Active mic disappeared mid-recording (AirPods off, USB unplugged).
-      // Clear overlay state and surface a banner so the user knows why their
-      // recording was thrown away.
-      recording = false;
-      transcribing = false;
-      transcriptError = 'Microphone disconnected — pick a different device or reconnect.';
-      setTimeout(() => { transcriptError = ''; }, 5000);
-    }).then(u => unlisteners.push(u));
-    listen('open-history', () => switchTab('history')).then(u => unlisteners.push(u));
-    listen('ollama-pull-progress', (event) => {
-      const p = event.payload;
-      ollamaPullState = { inFlight: true, pct: p.pct, status: p.status };
-    }).then(u => unlisteners.push(u));
+    const init = async () => {
+      // Load saved theme + history before anything renders
+      const [initialCfg, savedHistory] = await Promise.all([
+        commands.getConfig(),
+        commands.loadHistory(),
+      ]);
+      if (disposed) return;
+      cfgTheme      = initialCfg.theme        ?? 'auto';
+      cfgHotkeyKey  = initialCfg.hotkey?.key  ?? defaultHotkeyKey();
+      cfgHotkeyMode = initialCfg.hotkey?.mode ?? 'hold';
+      if (savedHistory.length) history = savedHistory;
 
-    // Re-check readiness on window focus — catches "user revoked permission
-    // between sessions" or "model file deleted" without paying for constant
-    // polling. Cheap because checkReadiness is one filesystem stat + two
-    // syscalls.
-    const onFocus = () => { recheckReadiness(); };
-    window.addEventListener('focus', onFocus);
-    // Initial check — replaces the default `showOnboarding = true` once the
-    // backend confirms what's actually granted.
-    recheckReadiness().then(async () => {
-      logUi('app-ready', platform);
-      if (!showOnboarding) {
-        await applyWindowSizeLimits();
-        await enforceWindowMinHeight();
-        commands.prewarmOllama(); // fire-and-forget — loads LLM before first dictation
+      function handleKeydown(e) {
+        if (e.metaKey || e.ctrlKey) {
+          if (e.key === '=' || e.key === '+') { e.preventDefault(); zoomIn(); }
+          else if (e.key === '-')             { e.preventDefault(); zoomOut(); }
+          else if (e.key === '0')             { e.preventDefault(); zoomIdx = 0; }
+        }
       }
-    });
-    syncAppStateFromBackend();
+      window.addEventListener('keydown', handleKeydown);
+      addCleanup(() => window.removeEventListener('keydown', handleKeydown));
 
-    getCurrentWindow().onResized(() => {
-      enforceWindowMinHeight();
-    }).then(u => unlisteners.push(u));
+      listenTracked('ptt-down',         () => {
+        recording = true;
+        transcribing = false;
+        filteredEntry = null; // clear any previous filtered-entry badge
+        logUi('ptt-down');
+      });
+      listenTracked('ptt-up',           () => {
+        recording = false;
+        transcribing = true;
+        logUi('ptt-up');
+      });
+      listenTracked('download-progress', (e) => {
+        const { name, pct } = e.payload;
+        // Alt-backend downloads emit "moonshine-base" / "parakeet-tdt-0.6b-v2".
+        const altKey = name.startsWith('moonshine-') ? `moonshine-${name.slice('moonshine-'.length)}`
+          : name.startsWith('parakeet-') ? `parakeet-${name.slice('parakeet-'.length)}`
+          : null;
+        if (pct >= 100) {
+          const next = { ...downloadProgress };
+          delete next[name];
+          if (altKey) delete next[altKey];
+          downloadProgress = next;
+          syncAppStateFromBackend();
+        } else {
+          const patch = { [name]: pct };
+          if (altKey) patch[altKey] = pct;
+          downloadProgress = { ...downloadProgress, ...patch };
+        }
+      });
+      listenTracked('transcript',  (e) => {
+        recording = false;
+        transcribing = false;
+        const text = e.payload;
+        logUi('transcript', text ? `${text.length} chars` : 'empty');
+        if (text) {
+          // Backend enforces the 50-entry on-disk cap; the frontend keeps the
+          // full in-memory list. `await` so save failures surface — the backend
+          // also emits a `ui-error` event, this catch is belt-and-suspenders.
+          history = [{ text, ts: Date.now() }, ...history];
+          (async () => {
+            // ui-error already emitted by backend on failure; we ignore the
+            // result here (belt-and-suspenders).
+            await commands.saveHistory(history);
+          })();
+        }
+      });
+      listenTracked('ui-error', (e) => {
+        const id = ++uiErrorId;
+        const payload = e.payload || {};
+        logUi('ui-error', `${payload.kind || 'unknown'}: ${payload.message || ''}`);
+        uiErrors = [...uiErrors, {
+          id,
+          kind: payload.kind || 'unknown',
+          message: payload.message || 'An error occurred',
+          recoverable: payload.recoverable !== false,
+        }];
+        setTimeout(() => {
+          uiErrors = uiErrors.filter(x => x.id !== id);
+        }, 5000);
+      });
+      // TASK-55: hallucination rejection. Show the text in the main window with
+      // a "⚠ filtered" badge; emit a toast with the reason. Paste is skipped
+      // by the backend — we only observe the result here.
+      listenTracked('transcription-rejected', (e) => {
+        recording = false;
+        transcribing = false;
+        const p = e.payload || {};
+        logUi('transcription-rejected', p.reason || 'filtered');
+        filteredEntry = { text: p.text || '', reason: p.reason || 'Hallucination detected' };
+        const id = ++uiErrorId;
+        uiErrors = [...uiErrors, {
+          id,
+          kind: 'transcription-rejected',
+          message: `⚠ Filtered: ${p.reason || 'Hallucination detected'} — nothing was pasted.`,
+          recoverable: true,
+        }];
+        setTimeout(() => {
+          uiErrors = uiErrors.filter(x => x.id !== id);
+        }, 8000);
+      });
+      listenTracked('transcript-error', (e) => {
+        recording = false;
+        transcribing = false;
+        transcriptError = e.payload || 'Transcription failed.';
+        setTimeout(() => { transcriptError = ''; }, 5000);
+      });
+      listenTracked('paste-miss', (e) => {
+        logUi('paste-miss', String(e.payload ?? ''));
+        recording = false;
+        transcribing = false;
+        transcriptError = e.payload || 'Paste missed — text is in your clipboard.';
+        setTimeout(() => { transcriptError = ''; }, 4000);
+      });
+      listenTracked('paste-error', (e) => {
+        recording = false;
+        transcribing = false;
+        // Transcript still appears in history; surface a distinct banner so the
+        // user knows nothing was actually pasted into the focused app.
+        transcriptError = e.payload || "Couldn't paste — check Accessibility permission";
+        setTimeout(() => { transcriptError = ''; }, 5000);
+      });
+      listenTracked('focus-changed-before-paste', (e) => {
+        // TASK-16: gentle, recoverable banner when the frontmost app at
+        // recording start differs from the one at paste time. Default policy
+        // is "paste anyway, observe the change" — the paste already happened
+        // by the time this event arrives, so the banner is informational, not
+        // an error. Shorter dwell than transcript errors.
+        const p     = e.payload || {};
+        const start = p.focus_at_start ?? 'unknown';
+        const now   = p.focus_at_paste ?? 'unknown';
+        transcriptError = `Focus changed: pasted into ${now} (started in ${start}).`;
+        setTimeout(() => { transcriptError = ''; }, 4000);
+      });
+      listenTracked('recording-discarded', (e) => {
+        logUi('recording-discarded', String(e.payload ?? ''));
+        recording = false;
+        transcribing = false;
+        // empty-final-text: whisper produced only noise/annotations that were
+        // stripped. Surface a soft hint so the user knows why nothing was pasted.
+        if (e.payload === 'empty-final-text') {
+          transcriptError = 'Nothing to paste — try speaking more clearly.';
+          setTimeout(() => { transcriptError = ''; }, 3000);
+        }
+      });
+      listenTracked('recording-cancelled', () => {
+        logUi('recording-cancelled');
+        // User cancelled mid-recording (Esc, hold-to-cancel, UI cancel, tray
+        // click). The hotkey path swallows the matching ptt_up, so without this
+        // listener the main window's recording/transcribing flags would stay
+        // pinned and the red dot + "Transcribing…" label never clear.
+        recording = false;
+        transcribing = false;
+      });
+      listenTracked('recording-recovered', () => {
+        logUi('recording-recovered');
+        recording = false;
+        transcribing = false;
+      });
+      listenTracked('recording-too-short', (e) => {
+        // More specific subtype of recording-discarded. The overlay is already
+        // cleared by the recording-discarded listener; here we surface a
+        // gentle, time-aware hint in the main-window banner so the user
+        // understands why nothing was pasted.
+        recording = false;
+        transcribing = false;
+        const ms = typeof e.payload === 'number' ? e.payload : 0;
+        transcriptError = ms > 0
+          ? `Too short (${ms} ms) — try holding the hotkey a bit longer.`
+          : 'Too short — try holding the hotkey a bit longer.';
+        setTimeout(() => { transcriptError = ''; }, 3500);
+      });
+      listenTracked('device-lost', () => {
+        // Active mic disappeared mid-recording (AirPods off, USB unplugged).
+        // Clear overlay state and surface a banner so the user knows why their
+        // recording was thrown away.
+        recording = false;
+        transcribing = false;
+        transcriptError = 'Microphone disconnected — pick a different device or reconnect.';
+        setTimeout(() => { transcriptError = ''; }, 5000);
+      });
+      listenTracked('open-history', () => switchTab('history'));
+      listenTracked('ollama-pull-progress', (event) => {
+        const p = event.payload;
+        ollamaPullState = { inFlight: true, pct: p.pct, status: p.status };
+      });
 
-    const onKeydown = (e) => { if (e.key === 'Shift') shiftHeld = true; };
-    const onKeyup   = (e) => { if (e.key === 'Shift') shiftHeld = false; };
-    window.addEventListener('keydown', onKeydown);
-    window.addEventListener('keyup',   onKeyup);
+      // Re-check readiness on window focus — catches "user revoked permission
+      // between sessions" or "model file deleted" without paying for constant
+      // polling. Cheap because checkReadiness is one filesystem stat + two
+      // syscalls.
+      const onFocus = () => { recheckReadiness(); };
+      window.addEventListener('focus', onFocus);
+      addCleanup(() => window.removeEventListener('focus', onFocus));
+      // Initial check — replaces the default `showOnboarding = true` once the
+      // backend confirms what's actually granted.
+      recheckReadiness().then(async () => {
+        logUi('app-ready', platform);
+        if (!showOnboarding) {
+          await applyWindowSizeLimits();
+          await enforceWindowMinHeight();
+          commands.prewarmOllama(); // fire-and-forget — loads LLM before first dictation
+        }
+      });
+      syncAppStateFromBackend();
+
+      getCurrentWindow().onResized(() => {
+        enforceWindowMinHeight();
+      }).then(addCleanup);
+
+      const onKeydown = (e) => { if (e.key === 'Shift') shiftHeld = true; };
+      const onKeyup   = (e) => { if (e.key === 'Shift') shiftHeld = false; };
+      window.addEventListener('keydown', onKeydown);
+      window.addEventListener('keyup',   onKeyup);
+      addCleanup(() => {
+        window.removeEventListener('keydown', onKeydown);
+        window.removeEventListener('keyup',   onKeyup);
+      });
+    };
+
+    init();
 
     return () => {
-      window.removeEventListener('keydown', handleKeydown);
-      window.removeEventListener('focus', onFocus);
-      window.removeEventListener('keydown', onKeydown);
-      window.removeEventListener('keyup',   onKeyup);
-      unlisteners.forEach(u => u());
+      disposed = true;
+      cleanups.splice(0).forEach(cleanup => cleanup());
     };
   });
 </script>
@@ -1823,7 +1848,7 @@ Reply with only the single word, lowercase, no punctuation.
 
   <!-- Settings tab -->
   {#if activeTab === 'settings'}
-    <div class="flex-1 min-h-0 overflow-y-auto text-[12px]">
+    <div class="flex-1 min-h-0 overflow-y-auto pb-4 bg-[var(--surface)] text-[12px]">
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <!-- svelte-ignore a11y_mouse_events_have_key_events -->
       <div class="tt-set"
