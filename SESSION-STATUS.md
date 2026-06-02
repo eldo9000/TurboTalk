@@ -9,6 +9,8 @@
 
 | Item | Status |
 |------|--------|
+| **Manual device-lost repro** | **TODO** — verify `lib.rs:2286` fix: hold key → unplug/switch mic mid-recording → release → next press must start a normal recording (no instant "recording-cancelled"). Fix is verified-by-construction only; runtime not yet observed. |
+| Release CI run | Pending — confirms updater artifacts emit + codesign gate passes in CI (user-triggered) |
 | TASK-25/26 — Windows hotkey + paste | Hotkey fix ready for retest; paste still unproven E2E |
 | TASK-57 — Segment recovery pollutes history | Fixed — partial chunks no longer added to history |
 | TASK-48 — CoreML / Neural Engine | Phase 1 built; phase 2 blocked on dyld-init hang — mitigated via Metal-only default + preflight guard |
