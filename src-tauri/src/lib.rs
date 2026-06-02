@@ -2285,6 +2285,19 @@ pub fn run() {
                 std::thread::sleep(std::time::Duration::from_millis(50));
                 if level_rec.device_lost() {
                     tracing::warn!("[lib] observed device-lost flag — cancelling recorder");
+                    // Hold mode: the user is still holding the record key when the
+                    // device drops, so a `ptt_up` is still coming. Arm one
+                    // suppression slot before cancelling so that key-up no-ops in
+                    // `ptt_up` instead of calling `stop()` on the now-Ready recorder,
+                    // hitting IllegalTransition, and arming CANCEL_PENDING — which
+                    // would fake-cancel the user's *next* press. Mirrors the
+                    // `trigger_cancel` callers in `cancel_recording` and the tray
+                    // click handler. Toggle-mode releases are already no-ops.
+                    if matches!(level_rec.state(), recorder::State::Recording)
+                        && level_app.state::<HotkeyState>().read().mode == "hold"
+                    {
+                        hotkey::arm_ptt_up_suppression();
+                    }
                     level_rec.cancel_after_device_lost();
                     let _ = level_tray.set_icon(Some(tray::make_icon(tray::TrayState::Idle)));
                     let _ = level_app.emit("device-lost", ());
