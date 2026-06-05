@@ -4,8 +4,7 @@
 
 <h1 align="center">Turbo Talk</h1>
 
-<p align="center"><strong>Go fast.</strong></p>
-<p align="center"><strong>Free voice dictation for getting work done.</strong></p>
+<p align="center"><strong>Hold a key. Talk. Let go. Done.</strong></p>
 
 <p align="center">
   <a href="https://github.com/eldo9000/TurboTalk-App/releases/latest/download/TurboTalk-macOS-arm64.dmg">
@@ -37,54 +36,53 @@
 
 ## What it does
 
-Hold a key. Talk. Let go. Your words appear wherever your cursor was.
+Hold a key, say something, let go. Your words appear wherever your cursor was — in any app, any text field.
 
-No cloud, no subscription, no account. Everything runs on your Mac. I've been using it every day for weeks and haven't needed to touch the settings once.
+No cloud, no account, no subscription. Everything runs on your machine. The model downloads itself on first launch. You don't need to know which one to pick.
 
-## Why it's like this
+## Why it's straightforward
 
-Most voice tools give you fifteen model options and a settings panel that takes an afternoon to figure out. This one gives you three models — the ones that actually work well — and gets out of the way.
+Most voice tools make you hunt for a model, configure a server, and figure out which settings matter. This one ships with everything included and picks sensible defaults. Install it, walk through a three-step onboarding, and you're dictating.
 
-- **Hold or tap** a trigger key of your choice to record
-- **Three Whisper models** to download — picked because they're all good, not just to fill a list
-- **Three cleanup modes** — paste raw, clean up punctuation, or run through a local AI model that formats prose, code, and shell commands differently
+- **Push-to-talk or tap** — hold a key to record, or tap once to toggle
+- **Model downloads itself** — the right one is pre-selected and downloads on first run
+- **Three cleanup modes** — paste raw, fix punctuation automatically, or run a local AI that formats prose, code, and shell commands differently
 - **Last 50 dictations saved** — click any entry to copy it back
-- **Nothing leaves your machine.** Not in the settings, not in the codebase.
-
-The app is basically done. It'll get bug fixes. That's a feature, not a limitation.
+- **Nothing leaves your machine** — not in the settings, not in the codebase
 
 ## Models
 
-| Model | Size | Notes |
-|---|---|---|
-| **large-v3-turbo** *(start here)* | 1.6 GB | Fast and accurate. Most people stop here. |
-| large-v3-turbo-q5_0 | 574 MB | Smaller download, slightly less accurate. Good if storage is tight. |
-| large-v3 | 3.1 GB | Highest accuracy. Worth it if you dictate constantly. |
+The app ships with three transcription engines. Parakeet is the default — it's the fastest and downloads automatically.
 
-Three choices because those are the three worth having.
+| Engine | Default model | Size | Best for |
+|---|---|---|---|
+| **Parakeet** *(default)* | Parakeet TDT 0.6B v2 | ~660 MB | Fast English dictation. Ships as the default. |
+| Moonshine | Moonshine Tiny | ~290 MB | Lower hallucination on silence. English only. |
+| Whisper | large-v3-turbo | 1.6 GB | Best multilingual accuracy. |
+
+You can switch engines and swap models in the Models tab. The app downloads whatever you choose — no manual file hunting.
 
 ## Install
 
-1. Download the DMG and drag **Turbo Talk** into `/Applications`.
-2. First launch: **right-click → Open.** macOS will warn you it's unsigned — that's expected. Right-click gets past it.
+1. Download and open the installer for your platform.
+2. **macOS:** drag Turbo Talk into `/Applications`. First launch: **right-click → Open** to get past the Gatekeeper warning (expected for unsigned apps).
 3. Walk through the three-step onboarding: grant Accessibility, grant Microphone, download a model.
-4. Set your trigger key. Hold it, say something, let go. Done.
+4. Set your trigger key. Hold it, say something, let go.
 
-**If the hotkey does nothing after install:** go to System Settings → Privacy & Security → Accessibility, remove Turbo Talk, re-add it, toggle it on, relaunch. One-time step — macOS requires it the first time for ad-hoc signed apps.
+**macOS — if the hotkey does nothing after install:** go to System Settings → Privacy & Security → Accessibility, remove Turbo Talk, re-add it, and relaunch. One-time step required by macOS for ad-hoc signed apps.
 
 ## Cleanup modes
 
-**Off** — paste exactly what Whisper heard.
+**Off** — paste exactly what the model heard.
 
-**Simple** — clean up capitalization and obvious filler words. No model needed, works instantly.
+**Simple** — fix capitalization and punctuation automatically. No extra model needed.
 
-**Advanced** — a local [Ollama](https://ollama.com) model reads what you said and formats it: prose, code, or shell commands. The vocabulary list and classifier prompt are both editable if you want to tune it. Requires Ollama installed separately.
+**Advanced** — a local [Ollama](https://ollama.com) model reads what you said and formats it differently depending on whether it sounds like prose, code, or a shell command. Requires Ollama installed separately.
 
 ## A few other things
 
-- `Cmd+=` / `Cmd+−` zoom the UI in 25% steps. `Cmd+0` resets. Persists across launches.
+- `Cmd+=` / `Cmd+−` zoom the UI. `Cmd+0` resets. Persists across launches.
 - Closing the window hides to tray. The hotkey stays active. Quit from the tray menu to fully exit.
-- History retention is configurable: restart, 1d, 5d, 10d, or 30d. Capped at 50 entries.
 - Config and history live at `~/.config/librewin/turbotalk/`. Delete that folder to wipe everything.
 
 ---
