@@ -398,6 +398,11 @@ jobs:
           DMG=$(ls dist/turbotalk-darwin-aarch64/*.dmg | head -n1)
           cp "$DMG" dist/turbotalk-darwin-aarch64/TurboTalk-macOS-arm64.dmg
 
+      - name: Copy Windows installer with stable name for direct-download link
+        run: |
+          EXE=$(ls dist/turbotalk-windows-x64/*.exe | head -n1)
+          cp "$EXE" dist/turbotalk-windows-x64/TurboTalk-Windows-x64-setup.exe
+
       - name: Generate latest.json
         id: manifest
         env:
