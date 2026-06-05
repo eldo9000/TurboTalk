@@ -11,7 +11,12 @@
   <a href="https://github.com/eldo9000/TurboTalk-App/releases/latest/download/TurboTalk-macOS-arm64.dmg">
     <img src="https://img.shields.io/badge/Download-macOS%20Apple%20Silicon-blue?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS (Apple Silicon)" />
   </a>
+  &nbsp;
+  <a href="https://github.com/eldo9000/TurboTalk-App/releases/latest/download/TurboTalk-0.9.5-windows-x64-setup.exe">
+    <img src="https://img.shields.io/badge/Download-Windows%20x64%20Beta-0078d4?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows (x64) — Beta" />
+  </a>
 </p>
+<p align="center"><sub>Windows build is a beta — hotkey and paste work on real hardware; end-to-end testing is ongoing.</sub></p>
 
 ---
 
@@ -84,4 +89,4 @@ Three choices because those are the three worth having.
 
 ---
 
-*Windows and Linux builds exist but end-to-end dictation isn't ready on those platforms yet.*
+*Linux builds exist but are not yet ready for use. Windows is in beta — the full dictation loop works on real hardware; if you run into issues, open a GitHub issue.*
