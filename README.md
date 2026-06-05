@@ -4,7 +4,6 @@
 
 <h1 align="center">Turbo Talk</h1>
 
-<p align="center"><strong>Hold a key. Talk. Let go. Done.</strong></p>
 
 <p align="center">
   <a href="https://github.com/eldo9000/TurboTalk-App/releases/latest/download/TurboTalk-macOS-arm64.dmg">
@@ -36,7 +35,7 @@
 
 ## What it does
 
-Hold a key, say something, let go. Your words appear wherever your cursor was — in any app, any text field.
+Free, local voice dictation. Your words appear wherever your cursor was — in any app, any text field.
 
 No cloud, no account, no subscription. Everything runs on your machine. The model downloads itself on first launch. You don't need to know which one to pick.
 
