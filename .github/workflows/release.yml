@@ -288,9 +288,9 @@ jobs:
           retention-days: 3
 
   build-windows:
-    name: Build (windows-x64) — workflow_dispatch only
+    name: Build (windows-x64)
     runs-on: windows-latest
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: read
 
@@ -359,7 +359,7 @@ jobs:
 
   finalize:
     name: Assemble latest.json and publish release
-    needs: build
+    needs: [build, build-windows]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -450,6 +450,7 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             dist/turbotalk-darwin-aarch64/*
+            dist/turbotalk-windows-x64/*
             latest.json
           body: |
             ## TurboTalk ${{ steps.tag.outputs.tag }}
