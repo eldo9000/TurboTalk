@@ -1,0 +1,82 @@
+name: Cleanup Actions caches
+
+# Prunes GitHub Actions caches not accessed in the last 7 days.
+# Runs weekly on Sunday 10:00 UTC. Use workflow_dispatch + dry_run to preview.
+
+on:
+  schedule:
+    - cron: '0 10 * * 0'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'List what would be deleted without deleting'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['true', 'false']
+
+permissions:
+  actions: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  MAX_AGE_DAYS: '7'
+  DRY_RUN: ${{ inputs.dry_run || 'false' }}
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prune stale caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          CUTOFF=$(date -u -d "${MAX_AGE_DAYS} days ago" +%s)
+          echo "Repo: $REPO"
+          echo "Cutoff: $(date -u -d @${CUTOFF}) (${MAX_AGE_DAYS} days since last access)"
+          echo "Dry run: ${DRY_RUN}"
+          echo ""
+
+          deleted=0
+          kept=0
+          page=1
+
+          while true; do
+            RESPONSE=$(gh api "repos/${REPO}/actions/caches?per_page=100&page=${page}")
+            COUNT=$(echo "$RESPONSE" | jq '.actions_caches | length')
+            [[ "$COUNT" -eq 0 ]] && break
+
+            while IFS= read -r cache; do
+              ID=$(echo "$cache" | jq -r .id)
+              KEY=$(echo "$cache" | jq -r .key)
+              LAST=$(echo "$cache" | jq -r .last_accessed_at)
+              SIZE_MB=$(echo "$cache" | jq -r '(.size_in_bytes / 1048576 | floor)')
+
+              LAST_EPOCH=$(date -u -d "$LAST" +%s)
+
+              if [[ "$LAST_EPOCH" -lt "$CUTOFF" ]]; then
+                if [[ "$DRY_RUN" == true ]]; then
+                  echo "WOULD DELETE: $KEY (${SIZE_MB} MB — last accessed $LAST)"
+                else
+                  echo "DELETE: $KEY (${SIZE_MB} MB — last accessed $LAST)"
+                  gh api -X DELETE "repos/${REPO}/actions/caches/${ID}"
+                fi
+                deleted=$((deleted + 1))
+              else
+                echo "KEEP: $KEY (${SIZE_MB} MB, accessed $LAST)"
+                kept=$((kept + 1))
+              fi
+            done < <(echo "$RESPONSE" | jq -c '.actions_caches[]')
+
+            total=$(echo "$RESPONSE" | jq .total_count)
+            if (( page * 100 >= total )); then
+              break
+            fi
+            page=$((page + 1))
+          done
+
+          echo ""
+          echo "Done. deleted=$deleted kept=$kept"
