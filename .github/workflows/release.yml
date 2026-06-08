@@ -277,7 +277,7 @@ jobs:
           name: turbotalk-darwin-aarch64
           path: ${{ steps.stage.outputs.stage }}/*
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 1
 
       - name: Upload signature (for finalize job)
         uses: actions/upload-artifact@v4
@@ -285,7 +285,7 @@ jobs:
           name: turbotalk-sig-darwin-aarch64
           path: ${{ steps.stage.outputs.sig_file }}
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 1
 
   build-windows:
     name: Build (windows-x64)
@@ -355,7 +355,7 @@ jobs:
           name: turbotalk-windows-x64
           path: dist-artifacts/*
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 1
 
   finalize:
     name: Assemble latest.json and publish release

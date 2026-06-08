@@ -93,7 +93,7 @@ jobs:
           name: TurboTalk-macos-arm64-dev
           path: dist-artifacts/*
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
 
   build-windows:
     name: Build (windows-x64)
@@ -160,4 +160,4 @@ jobs:
           name: TurboTalk-windows-x64-dev
           path: dist-artifacts/*
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1

@@ -4,7 +4,7 @@
 # trigger). Uploads the installer as a GitHub Actions artifact — no release
 # is created and no tag is required. Download from the Actions tab.
 #
-# Retention: 7 days. Re-run the workflow to get a fresh artifact.
+# Retention: 1 day. Re-run the workflow to get a fresh artifact.
 
 name: Dev Build (Windows)
 
@@ -83,4 +83,4 @@ jobs:
           name: TurboTalk-windows-x64-dev
           path: dist-artifacts/*
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1

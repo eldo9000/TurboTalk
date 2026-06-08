@@ -1,11 +1,11 @@
 name: Cleanup Actions caches
 
 # Prunes GitHub Actions caches not accessed in the last 7 days.
-# Runs weekly on Sunday 10:00 UTC. Use workflow_dispatch + dry_run to preview.
+# Runs daily at 06:00 UTC. Use workflow_dispatch + dry_run to preview.
 
 on:
   schedule:
-    - cron: '0 10 * * 0'
+    - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -20,7 +20,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  MAX_AGE_DAYS: '7'
+  MAX_AGE_DAYS: '2'
   DRY_RUN: ${{ inputs.dry_run || 'false' }}
 
 jobs:

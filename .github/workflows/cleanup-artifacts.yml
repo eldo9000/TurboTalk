@@ -1,0 +1,73 @@
+name: Cleanup Actions artifacts
+
+# Artifact storage accrues hourly (GB-hours). Sweeps artifacts older than 1 day.
+# Runs daily at 06:30 UTC. Use workflow_dispatch + dry_run to preview.
+
+on:
+  schedule:
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'List what would be deleted without deleting'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['true', 'false']
+
+permissions:
+  actions: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  MAX_AGE_DAYS: '1'
+  DRY_RUN: ${{ inputs.dry_run || 'false' }}
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prune old artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          CUTOFF=$(date -u -d "${MAX_AGE_DAYS} days ago" +%s)
+          echo "Repo: $REPO"
+          echo "Cutoff: $(date -u -d @${CUTOFF})"
+          echo "Dry run: ${DRY_RUN}"
+          echo ""
+
+          deleted=0
+          freed=0
+          page=1
+
+          while true; do
+            response=$(gh api "repos/${REPO}/actions/artifacts?per_page=100&page=${page}")
+            count=$(echo "$response" | jq '.artifacts | length')
+            [[ "$count" -eq 0 ]] && break
+
+            while IFS='|' read -r id created size name; do
+              epoch=$(date -u -d "$created" +%s)
+              if [[ "$epoch" -lt "$CUTOFF" ]]; then
+                size_mb=$((size / 1048576))
+                if [[ "$DRY_RUN" == true ]]; then
+                  echo "WOULD DELETE: $name (${size_mb} MB, $created)"
+                else
+                  echo "DELETE: $name (${size_mb} MB, $created)"
+                  gh api -X DELETE "repos/${REPO}/actions/artifacts/${id}"
+                fi
+                deleted=$((deleted + 1))
+                freed=$((freed + size))
+              fi
+            done < <(echo "$response" | jq -r '.artifacts[] | "\(.id)|\(.created_at)|\(.size_in_bytes)|\(.name)"')
+
+            total=$(echo "$response" | jq .total_count)
+            if (( page * 100 >= total )); then break; fi
+            page=$((page + 1))
+          done
+
+          echo ""
+          echo "Done. deleted=$deleted freed_mb=$((freed / 1048576))"
