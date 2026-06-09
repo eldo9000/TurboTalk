@@ -2195,16 +2195,10 @@ Reply with only the single word, lowercase, no punctuation.
       >
         <div class="flex flex-col items-center gap-0.5 pb-3">
           <span class="text-[18px] font-semibold tracking-tight text-[var(--text-primary)]">Turbo Talk</span>
-          <span class="text-[10px] text-[var(--text-muted)] tabular-nums">v0.8.0</span>
+          <span class="text-[10px] text-[var(--text-muted)] tabular-nums">v0.9.5</span>
           <p class="text-[var(--text-secondary)] text-[11px] leading-snug mt-1.5 text-center">
             Lightweight voice dictation<br>for getting work done.
           </p>
-        </div>
-        <div class="flex flex-col gap-0 pt-2.5">
-          <div class="flex justify-between items-center py-1">
-            <span class="text-[10px] text-[var(--text-muted)]">Powered by</span>
-            <span class="text-[10px] text-[var(--text-secondary)]">whisper.cpp · Ollama</span>
-          </div>
         </div>
       </div>
     </div>
