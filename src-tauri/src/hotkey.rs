@@ -518,7 +518,7 @@ pub(crate) mod common {
                             job_id_opt,
                             e
                         );
-                        rec.finish();
+                        rec.finish_guarded();
                         let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
                         // Must emit recording-discarded so the frontend clears
                         // transcribing=true (set by ptt-up above). Without this
@@ -592,10 +592,9 @@ pub(crate) mod common {
                     // Transcribing → Cleaning (always — even on whisper error,
                     // so the lifecycle reaches `finish` through legal transitions).
                     if rec.begin_cleaning().is_err() {
-                        // Should be unreachable given begin_transcribing succeeded,
-                        // but if it does happen the recorder has been forced out
-                        // from under us (e.g. cancel). Bail cleanly.
-                        rec.finish();
+                        // Recorder forced out from under us (e.g. cancel).
+                        // A new job may have already started (Recording state).
+                        rec.finish_guarded();
                         let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
                         emit_critical(&app, "recording-discarded", ());
                         if let Some(job_id) = job_id_opt {
@@ -654,7 +653,7 @@ pub(crate) mod common {
                                     job_id_opt
                                 );
                                 emit_critical(&app, "recording-discarded", "empty-final-text");
-                                rec.finish();
+                                rec.finish_guarded();
                                 let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
                                 if let Some(job_id) = job_id_opt {
                                     emit_stage(&app, job_id, "ready");
@@ -666,7 +665,7 @@ pub(crate) mod common {
 
                             // Cleaning → Pasting
                             if rec.begin_pasting().is_err() {
-                                rec.finish();
+                                rec.finish_guarded();
                                 let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
                                 if let Some(job_id) = job_id_opt {
                                     emit_stage(&app, job_id, "ready");
@@ -738,7 +737,7 @@ pub(crate) mod common {
 
                     // End of lifecycle — back to Ready regardless of which arm we
                     // took (success, transcribe error, or paste error).
-                    rec.finish();
+                    rec.finish_guarded();
                     let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
                     if let Some(job_id) = job_id_opt {
                         emit_stage(&app, job_id, "ready");
@@ -788,12 +787,17 @@ pub(crate) mod common {
                                     emit_critical(&app, "recording-discarded", "empty-final-text");
                                     play_chime(ChimeEvent::Finish);
                                 } else {
-                                    // TASK-57: segment recovery only has partial text
-                                    // (segments cut mid-recording; tail was too short).
-                                    // Emit a recovery event instead of `transcript` so
-                                    // the partial chunk does not create a history entry.
-                                    // The text is still pasted to the active app below.
-                                    emit_critical(&app, "recording-recovered", ());
+                                    // Segment recovery fires only when the tail
+                                    // after the last silence-boundary cut is under
+                                    // MIN_RECORDING_MS — i.e. trailing sub-threshold
+                                    // silence. All real speech is already in the
+                                    // joined segments, so `final_text` is the complete
+                                    // dictation, not a partial chunk. Carry it in the
+                                    // payload so the frontend can record a history
+                                    // entry (same as `transcript`). A distinct event
+                                    // name is kept so the overlay can still differentiate
+                                    // recovery from a normal finish.
+                                    emit_critical(&app, "recording-recovered", final_text.clone());
                                     if let Some(job_id) = job_id_opt {
                                         emit_stage(&app, job_id, "pasting");
                                     }
@@ -891,7 +895,9 @@ mod imp {
         CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
         CGEventType, EventField,
     };
+    use std::os::raw::c_void;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
     use tauri::{tray::TrayIcon, AppHandle};
 
@@ -918,12 +924,272 @@ mod imp {
     /// kVK_Escape from `Carbon/HIToolbox/Events.h`.
     const ESCAPE_KEYCODE: i64 = 0x35;
 
+    /// kVK_F13–kVK_F19 from `Carbon/HIToolbox/Events.h`.
+    fn fkey_code_for_name(name: &str) -> Option<i64> {
+        match name {
+            "f13" => Some(0x69),
+            "f14" => Some(0x6B),
+            "f15" => Some(0x71),
+            "f16" => Some(0x6A),
+            "f17" => Some(0x40),
+            "f18" => Some(0x4F),
+            "f19" => Some(0x50),
+            _ => None,
+        }
+    }
+
+    /// True while the configured F-key is physically held; cleared on KeyUp.
+    /// Prevents macOS autorepeat from firing ptt_down on every repeated event.
+    static FKEY_DOWN: AtomicBool = AtomicBool::new(false);
+
+    // ── IOHIDManager raw HID mouse button listener ──────────────────────────
+    //
+    // Opens an IOHIDManager and reads raw HID value callbacks. This catches
+    // mouse button events even when Logi Options+ (or similar software) has
+    // "disabled" the button at the IOKit level — IOKit delivers HID input
+    // reports to ALL registered IOHIDManager clients, so Logi cannot block
+    // us from seeing the raw report.
+    //
+    // HID Button usage IDs (standard USB HID spec):
+    //   Usage 1 = left click, 2 = right click, 3 = middle, 4 = back, 5 = forward
+
+    /// HID usage page for buttons.
+    const K_HIDPAGE_BUTTON: u32 = 0x09;
+
+    /// Map config name to HID Button usage ID.
+    fn hid_mouse_usage_for_name(name: &str) -> Option<u32> {
+        match name {
+            "mouse_middle"  => Some(3),
+            "mouse_back"    => Some(4),
+            "mouse_forward" => Some(5),
+            _ => None,
+        }
+    }
+
+    /// Bitmask tracking which raw HID mouse buttons are currently held.
+    /// Bit N = 1 when HID Button usage ID N is in the pressed state.
+    /// Only the IOHIDManager callback thread writes this; relaxed ordering
+    /// is safe because the thread is serial (single CFRunLoop).
+    static HID_BUTTON_STATE: AtomicU32 = AtomicU32::new(0);
+
+    fn hid_usage_bit(usage: u32) -> u32 {
+        1u32 << usage
+    }
+
+    // Raw pointer aliases for CoreFoundation / IOKit opaque types used in
+    // the extern "C" declarations below. We keep them module-scoped so the
+    // FFI signatures are self-contained and don't depend on core-foundation
+    // crate type interop.
+    type CFAllocatorRef = *const c_void;
+    type CFDictionaryRef = *const c_void;
+    type CFStringRef = *const c_void;
+    type CFRunLoopRef = *const c_void;
+    type IOHIDManagerRef = *mut c_void;
+    type IOHIDValueRef = *mut c_void;
+    type IOHIDElementRef = *mut c_void;
+
+    type IOHIDValueCallback = unsafe extern "C" fn(
+        context: *mut c_void,
+        result: i32,
+        sender: *mut c_void,
+        value: IOHIDValueRef,
+    );
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFAllocatorDefault: CFAllocatorRef;
+        static kCFRunLoopDefaultMode: CFStringRef;
+        fn CFRunLoopGetCurrent() -> CFRunLoopRef;
+        fn CFRunLoopRun();
+    }
+
+    #[link(name = "IOKit", kind = "framework")]
+    extern "C" {
+        fn IOHIDManagerCreate(allocator: CFAllocatorRef, options: u32) -> IOHIDManagerRef;
+        fn IOHIDManagerSetDeviceMatching(
+            manager: IOHIDManagerRef,
+            matching: CFDictionaryRef,
+        );
+        fn IOHIDManagerRegisterInputValueCallback(
+            manager: IOHIDManagerRef,
+            callback: IOHIDValueCallback,
+            context: *mut c_void,
+        );
+        fn IOHIDManagerScheduleWithRunLoop(
+            manager: IOHIDManagerRef,
+            runloop: CFRunLoopRef,
+            mode: CFStringRef,
+        );
+        fn IOHIDManagerOpen(manager: IOHIDManagerRef, options: u32) -> i32;
+        fn IOHIDValueGetElement(value: IOHIDValueRef) -> IOHIDElementRef;
+        fn IOHIDElementGetUsagePage(element: IOHIDElementRef) -> u32;
+        fn IOHIDElementGetUsage(element: IOHIDElementRef) -> u32;
+        fn IOHIDValueGetIntegerValue(value: IOHIDValueRef) -> isize;
+    }
+
+    /// Context passed to the IOHIDManager input-value callback via raw pointer.
+    /// Heap-allocated and leaked for the process lifetime (same pattern as the
+    /// existing CGEventTap — the OS cleans up on exit).
+    struct HidMouseCtx {
+        recorder: Arc<Recorder>,
+        tray_icon: TrayIcon,
+        app: AppHandle,
+        hotkey_state: Arc<parking_lot::RwLock<crate::settings::HotkeyConfig>>,
+    }
+
+    /// IOHIDManager input-value callback. Fires for every HID value change on
+    /// every matched device. We filter for Button usage page (0x09) and only
+    /// react to the user's configured mouse button. Runs on the IOHIDManager's
+    /// CFRunLoop thread — serial, so no concurrent invocations.
+    unsafe extern "C" fn hid_mouse_value_callback(
+        ctx: *mut c_void,
+        _result: i32,
+        _sender: *mut c_void,
+        value: IOHIDValueRef,
+    ) {
+        let context = &*(ctx as *const HidMouseCtx);
+
+        let element = IOHIDValueGetElement(value);
+        let usage_page = IOHIDElementGetUsagePage(element);
+        // Only care about Button usage page — ignore x, y, wheel, etc.
+        if usage_page != K_HIDPAGE_BUTTON {
+            return;
+        }
+
+        let usage = IOHIDElementGetUsage(element);
+        // Only react to buttons 3, 4, 5 (middle, back, forward)
+        if usage < 3 || usage > 5 {
+            return;
+        }
+
+        let int_value = IOHIDValueGetIntegerValue(value);
+        let pressed = int_value != 0;
+
+        // Read current config to check if this button is our trigger.
+        // Keep the read lock as short as possible.
+        let (is_our_button, toggle_mode, cancel_on_hold) = {
+            let hk = context.hotkey_state.read();
+            let target = hid_mouse_usage_for_name(&hk.key);
+            if target != Some(usage) {
+                return; // fast path: not the configured button
+            }
+            (true, hk.mode == "toggle", hk.cancel_on_hold)
+        };
+        if !is_our_button {
+            return;
+        }
+        // Lock is dropped — ptt_* may write to settings or app state.
+
+        let bit = hid_usage_bit(usage);
+        let was_down = HID_BUTTON_STATE.load(Ordering::Relaxed) & bit != 0;
+
+        if pressed {
+            if !was_down {
+                HID_BUTTON_STATE.fetch_or(bit, Ordering::Relaxed);
+                if cancel_on_hold {
+                    common::arm_hold_cancel(
+                        &context.recorder,
+                        &context.tray_icon,
+                        &context.app,
+                        toggle_mode,
+                    );
+                }
+                if toggle_mode {
+                    if context.recorder.is_recording() {
+                        common::ptt_up(&context.recorder, &context.tray_icon, &context.app);
+                    } else {
+                        common::ptt_down(&context.recorder, &context.tray_icon, &context.app);
+                    }
+                } else {
+                    common::ptt_down(&context.recorder, &context.tray_icon, &context.app);
+                }
+            }
+        } else if was_down {
+            HID_BUTTON_STATE.fetch_and(!bit, Ordering::Relaxed);
+            common::disarm_hold_cancel();
+            if !toggle_mode {
+                common::ptt_up(&context.recorder, &context.tray_icon, &context.app);
+            }
+        }
+    }
+
+    /// Spawn a background thread that reads raw HID mouse button events via
+    /// IOHIDManager. This bypasses CGEventTap entirely for mouse buttons, so
+    /// Logi Options+ (or other mouse-driver software) cannot intercept the
+    /// events before we see them.
+    fn spawn_hid_mouse_listener(
+        recorder: Arc<Recorder>,
+        tray_icon: TrayIcon,
+        app: AppHandle,
+        hotkey_state: Arc<parking_lot::RwLock<crate::settings::HotkeyConfig>>,
+    ) {
+        std::thread::spawn(move || {
+            let ctx = Box::into_raw(Box::new(HidMouseCtx {
+                recorder,
+                tray_icon,
+                app,
+                hotkey_state,
+            }));
+
+            // SAFETY: IOHIDManagerCreate returns an owned +1 retained ref.
+            let manager = unsafe { IOHIDManagerCreate(kCFAllocatorDefault, 0) };
+            if manager.is_null() {
+                tracing::error!(
+                    "[hotkey] IOHIDManagerCreate failed for HID mouse listener"
+                );
+                let _ = unsafe { Box::from_raw(ctx) };
+                return;
+            }
+
+            // NULL matching dict = match all HID devices. We filter in the
+            // callback by usage page + usage ID, so there's no need to build
+            // a CFDictionary for device matching.
+            unsafe {
+                IOHIDManagerSetDeviceMatching(manager, std::ptr::null());
+            }
+
+            unsafe {
+                IOHIDManagerRegisterInputValueCallback(
+                    manager,
+                    hid_mouse_value_callback,
+                    ctx as *mut c_void,
+                );
+                IOHIDManagerScheduleWithRunLoop(
+                    manager,
+                    CFRunLoopGetCurrent(),
+                    kCFRunLoopDefaultMode,
+                );
+                IOHIDManagerOpen(manager, 0);
+            }
+
+            tracing::info!("[hotkey] IOHIDManager mouse listener running");
+
+            // Block the thread forever — the IOHIDManager delivers callbacks
+            // on this run loop.
+            unsafe { CFRunLoopRun() };
+
+            // Unreachable in normal operation; cleanup on process exit.
+            let _ = unsafe { Box::from_raw(ctx) };
+        });
+    }
+
     pub fn spawn(
         recorder: Arc<Recorder>,
         tray_icon: TrayIcon,
         app: AppHandle,
         hotkey_state: Arc<parking_lot::RwLock<crate::settings::HotkeyConfig>>,
     ) {
+        // Start the IOHIDManager mouse listener first — it runs on its own
+        // thread and reads raw HID button events regardless of whether
+        // Logi Options+ (or similar driver software) intercepts at the
+        // IOKit level. Does not require Accessibility trust.
+        spawn_hid_mouse_listener(
+            recorder.clone(),
+            tray_icon.clone(),
+            app.clone(),
+            hotkey_state.clone(),
+        );
+
         std::thread::spawn(move || {
             // Permission watchdog loop. CGEventTap::new fails if the process
             // lacks Accessibility trust at this moment. Pre-fix behaviour was
@@ -945,10 +1211,14 @@ mod imp {
                 let hk_cb = hotkey_state.clone();
 
                 let tap_result = CGEventTap::new(
-                    CGEventTapLocation::HID,
+                    CGEventTapLocation::Session,
                     CGEventTapPlacement::HeadInsertEventTap,
                     CGEventTapOptions::Default,
-                    vec![CGEventType::FlagsChanged, CGEventType::KeyDown],
+                    vec![
+                        CGEventType::FlagsChanged,
+                        CGEventType::KeyDown,
+                        CGEventType::KeyUp,
+                    ],
                     move |_proxy, etype, event| {
                         let keycode =
                             event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
@@ -961,15 +1231,18 @@ mod imp {
                             toggle_mode,
                             cancel_on_esc,
                             cancel_on_hold,
+                            fkey_code,
                         ) = {
                             let hk = hk_cb.read();
                             let (kc, f) = key_for_name(&hk.key);
+                            let fkc = fkey_code_for_name(&hk.key);
                             (
                                 kc,
                                 f,
                                 hk.mode == "toggle",
                                 hk.cancel_on_esc,
                                 hk.cancel_on_hold,
+                                fkc,
                             )
                         };
 
@@ -998,15 +1271,41 @@ mod imp {
                             }
                         }
 
-                        if let CGEventType::FlagsChanged = etype {
+                        if let Some(fkc) = fkey_code {
+                            // F-key PTT path. KeyDown → ptt_down (dedup autorepeat
+                            // with FKEY_DOWN); KeyUp → ptt_up.
+                            match etype {
+                                CGEventType::KeyDown => {
+                                    if keycode == fkc && !FKEY_DOWN.swap(true, Ordering::AcqRel) {
+                                        if cancel_on_hold {
+                                            common::arm_hold_cancel(&recorder_cb, &tray_cb, &app_cb, toggle_mode);
+                                        }
+                                        if toggle_mode {
+                                            if recorder_cb.is_recording() {
+                                                common::ptt_up(&recorder_cb, &tray_cb, &app_cb);
+                                            } else {
+                                                common::ptt_down(&recorder_cb, &tray_cb, &app_cb);
+                                            }
+                                        } else {
+                                            common::ptt_down(&recorder_cb, &tray_cb, &app_cb);
+                                        }
+                                    }
+                                }
+                                CGEventType::KeyUp => {
+                                    if keycode == fkc {
+                                        FKEY_DOWN.store(false, Ordering::Release);
+                                        common::disarm_hold_cancel();
+                                        if !toggle_mode {
+                                            common::ptt_up(&recorder_cb, &tray_cb, &app_cb);
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        } else if let CGEventType::FlagsChanged = etype {
+                            // Modifier key PTT path (Right Option, Control, etc.).
                             if keycode == target_keycode {
                                 let is_key_down = flags.contains(target_flag);
-                                // Hold-to-cancel: any trigger-key down stroke
-                                // while the recorder is busy (Recording or
-                                // Transcribing) arms a 1 s timer. If the
-                                // user keeps holding past the deadline, the
-                                // in-flight job is cancelled. Released early
-                                // → timer no-ops, normal PTT semantics apply.
                                 if is_key_down {
                                     if cancel_on_hold {
                                         common::arm_hold_cancel(&recorder_cb, &tray_cb, &app_cb, toggle_mode);

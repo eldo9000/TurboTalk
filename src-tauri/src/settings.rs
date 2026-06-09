@@ -253,7 +253,7 @@ impl Default for AudioConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct HotkeyConfig {
-    pub key: String, // "right_option" | "right_control" | "right_command" | "right_shift"
+    pub key: String, // "right_option" | "right_control" | "f13"–"f19" (mac) / "f13"–"f24" (win) | etc.
     pub mode: String, // "hold" | "toggle"
     /// Cancel an in-flight recording when the user presses Escape. Read on
     /// every keystroke from the global hotkey listener — only acts while the
@@ -291,6 +291,15 @@ pub fn migrate_platform_defaults(cfg: &mut Config) -> bool {
     #[cfg(target_os = "windows")]
     {
         let mut changed = false;
+        // Numpad keys were removed from the UI (v0.9.6); migrate to platform default.
+        if cfg.hotkey.key.starts_with("numpad_") {
+            tracing::info!(
+                "[settings] Windows: migrating numpad hotkey {} → right_control",
+                cfg.hotkey.key
+            );
+            cfg.hotkey.key = "right_control".into();
+            changed = true;
+        }
         if cfg.hotkey.key == "right_option" {
             tracing::info!(
                 "[settings] Windows: migrating hotkey right_option → right_control"
@@ -307,8 +316,17 @@ pub fn migrate_platform_defaults(cfg: &mut Config) -> bool {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = cfg;
-        false
+        let mut changed = false;
+        // Numpad keys were removed from the UI (v0.9.6); migrate to platform default.
+        if cfg.hotkey.key.starts_with("numpad_") {
+            tracing::info!(
+                "[settings] macOS: migrating numpad hotkey {} → right_option",
+                cfg.hotkey.key
+            );
+            cfg.hotkey.key = "right_option".into();
+            changed = true;
+        }
+        changed
     }
 }
 

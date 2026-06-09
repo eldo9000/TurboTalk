@@ -10,29 +10,48 @@
   import UpdateManager from './UpdateManager.svelte';
 
   const HOTKEY_KEY_ITEMS_MAC = [
-    { value: 'option',          label: 'Option ⌥' },
-    { value: 'control',         label: 'Control ⌃' },
-    { value: 'command',         label: 'Command ⌘' },
-    { value: 'shift',           label: 'Shift ⇧' },
-    { value: 'numpad_enter',    label: 'Enter' },
-    { value: 'numpad_0',        label: '0' },
-    { value: 'numpad_decimal',  label: '.' },
-    { value: 'numpad_add',      label: '+' },
-    { value: 'numpad_subtract', label: '−' },
-    { value: 'numpad_multiply', label: '*' },
+    { category: 'Keyboard' },
+    { value: 'option',         label: 'Option ⌥' },
+    { value: 'control',        label: 'Control ⌃' },
+    { value: 'command',        label: 'Command ⌘' },
+    { value: 'shift',          label: 'Shift ⇧' },
+    { category: 'Mouse' },
+    { value: 'mouse_back',     label: 'Mouse Back' },
+    { value: 'mouse_forward',  label: 'Mouse Fwd' },
+    { value: 'mouse_middle',   label: 'Mouse Middle' },
+    { category: 'Function Keys' },
+    { value: 'f13',            label: 'F13' },
+    { value: 'f14',            label: 'F14' },
+    { value: 'f15',            label: 'F15' },
+    { value: 'f16',            label: 'F16' },
+    { value: 'f17',            label: 'F17' },
+    { value: 'f18',            label: 'F18' },
+    { value: 'f19',            label: 'F19' },
   ];
 
   const HOTKEY_KEY_ITEMS_WIN = [
-    { value: 'option',          label: 'Alt' },
-    { value: 'control',         label: 'Ctrl' },
-    { value: 'command',         label: 'Win' },
-    { value: 'shift',           label: 'Shift' },
-    { value: 'numpad_enter',    label: 'Numpad Enter' },
-    { value: 'numpad_0',        label: 'Numpad 0' },
-    { value: 'numpad_decimal',  label: 'Numpad .' },
-    { value: 'numpad_add',      label: 'Numpad +' },
-    { value: 'numpad_subtract', label: 'Numpad −' },
-    { value: 'numpad_multiply', label: 'Numpad *' },
+    { category: 'Keyboard' },
+    { value: 'option',         label: 'Alt' },
+    { value: 'control',        label: 'Ctrl' },
+    { value: 'command',        label: 'Win' },
+    { value: 'shift',          label: 'Shift' },
+    { category: 'Mouse' },
+    { value: 'mouse_back',     label: 'Mouse Back' },
+    { value: 'mouse_forward',  label: 'Mouse Fwd' },
+    { value: 'mouse_middle',   label: 'Mouse Middle' },
+    { category: 'Function Keys' },
+    { value: 'f13',            label: 'F13' },
+    { value: 'f14',            label: 'F14' },
+    { value: 'f15',            label: 'F15' },
+    { value: 'f16',            label: 'F16' },
+    { value: 'f17',            label: 'F17' },
+    { value: 'f18',            label: 'F18' },
+    { value: 'f19',            label: 'F19' },
+    { value: 'f20',            label: 'F20' },
+    { value: 'f21',            label: 'F21' },
+    { value: 'f22',            label: 'F22' },
+    { value: 'f23',            label: 'F23' },
+    { value: 'f24',            label: 'F24' },
   ];
 
   const hotkeyKeyItems = $derived(
@@ -40,17 +59,18 @@
   );
 
   function hotkeyDisplayName(key) {
+    const shared = {
+      mouse_back: 'Mouse Back', mouse_forward: 'Mouse Fwd', mouse_middle: 'Mouse Middle',
+    };
+    if (shared[key]) return shared[key];
     if (platform === 'windows') {
       const win = {
         left_option: 'Left Alt', right_option: 'Right Alt',
         left_control: 'Left Ctrl', right_control: 'Right Ctrl',
         left_command: 'Left Win', right_command: 'Right Win',
         left_shift: 'Left Shift', right_shift: 'Right Shift',
-        numpad_enter: 'Numpad Enter', numpad_0: 'Numpad 0',
-        numpad_decimal: 'Numpad .', numpad_add: 'Numpad +',
-        numpad_subtract: 'Numpad −', numpad_multiply: 'Numpad *',
       };
-      return win[key] ?? key;
+      return win[key] ?? key.toUpperCase();
     }
     const mac = {
       right_option: 'Right Option ⌥', left_option: 'Left Option ⌥',
@@ -58,7 +78,7 @@
       right_command: 'Right Command ⌘', left_command: 'Left Command ⌘',
       right_shift: 'Right Shift ⇧', left_shift: 'Left Shift ⇧',
     };
-    return mac[key] ?? key;
+    return mac[key] ?? key.toUpperCase();
   }
 
   const HISTORY_AUTO_DELETE_ITEMS = [
@@ -385,15 +405,19 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgCancelOnHold      = $state(true);
 
   let hotkeySide           = $state('right');  // 'left' | 'right'
-  let hotkeyKeyPart        = $state('option'); // key name without side prefix, or full numpad_* value
+  let hotkeyKeyPart        = $state('option'); // key name without side prefix, or unsided key (f13–f24, mouse_*)
 
+  function isUnsidedKey(k) {
+    return k.startsWith('numpad_') || k.startsWith('mouse_') || /^f\d+$/.test(k);
+  }
   function parseHotkeyKey(full) {
-    if (!full || full.startsWith('numpad_')) return { side: 'right', keyPart: full || 'option' };
+    if (!full) return { side: 'right', keyPart: 'option' };
+    if (isUnsidedKey(full)) return { side: 'right', keyPart: full };
     const idx = full.indexOf('_');
     return idx === -1 ? { side: 'right', keyPart: full } : { side: full.slice(0, idx), keyPart: full.slice(idx + 1) };
   }
   function applyHotkeyKey() {
-    cfgHotkeyKey = hotkeyKeyPart.startsWith('numpad_') ? hotkeyKeyPart : `${hotkeySide}_${hotkeyKeyPart}`;
+    cfgHotkeyKey = isUnsidedKey(hotkeyKeyPart) ? hotkeyKeyPart : `${hotkeySide}_${hotkeyKeyPart}`;
     saveSettings();
   }
 
@@ -1135,10 +1159,20 @@ Reply with only the single word, lowercase, no punctuation.
         recording = false;
         transcribing = false;
       });
-      listenTracked('recording-recovered', () => {
-        logUi('recording-recovered');
+      listenTracked('recording-recovered', (e) => {
         recording = false;
         transcribing = false;
+        // Recovery text is the complete dictation (segments cover all speech;
+        // only a sub-threshold silent tail was dropped), so it belongs in
+        // history just like a normal `transcript`. Mirror that handler.
+        const text = e.payload;
+        logUi('recording-recovered', text ? `${text.length} chars` : 'empty');
+        if (text) {
+          history = [{ text, ts: Date.now() }, ...history];
+          (async () => {
+            await commands.saveHistory(history);
+          })();
+        }
       });
       listenTracked('recording-too-short', (e) => {
         // More specific subtype of recording-discarded. The overlay is already
@@ -1858,8 +1892,8 @@ Reply with only the single word, lowercase, no punctuation.
         <!-- Hotkey -->
         <div class="tt-section">
           <div class="subsection-hd"><span class="subsection-hd-title">Hotkey</span></div>
-          <div class="tt-row tt-row-field" data-tip="Which modifier key triggers push-to-talk">
-            <div class="tt-seg" class:tt-seg-dim={hotkeyKeyPart.startsWith('numpad_')}>
+          <div class="tt-row tt-row-field" data-tip="Which key triggers push-to-talk. Using a foot pedal or macro key? Map it to F13–F19 in your device software, then pick it here.">
+            <div class="tt-seg" class:tt-seg-dim={isUnsidedKey(hotkeyKeyPart)}>
               {#each [['left','Left'],['right','Right']] as [v, lbl], i}
                 <button onclick={() => { hotkeySide = v; applyHotkeyKey(); }} class={seg(hotkeySide === v, i, 2)}>{lbl}</button>
               {/each}
@@ -1874,6 +1908,12 @@ Reply with only the single word, lowercase, no punctuation.
               />
             </div>
           </div>
+          {#if hotkeyKeyPart.startsWith('mouse_')}
+            <div style="margin: 0 8px 6px; padding: 6px 9px; border-radius: 6px; font-size: 11px; line-height: 1.5; color: var(--warning, #c97d00); background: var(--warning-bg, #fff8e0); border: 1px solid color-mix(in srgb, var(--warning, #c97d00) 30%, transparent);">
+              ⚠ macOS also fires the button's native action (browser back/forward, etc.) — TurboTalk can't intercept it. Both behaviors fire at once. To suppress the native action, use your mouse software or pick an F-key instead.<br>
+              <span style="opacity:0.85"><strong>Logitech:</strong> set the button to <em>Keystroke → F19</em> in Logi Options+, then use F19 here — native action won't fire.</span>
+            </div>
+          {/if}
         </div>
 
         <!-- Recording -->

@@ -1,9 +1,17 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-06-02  
-**Current state:** Pre-release scan sweep complete (diagnostics/privacy, packaging/update, regression). Reports in `docs/pre-release-scans/SCAN-{1,2,3}-FINDINGS.md`. Scan 1 (privacy) clean — dictated text cannot reach an uploaded report. Four fixes applied and staged: (1) updater artifacts now enabled in the CI release build only (via `--config`; the committed `createUpdaterArtifacts` stays `false` so local `npm run package` remains DMG-only) — was blocking the release workflow's Locate step; (2) macOS bundle codesign now gated in `verify-macos-bundle.mjs` + wired into the mac release job (was a `|| true` no-op); (3) device-lost mid-hold no longer defers a fake `recording-cancelled` onto the next press (`lib.rs:2286` arms ptt_up suppression in hold mode); (4) launch-agent plist id corrected in docs (`com.*` → `io.librewin.turbotalk`) + privacy guard comment at `record_client_event`.
+**Last updated:** 2026-06-09  
+**Current state:** Mouse button support overhaul. Three feature areas landed:
 
-**Next action:** Two verifications remain, both off the local box — (a) trigger a release CI run to confirm updater artifacts emit + codesign gate passes on the signed bundle; (b) manually verify the device-lost fix: hold key → unplug/switch mic mid-recording → release → next press must start a normal recording (no instant "recording-cancelled").
+1. **IOHIDManager raw HID mouse listener** (new) — reads raw HID Button usage values via IOHIDManager, bypassing CGEventTap entirely for mouse buttons. This works even when Logi Options+ (or similar driver software) intercepts buttons at IOKit — IOKit delivers HID reports to ALL registered IOHIDManager clients, so Logi cannot block us. Mouse back/forward/middle now work regardless of mouse software. No configuration needed beyond selecting the button in Settings.
+
+2. **F13–F19 function key hotkeys** (new) — alternative PTT path for users whose mouse software lets them map buttons to keystrokes. Works as the fallback if the IOHIDManager path is unavailable.
+
+3. **`finish_guarded()` hardening** — six `rec.finish()` call sites changed to `rec.finish_guarded()` to prevent cancel + rapid re-press races from corrupting the next job's state machine. Segment recovery now carries `final_text` in the `recording-recovered` payload (fixes TASK-57 — partial chunks no longer lost).
+
+4. **UI updates** — mouse buttons (back/forward/middle) and F13–F24 added to hotkey dropdown. Logi Options+ warning banner when a mouse button is selected. Numpad keys removed from UI; existing configs auto-migrate to platform default.
+
+**Next action:** Test the IOHIDManager path end-to-end: hold a mouse button with Logi Options+ running → recording starts. Also verify F-key path still works. Then commit and push.
 
 ## Open backlog
 

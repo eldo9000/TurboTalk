@@ -1164,10 +1164,15 @@ fn transcribe_one_segment(seg: &crate::audio_finalizer::SegmentEmit) -> String {
 
     match result {
         Ok(outcome) => {
+            // PRIVACY: log a char count, never the text. Full segment text is
+            // already preserved in the local-only transcript sink via run_raw's
+            // record_transcript(); this line must not leak content into the main
+            // session log (which is bundled into uploaded bug reports). See the
+            // privacy contract in diagnostic_log.rs.
             tracing::info!(
-                "[seg-transcriber] segment {} → {:?}",
+                "[seg-transcriber] segment {} → {} chars",
                 seg.index,
-                outcome.text
+                outcome.text.chars().count()
             );
             // Use text regardless of per-segment rejection — final-assembly
             // detection runs on the joined transcript in the hotkey pipeline.

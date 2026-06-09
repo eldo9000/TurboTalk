@@ -54,8 +54,7 @@ fn vk_down(vk: u32) -> bool {
     unsafe { (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0 }
 }
 
-/// VK codes to poll for each Settings hotkey name. Numpad keys include the
-/// NumLock-off aliases so testers aren't stuck when NumLock is disabled.
+/// VK codes to poll for each Settings hotkey name.
 fn vk_codes_for_name(name: &str) -> &'static [u32] {
     match name {
         "left_control" => &[0xA2],
@@ -66,12 +65,26 @@ fn vk_codes_for_name(name: &str) -> &'static [u32] {
         "right_shift" => &[0xA1],
         "left_command" => &[0x5B],
         "right_command" => &[0x5C],
-        "numpad_enter" => &[0x0D],
-        "numpad_0" => &[0x60, 0x2D],
-        "numpad_decimal" => &[0x6E, 0x2E],
-        "numpad_add" => &[0x6B],
-        "numpad_subtract" => &[0x6D],
-        "numpad_multiply" => &[0x6A],
+        // VK_F13–VK_F24 (0x7C–0x87) — spare keys; no default OS action.
+        // Third-party pedals / macro keyboards: map to one of these in
+        // your device software, then select the same key in TurboTalk.
+        "f13" => &[0x7C],
+        "f14" => &[0x7D],
+        "f15" => &[0x7E],
+        "f16" => &[0x7F],
+        "f17" => &[0x80],
+        "f18" => &[0x81],
+        "f19" => &[0x82],
+        "f20" => &[0x83],
+        "f21" => &[0x84],
+        "f22" => &[0x85],
+        "f23" => &[0x86],
+        "f24" => &[0x87],
+        // Mouse extra buttons — users must disable native back/forward action
+        // in their mouse software to avoid double-firing.
+        "mouse_middle"  => &[0x04], // VK_MBUTTON
+        "mouse_back"    => &[0x05], // VK_XBUTTON1
+        "mouse_forward" => &[0x06], // VK_XBUTTON2
         _ => &[],
     }
 }

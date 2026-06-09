@@ -189,6 +189,28 @@ impl Recorder {
         }
     }
 
+    /// Like `finish()` but skips the transition when the recorder is in
+    /// `Recording` state, which means a new job has started after this
+    /// job's cancel. Calling the plain `finish()` in that case would
+    /// corrupt the new job's state machine.
+    ///
+    /// Use in every cleanup path of `ptt_up` (error branches and the
+    /// normal completion path) instead of the bare `finish()`.
+    pub fn finish_guarded(&self) {
+        let mut s = self.state.lock();
+        if matches!(*s, State::Recording) {
+            tracing::warn!(
+                "[recorder] finish_guarded() skipped — recorder is Recording \
+                 (cancel + rapid re-press race; new job in progress)"
+            );
+            return;
+        }
+        if !matches!(*s, State::Ready) {
+            tracing::info!("[recorder] {} → Ready (finish)", *s);
+            *s = State::Ready;
+        }
+    }
+
     fn transition(
         &self,
         attempted: &'static str,

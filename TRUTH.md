@@ -33,6 +33,8 @@ reqwest's blocking-client default 30 s timeout. Now set to an explicit 120 s.
 
 **Hallucination detection filter — landed 2026-05-23 (TASK-55):** three post-hoc signals (gzip compression ratio < 0.35, trigram repetition > 3×, non-letter ratio > 0.30) suppress Whisper garbage on silence; rejected transcripts shown with "⚠ filtered" badge, paste skipped.
 
+**Mouse-back/forward/middle hotkeys — landed 2026-06-09:** IOHIDManager reads raw HID Button usage values at the IOKit level, bypassing CGEventTap entirely for mouse buttons. This works even when Logi Options+ (or similar driver software) intercepts the button — IOKit delivers HID reports to ALL registered IOHIDManager clients, so Logi cannot block TurboTalk from seeing the raw report. F13–F19 function keys added as an alternative PTT path for users who prefer mapping buttons to keystrokes in their mouse software.
+
 **Streaming chunked transcription — landed 2026-05-20 (TASK-54):** silence-boundary
 segments emitted during recording are transcribed concurrently via `SegmentTranscriber`
 so that by key-release only the final tail remains. Segments and tail assembled in
@@ -146,6 +148,12 @@ Model lineup: Recommended = `ggml-large-v3-turbo` (1.6 GB) · Small = `ggml-larg
 - **rdev dropped** — macOS 26 enforces `dispatch_assert_queue` on TSM APIs; rdev crashes
   on its background thread. Replaced with direct `CGEventTap` via `core-graphics 0.24`.
   Right Option detected by keycode 0x3D + `CGEventFlagAlternate` only — no TSM call.
+- **IOHIDManager for mouse buttons** — Mouse back/forward/middle hotkeys are handled
+  by a second background thread running `IOHIDManager` with an input-value callback,
+  rather than the CGEventTap. This reads raw HID Button usage reports at the IOKit
+  level, which bypasses driver software (Logi Options+, etc.) that intercepts at the
+  same layer — IOKit delivers HID reports to ALL registered IOHIDManager clients.
+  CGEventTap (Session level) is still used for keyboard hotkeys (modifiers, F-keys).
 - **Bundled whisper.cpp sidecar** — macOS arm64 sidecar is committed; Windows x64 sidecar is fetched in packaging from pinned upstream whisper.cpp v1.8.4; Linux sidecar is still absent.
 - **Default model: ggml-large-v3-turbo** — 1.6 GB, multilingual, fast. Onboarding downloads it on first run; surfaced as "Recommended" in the Models tab. Earlier M0/M1 work used ggml-base.en (141 MB, ~130 ms on M4); the tiny model was rejected outright (stub weights in brew bundle).
 
