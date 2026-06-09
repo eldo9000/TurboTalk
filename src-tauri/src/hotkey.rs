@@ -156,10 +156,16 @@ pub(crate) mod common {
     /// timer's deadline check sees "no longer held" and bails.
     static HOLD_CANCEL_KEY_DOWN: AtomicBool = AtomicBool::new(false);
 
-    /// Arm a hold-to-cancel timer if the recorder is in a cancellable state.
-    /// Call from the OS listener thread on trigger-key down (after auto-repeat
-    /// dedup). When the deadline elapses, if the same press is still held and
-    /// the recorder is still Recording or Transcribing, fire `trigger_cancel`.
+    /// Arm a hold-to-cancel timer. When the deadline elapses, if the same
+    /// press is still held and the recorder is Recording or Transcribing,
+    /// fire `trigger_cancel`.
+    ///
+    /// The timer is spawned unconditionally — the state check happens at
+    /// deadline time, not arm time. This is important because on the very
+    /// press that starts recording, the recorder is still `Ready` when the
+    /// timer is armed (ptt_down's worker hasn't called `rec.start()` yet).
+    /// By the deadline 1 second later, the state is `Recording` and the
+    /// check passes.
     ///
     /// `toggle_mode` controls whether `SUPPRESS_PTT_UP_COUNT` is armed: in
     /// hold mode a key-up `ptt_up` is always coming and needs the suppression
@@ -171,13 +177,6 @@ pub(crate) mod common {
         app: &AppHandle,
         toggle_mode: bool,
     ) {
-        let s = recorder.state();
-        if !matches!(
-            s,
-            crate::recorder::State::Recording | crate::recorder::State::Transcribing
-        ) {
-            return;
-        }
         let gen = HOLD_CANCEL_GEN.fetch_add(1, Ordering::AcqRel) + 1;
         HOLD_CANCEL_KEY_DOWN.store(true, Ordering::Release);
         let rec = recorder.clone();
@@ -1232,6 +1231,7 @@ mod imp {
                             cancel_on_esc,
                             cancel_on_hold,
                             fkey_code,
+                            is_mouse_key,
                         ) = {
                             let hk = hk_cb.read();
                             let (kc, f) = key_for_name(&hk.key);
@@ -1243,6 +1243,7 @@ mod imp {
                                 hk.cancel_on_esc,
                                 hk.cancel_on_hold,
                                 fkc,
+                                hid_mouse_usage_for_name(&hk.key).is_some(),
                             )
                         };
 
@@ -1302,6 +1303,12 @@ mod imp {
                                 }
                                 _ => {}
                             }
+                        } else if is_mouse_key {
+                            // Mouse button handled by IOHIDManager raw HID listener
+                            // (which runs on its own background thread). Skip the
+                            // CGEventTap so the modifier handler below doesn't
+                            // accidentally match Right Option (the default fallback
+                            // in key_for_name) when a mouse button is configured.
                         } else if let CGEventType::FlagsChanged = etype {
                             // Modifier key PTT path (Right Option, Control, etc.).
                             if keycode == target_keycode {
