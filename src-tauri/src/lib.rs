@@ -1745,6 +1745,32 @@ fn list_audio_devices() -> Vec<String> {
     }
 }
 
+/// Check whether any Logitech HID mouse (VendorID 0x046d) is currently
+/// connected. Uses `ioreg` on macOS — fast (< 50 ms) and requires no new
+/// FFI. On non-macOS platforms always returns false (Logitech software
+/// interception is a macOS-only problem).
+#[tauri::command]
+#[specta::specta]
+fn detect_logitech_mouse() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("ioreg")
+            .args(["-r", "-c", "IOHIDDevice", "-k", "VendorID", "-w0"])
+            .output();
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                stdout.contains("\"VendorID\" = 1133")
+            }
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
 /// Cancel an in-flight recording (Recording or Transcribing state) from the
 /// frontend. The hotkey thread calls `recorder.cancel()` directly and does not
 /// go through this command — this command exists for future UI use (e.g. an
@@ -1830,6 +1856,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         set_launch_at_login,
         reset_turbotalk,
         list_audio_devices,
+        detect_logitech_mouse,
         download_model,
         cancel_download,
         download_moonshine_model,
@@ -1990,6 +2017,7 @@ pub fn run() {
             set_launch_at_login,
             reset_turbotalk,
             list_audio_devices,
+            detect_logitech_mouse,
             download_model,
             cancel_download,
             download_moonshine_model,

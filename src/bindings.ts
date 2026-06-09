@@ -30,6 +30,13 @@ export const commands = {
 	setLaunchAtLogin: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_launch_at_login", { enabled })),
 	resetTurbotalk: (deleteModels: boolean) => typedError<null, string>(__TAURI_INVOKE("reset_turbotalk", { deleteModels })),
 	listAudioDevices: () => __TAURI_INVOKE<string[]>("list_audio_devices"),
+	/**
+	 *  Check whether any Logitech HID mouse (VendorID 0x046d) is currently
+	 *  connected. Uses `ioreg` on macOS — fast (< 50 ms) and requires no new
+	 *  FFI. On non-macOS platforms always returns false (Logitech software
+	 *  interception is a macOS-only problem).
+	 */
+	detectLogitechMouse: () => __TAURI_INVOKE<boolean>("detect_logitech_mouse"),
 	downloadModel: (modelId: string) => typedError<string, string>(__TAURI_INVOKE("download_model", { modelId })),
 	cancelDownload: (modelId: string) => __TAURI_INVOKE<void>("cancel_download", { modelId }),
 	/**

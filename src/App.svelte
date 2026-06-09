@@ -406,6 +406,7 @@ Reply with only the single word, lowercase, no punctuation.
 
   let hotkeySide           = $state('right');  // 'left' | 'right'
   let hotkeyKeyPart        = $state('option'); // key name without side prefix, or unsided key (f13–f24, mouse_*)
+  let hasLogitechMouse     = $state(false);    // set on mount; drives which warning to show when a mouse hotkey is selected
 
   function isUnsidedKey(k) {
     return k.startsWith('numpad_') || k.startsWith('mouse_') || /^f\d+$/.test(k);
@@ -1015,6 +1016,9 @@ Reply with only the single word, lowercase, no punctuation.
       cfgHotkeyKey  = initialCfg.hotkey?.key  ?? defaultHotkeyKey();
       cfgHotkeyMode = initialCfg.hotkey?.mode ?? 'hold';
       if (savedHistory.length) history = savedHistory;
+
+      // Detect Logitech mouse — fast ioreg call, fire-and-forget
+      commands.detectLogitechMouse().then(v => { hasLogitechMouse = v; });
 
       function handleKeydown(e) {
         if (e.metaKey || e.ctrlKey) {
@@ -1909,10 +1913,16 @@ Reply with only the single word, lowercase, no punctuation.
             </div>
           </div>
           {#if hotkeyKeyPart.startsWith('mouse_')}
-            <div style="margin: 0 8px 6px; padding: 6px 9px; border-radius: 6px; font-size: 11px; line-height: 1.5; color: var(--warning, #c97d00); background: var(--warning-bg, #fff8e0); border: 1px solid color-mix(in srgb, var(--warning, #c97d00) 30%, transparent);">
-              ⚠ Logitech Options+ blocks mouse events before TurboTalk can see them — the button simply won't trigger recording.<br>
-              <strong>The fix:</strong> in Logi Options+, assign <em>Keystroke → F19</em> to the button, then pick <strong>F19</strong> above. Recording works and no native action fires. We recommend this for any mouse — it's the cleanest path.
-            </div>
+            {#if hasLogitechMouse}
+              <div style="margin: 0 8px 6px; padding: 6px 9px; border-radius: 6px; font-size: 11px; line-height: 1.5; color: var(--warning, #c97d00); background: var(--warning-bg, #fff8e0); border: 1px solid color-mix(in srgb, var(--warning, #c97d00) 30%, transparent);">
+                ⚠ Logitech Options+ blocks mouse button events — this hotkey won't trigger recording.<br>
+                <strong>The fix:</strong> in Logi Options+, assign <em>Keystroke → F19</em> to the button, then pick <strong>F19</strong> above. Recording works and no native action fires.
+              </div>
+            {:else}
+              <div style="margin: 0 8px 6px; padding: 6px 9px; border-radius: 6px; font-size: 11px; line-height: 1.5; color: var(--muted, #888); background: var(--bg-muted, #f5f5f5); border: 1px solid var(--border-subtle, #e0e0e0);">
+                ⓘ Your mouse's back/forward action fires alongside recording — both happen at once. For a clean experience, assign <strong>F19</strong> to the button in your mouse software and pick it above.
+              </div>
+            {/if}
           {/if}
         </div>
 
