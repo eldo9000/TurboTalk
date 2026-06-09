@@ -1910,8 +1910,8 @@ Reply with only the single word, lowercase, no punctuation.
           </div>
           {#if hotkeyKeyPart.startsWith('mouse_')}
             <div style="margin: 0 8px 6px; padding: 6px 9px; border-radius: 6px; font-size: 11px; line-height: 1.5; color: var(--warning, #c97d00); background: var(--warning-bg, #fff8e0); border: 1px solid color-mix(in srgb, var(--warning, #c97d00) 30%, transparent);">
-              ⚠ macOS also fires the button's native action (browser back/forward, etc.) — TurboTalk can't intercept it. Both behaviors fire at once. To suppress the native action, use your mouse software or pick an F-key instead.<br>
-              <span style="opacity:0.85"><strong>Logitech:</strong> set the button to <em>Keystroke → F19</em> in Logi Options+, then use F19 here — native action won't fire.</span>
+              ⚠ Logitech Options+ blocks mouse events before TurboTalk can see them — the button simply won't trigger recording.<br>
+              <strong>The fix:</strong> in Logi Options+, assign <em>Keystroke → F19</em> to the button, then pick <strong>F19</strong> above. Recording works and no native action fires. We recommend this for any mouse — it's the cleanest path.
             </div>
           {/if}
         </div>
