@@ -262,8 +262,8 @@ pub(crate) mod common {
     /// because the overlay window has `focus: false` and ignores cursor
     /// events — WKWebView blocks `AudioContext` audio without a user
     /// gesture, so a frontend Web Audio chime would be silently dropped.
-    /// Fires `afplay` on macOS with a built-in system sound; other platforms
-    /// silently no-op (good enough for the Tier-1 personal-use scope).
+    /// Fires `afplay` on macOS with a built-in system sound; on Windows
+    /// uses PowerShell `SystemSounds`; on Linux silently no-ops.
     pub(super) fn play_chime(event: ChimeEvent) {
         let cfg = crate::settings::load();
         let (enabled, sound) = match event {
@@ -297,7 +297,23 @@ pub(crate) mod common {
                 Err(e) => tracing::warn!("[chime] afplay failed for {}: {}", sound, e),
             }
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            let _ = (cfg, sound);
+            let ps_cmd = match event {
+                ChimeEvent::Start => "[System.Media.SystemSounds]::Hand.Play()",
+                ChimeEvent::Finish => "[System.Media.SystemSounds]::Asterisk.Play()",
+                ChimeEvent::Cancel => "[System.Media.SystemSounds]::Exclamation.Play()",
+            };
+            match std::process::Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-Command", ps_cmd])
+                .spawn()
+            {
+                Ok(_) => tracing::info!("[chime] powershell SystemSounds ({:?})", event),
+                Err(e) => tracing::warn!("[chime] powershell failed for {:?}: {}", event, e),
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = (cfg, sound);
         }

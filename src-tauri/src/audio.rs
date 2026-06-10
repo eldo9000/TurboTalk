@@ -454,20 +454,33 @@ impl AudioCapture {
         *self.watchdog_handle.lock() = Some(handle);
     }
 
+    /// Platform-aware microphone permission help text.
+    fn mic_permission_help_text() -> &'static str {
+        #[cfg(target_os = "macos")]
+        {
+            "grant permission in System Settings → Privacy → Microphone, then relaunch."
+        }
+        #[cfg(target_os = "windows")]
+        {
+            "grant permission in Windows Settings → Privacy & Security → Microphone, then relaunch."
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            "grant microphone permission in your system settings, then relaunch."
+        }
+    }
+
     fn open_stream(&self, want: &str) -> anyhow::Result<ActiveStream> {
         let host = cpal::default_host();
+        let mic_help = Self::mic_permission_help_text();
         let device = if want == "default" || want.is_empty() {
             host.default_input_device()
-                .ok_or_else(|| anyhow::anyhow!(
-                    "Microphone access denied — grant permission in System Settings → Privacy → Microphone, then relaunch."
-                ))?
+                .ok_or_else(|| anyhow::anyhow!("Microphone access denied — {mic_help}"))?
         } else {
             host.input_devices()?
                 .find(|d| d.name().ok().as_deref() == Some(want))
                 .or_else(|| host.default_input_device())
-                .ok_or_else(|| anyhow::anyhow!(
-                    "Microphone access denied — grant permission in System Settings → Privacy → Microphone, then relaunch."
-                ))?
+                .ok_or_else(|| anyhow::anyhow!("Microphone access denied — {mic_help}"))?
         };
 
         let name = device.name().unwrap_or_else(|_| "unknown".into());

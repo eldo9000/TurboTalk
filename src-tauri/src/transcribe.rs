@@ -25,6 +25,13 @@ const GARBAGE_COMPRESS_RATIO: f64 = 0.35;
 /// before the transcript is considered a repetition loop.
 const GARBAGE_TRIGRAM_MAX_REPEATS: usize = 3;
 
+/// Maximum number of times the same two-word sequence (bigram) may appear
+/// before the transcript is considered a repetition loop. Catches single-word
+/// stutters (e.g. "war war war war war") that don't compress enough to trip
+/// the gzip filter and don't have enough distinct trigrams to trip the trigram
+/// filter (e.g. 5 "war"s = only 2 copies of (war,war,war)).
+const GARBAGE_BIGRAM_MAX_REPEATS: usize = 3;
+
 /// Maximum fraction of characters that are not letters, digits, spaces, or
 /// common punctuation (.,!?'-). Above this → junk characters / all-zeros
 /// hallucination. 0.30 = up to 30% non-letter-ish chars is tolerated.
@@ -48,6 +55,12 @@ pub enum RejectReason {
     HighCompression,
     /// The same three-word sequence appears more than `GARBAGE_TRIGRAM_MAX_REPEATS` times.
     TrigramRepetition,
+    /// The same two-word sequence appears more than `GARBAGE_BIGRAM_MAX_REPEATS` times.
+    /// Catches single-word stutter loops missed by the trigram filter (e.g.
+    /// "war war war war war warm-up cache" — 5 "war"s produce only 2 trigrams
+    /// of (war,war,war) before the 4th position shifts to "warm-up", but 4
+    /// bigrams of (war,war)).
+    BigramRepetition,
     /// More than `GARBAGE_NON_LETTER_RATIO` of characters are not letters,
     /// digits, spaces, or common punctuation — likely all-zeros or junk.
     NonLetterJunk,
@@ -61,6 +74,8 @@ impl RejectReason {
                 "Repetition loop detected — Whisper echoed the same phrase repeatedly on silence.",
             RejectReason::TrigramRepetition =>
                 "Repetition loop detected — the same phrase appeared too many times.",
+            RejectReason::BigramRepetition =>
+                "Repetition loop detected — the same word was repeated too many times.",
             RejectReason::NonLetterJunk =>
                 "Junk characters detected — Whisper produced garbage output on silence.",
         }
@@ -126,6 +141,32 @@ pub fn detect_garbage(text: &str) -> Option<RejectReason> {
                         count
                     );
                     return Some(RejectReason::TrigramRepetition);
+                }
+            }
+        }
+    }
+
+    // ── Signal 2b: bigram repetition (TASK-55 follow-up) ──────────────────────
+    // Split on whitespace and count occurrences of each 2-word window. Catches
+    // single-word stutters ("war war war war war") that the trigram filter
+    // misses because the 4th position shifts to a different word before the
+    // trigram count reaches the threshold.
+    {
+        let words: Vec<&str> = text.split_whitespace().collect();
+        if words.len() >= 2 {
+            let mut counts: std::collections::HashMap<(&str, &str), usize> =
+                std::collections::HashMap::new();
+            for window in words.windows(2) {
+                let key = (window[0], window[1]);
+                let count = counts.entry(key).or_insert(0);
+                *count += 1;
+                if *count > GARBAGE_BIGRAM_MAX_REPEATS {
+                    tracing::debug!(
+                        "[detect_garbage] bigram {:?} appeared {} times",
+                        key,
+                        count
+                    );
+                    return Some(RejectReason::BigramRepetition);
                 }
             }
         }
@@ -564,7 +605,7 @@ pub struct WhisperBackend {
     #[allow(dead_code)]
     bin: PathBuf,
     /// Canonicalized model path. Validated at construction; lives inside
-    /// `~/.config/librewin/turbotalk/models/`.
+    /// `data_dir()/models/`.
     model: PathBuf,
     /// Vocabulary phrases joined and passed to whisper-server as the `prompt`
     /// form field. Empty = no prompt.
@@ -598,9 +639,10 @@ impl WhisperBackend {
         // find_whisper_server search resolves the actual path.
         let bin = find_whisper_server("whisper-server")?;
         let canon_models_dir = crate::settings::canonical_models_dir().ok_or_else(|| {
+            let dir = crate::settings::data_dir().join("models");
             anyhow::anyhow!(
-                "models directory does not exist — create ~/.config/librewin/turbotalk/models/ \
-                 and place a ggml model there"
+                "models directory does not exist — create {} and place a ggml model there",
+                dir.display()
             )
         })?;
         let model = validate_model_path(&cfg.whisper.model, &canon_models_dir)?;
@@ -618,7 +660,8 @@ impl WhisperBackend {
         // Spawn whisper-server. It will load the model and start listening.
         // Stderr goes to a temp file so we can diagnose crashes without a
         // pipe-deadlock (Stdio::piped + never reading = blocked server).
-        let stderr_stdio = std::fs::File::create("/tmp/whisper-server-stderr.log")
+        let stderr_log = std::env::temp_dir().join("whisper-server-stderr.log");
+        let stderr_stdio = std::fs::File::create(&stderr_log)
             .map(std::process::Stdio::from)
             .unwrap_or_else(|_| std::process::Stdio::null());
         // Canonicalize so `_NSGetExecutablePath` in the child returns the real
@@ -663,7 +706,7 @@ impl WhisperBackend {
         } else {
             tracing::info!("[transcribe] VAD disabled by settings");
         }
-        for var in &["HOME", "PATH", "TMPDIR", "USER", "LOGNAME"] {
+        for var in &["HOME", "PATH", "TMPDIR", "USER", "LOGNAME", "TEMP", "USERNAME"] {
             if let Ok(val) = std::env::var(var) {
                 cmd.env(var, val);
             }
@@ -691,8 +734,9 @@ impl WhisperBackend {
         std::thread::sleep(std::time::Duration::from_millis(500));
         if let Ok(Some(status)) = child.try_wait() {
             anyhow::bail!(
-                "whisper-server exited immediately (code {:?}) — check /tmp/whisper-server-stderr.log",
-                status.code()
+                "whisper-server exited immediately (code {:?}) — check {}",
+                status.code(),
+                stderr_log.display()
             );
         }
 
@@ -1041,15 +1085,31 @@ pub fn prewarm_in_flight() -> bool {
 /// Tauri's dev runner during rapid file-change rebuilds). Best-effort: logs
 /// at warn on failure but never blocks startup.
 pub fn kill_orphans() {
-    let result = std::process::Command::new("pkill")
-        .args(["-f", "whisper-server"])
-        .output();
-    match result {
-        Ok(out) if out.status.success() => {
-            tracing::info!("[transcribe] kill_orphans: terminated leftover whisper-server(s)");
+    #[cfg(not(target_os = "windows"))]
+    {
+        let result = std::process::Command::new("pkill")
+            .args(["-f", "whisper-server"])
+            .output();
+        match result {
+            Ok(out) if out.status.success() => {
+                tracing::info!("[transcribe] kill_orphans: terminated leftover whisper-server(s)");
+            }
+            Ok(_) => {} // exit 1 = no matching process, normal case
+            Err(e) => tracing::warn!("[transcribe] kill_orphans: pkill failed: {}", e),
         }
-        Ok(_) => {} // exit 1 = no matching process, normal case
-        Err(e) => tracing::warn!("[transcribe] kill_orphans: pkill failed: {}", e),
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let result = std::process::Command::new("taskkill")
+            .args(["/F", "/IM", "whisper-server.exe"])
+            .output();
+        match result {
+            Ok(out) if out.status.success() => {
+                tracing::info!("[transcribe] kill_orphans: terminated leftover whisper-server(s)");
+            }
+            Ok(_) => {} // exit 1 = no matching process, normal case
+            Err(e) => tracing::warn!("[transcribe] kill_orphans: taskkill failed: {}", e),
+        }
     }
 }
 
@@ -1536,6 +1596,39 @@ mod tests {
     fn detect_garbage_realistic_dictation_passes() {
         let text = "Please add a new function that validates the user input and returns a boolean value.";
         assert_eq!(detect_garbage(text), None, "realistic dictation should not be filtered");
+    }
+
+    /// Single-word stutter ("war war war war war warm-up cache") that the gzip
+    /// filter misses (too much normal text to compress well) and the trigram
+    /// filter misses (only 2 copies of (war,war,war) before position 4 shifts
+    /// to warm-up). The bigram (war,war) appears 4 times and must be caught.
+    #[test]
+    fn detect_garbage_war_stutter_caught_by_bigram() {
+        let text = "Let's do that same shift functionality for the check for updates button. And when you hold shift, that button changes to clear war war war war war warm-up cache.";
+        let result = detect_garbage(text);
+        assert!(
+            result.is_some(),
+            "single-word stutter should be flagged by bigram detector, got None"
+        );
+        assert_eq!(
+            result,
+            Some(RejectReason::BigramRepetition),
+            "expected BigramRepetition, got {:?}",
+            result
+        );
+    }
+
+    /// Two distinct words alternating ("war war and war war and war war and")
+    /// must NOT be flagged — each bigram (war,war) appears at most 3 times,
+    /// which is within the threshold.
+    #[test]
+    fn detect_garbage_alternating_bigram_passes() {
+        let text = "war war and war war and war war and";
+        assert_eq!(
+            detect_garbage(text),
+            None,
+            "alternating pairs should not be flagged"
+        );
     }
 
     // ── TASK-47: TranscriptionWorker::abort() no-op test ─────────────────

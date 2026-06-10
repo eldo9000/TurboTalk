@@ -411,10 +411,15 @@ fn position_main_window_on_cursor_monitor(app: &tauri::AppHandle) {
         .find(|m| {
             let p = m.position();
             let s = m.size();
-            cursor.x >= p.x as f64
-                && cursor.x < (p.x + s.width as i32) as f64
-                && cursor.y >= p.y as f64
-                && cursor.y < (p.y + s.height as i32) as f64
+            let scale = m.scale_factor();
+            let pl = p.x as f64 / scale;
+            let pt = p.y as f64 / scale;
+            let wl = s.width as f64 / scale;
+            let hl = s.height as f64 / scale;
+            cursor.x / scale >= pl
+                && cursor.x / scale < pl + wl
+                && cursor.y / scale >= pt
+                && cursor.y / scale < pt + hl
         })
         .or_else(|| win.primary_monitor().ok().flatten());
     let Some(monitor) = monitor else {
@@ -428,6 +433,8 @@ fn position_main_window_on_cursor_monitor(app: &tauri::AppHandle) {
         .ok()
         .map(|s| (s.width as f64 / scale, s.height as f64 / scale))
         .unwrap_or((550.0, 560.0));
+    // All math in logical coordinates. monitor.position() returns physical
+    // pixels on non-macOS; / scale converts to logical.
     let x = mp.x as f64 / scale + (ms.width as f64 / scale - size.0) / 2.0;
     let y = mp.y as f64 / scale + (ms.height as f64 / scale - size.1) / 2.0;
     let _ = win.set_position(LogicalPosition::new(x, y));
@@ -445,11 +452,16 @@ fn show_main_window(app: &tauri::AppHandle, first_manual_show: &std::sync::atomi
     }
 }
 
-/// Windows / Linux variant — straightforward physical-pixel bounds check
-/// since both platforms report cursor, monitor position, and monitor size
-/// all in physical pixels of the virtual desktop. Untested on real hardware
-/// (TurboTalk currently ships macOS-only); revisit once the Win/Linux audio
-/// + hotkey paths come online.
+/// Windows / Linux variant.
+///
+/// Coordinate conventions (Tauri 2):
+/// - `monitor.position()` — physical pixels on all platforms.
+/// - `monitor.size()` — physical pixels.
+/// - `cursor_position()` — physical pixels.
+/// - `set_position(LogicalPosition)` — logical points.
+///
+/// All math is done in logical (DPI-scaled) coordinates for consistency.
+/// Physical → logical: divide by `scale_factor()`.
 #[cfg(not(target_os = "macos"))]
 pub fn reposition_overlay_to_cursor_monitor(app: &tauri::AppHandle) {
     use tauri::{LogicalPosition, Manager};
@@ -468,10 +480,15 @@ pub fn reposition_overlay_to_cursor_monitor(app: &tauri::AppHandle) {
         .find(|m| {
             let p = m.position();
             let s = m.size();
-            cursor.x >= p.x as f64
-                && cursor.x < (p.x as f64 + s.width as f64)
-                && cursor.y >= p.y as f64
-                && cursor.y < (p.y as f64 + s.height as f64)
+            let scale = m.scale_factor();
+            let pl = p.x as f64 / scale; // physical → logical
+            let pt = p.y as f64 / scale;
+            let wl = s.width as f64 / scale;
+            let hl = s.height as f64 / scale;
+            cursor.x / scale >= pl
+                && cursor.x / scale < pl + wl
+                && cursor.y / scale >= pt
+                && cursor.y / scale < pt + hl
         })
         .cloned()
         .or_else(|| overlay.current_monitor().ok().flatten())
@@ -481,11 +498,15 @@ pub fn reposition_overlay_to_cursor_monitor(app: &tauri::AppHandle) {
     let mp = monitor.position();
     let ms = monitor.size();
     let scale = monitor.scale_factor();
+    // Convert monitor origin + size to logical coordinates.
+    let mon_x_logical = mp.x as f64 / scale;
+    let mon_y_logical = mp.y as f64 / scale;
     let mon_w_logical = ms.width as f64 / scale;
     let mon_h_logical = ms.height as f64 / scale;
     let position = settings::load().overlay_position;
-    let x = (mp.x as f64 + (ms.width as f64 - OVERLAY_W_LOGICAL * scale) / 2.0) / scale;
-    let y = overlay_y_for_position(mp.y as f64 / scale, mon_h_logical, &position);
+    // Center overlay horizontally on the cursor's monitor in logical space.
+    let x = mon_x_logical + (mon_w_logical - OVERLAY_W_LOGICAL) / 2.0;
+    let y = overlay_y_for_position(mon_y_logical, mon_h_logical, &position);
 
     let _ = overlay.set_position(LogicalPosition::new(x, y));
 }
@@ -718,19 +739,36 @@ fn save_history(entries: Vec<settings::HistoryEntry>, app: tauri::AppHandle) -> 
     Ok(())
 }
 
-/// Open the TurboTalk data folder (`~/.config/librewin/turbotalk/`) in Finder.
-/// macOS only — uses the system `open` command.
+/// Open the TurboTalk data folder in the platform's file manager.
 #[tauri::command]
 #[specta::specta]
 fn open_data_folder() -> Result<(), String> {
-    let mut path = dirs::home_dir().ok_or_else(|| "Could not locate home directory".to_string())?;
-    path.push(".config/librewin/turbotalk");
-    // Create the directory if it doesn't exist yet so Finder doesn't error.
+    let path = crate::settings::data_dir();
+    // Create the directory if it doesn't exist yet so the file manager doesn't error.
     std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
-    std::process::Command::new("open")
-        .arg(&path)
-        .spawn()
-        .map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
     Ok(())
 }
 

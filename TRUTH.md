@@ -118,6 +118,22 @@ Model lineup: Recommended = `ggml-large-v3-turbo` (1.6 GB) · Small = `ggml-larg
 - Hotkey: Right Alt (Right Option) — not rebindable
 - Cleanup mode defaults to regex; Chaperone requires Ollama running locally
 
+## Windows platform plumbing — consistent 2026-06-10 (TASK-61)
+
+Ten macOS-specific assumptions fixed. Not tested on Windows hardware, but no
+longer macOS-only assumptions in source:
+
+1. **Whisper stderr log** — uses `std::env::temp_dir()` instead of hardcoded `/tmp/`
+2. **Child process env vars** — `TEMP` + `USERNAME` restored alongside `TMPDIR` + `USER`
+3. **`kill_orphans()`** — `taskkill` on Windows, `pkill` on other platforms
+4. **Config paths** — `dirs::config_dir()` returns `%APPDATA%` on Windows, `~/.config/` on macOS/Linux; one-time migration from legacy path
+5. **Permission error messages** — platform-aware "System Settings" vs "Windows Settings"
+6. **`open_data_folder()`** — `explorer` on Windows, `open` on macOS, `xdg-open` on Linux
+7. **Sound chimes** — PowerShell `SystemSounds` on Windows (Hand, Asterisk, Exclamation)
+8. **Window positioning** — consistent logical-coordinate math with explanatory comments
+9. **Bundle config** — NSIS installer config added; `icon.ico` in icon array
+10. **Microphone permission** — documented that `Unsupported` return is correct (cpal prompts naturally)
+
 ## What is explicitly not working
 
 - Windows hotkey — default was Right Option (AltGr), which most US keyboards lack; fixed to Right Control + hold mode with full left/right modifier and numpad mapping. Auto-migrates existing configs. Awaiting real-hardware retest. TASK-25.

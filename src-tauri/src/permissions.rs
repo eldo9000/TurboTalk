@@ -119,6 +119,14 @@ fn microphone_status() -> PermissionStatus {
 
 #[cfg(not(target_os = "macos"))]
 fn microphone_status() -> PermissionStatus {
+    // Windows (and Linux): no OS-level mic permission API to query.
+    // Returning Unsupported is correct here because:
+    // 1. check_readiness() treats Unsupported as ok (non-blocking),
+    //    so the readiness gate does not require a permission check.
+    // 2. The native mic prompt fires automatically when cpal opens the
+    //    input stream — no explicit requestAccess call is needed.
+    // 3. If cpal fails (denied mic), the error surfaces via audio.rs's
+    //    platform-aware mic_permission_help_text() message.
     PermissionStatus::Unsupported
 }
 

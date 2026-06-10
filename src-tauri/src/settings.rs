@@ -382,15 +382,25 @@ pub(crate) fn config_path() -> PathBuf {
     data_dir().join("config.toml")
 }
 
+/// Platform-aware data directory:
+/// - macOS/Linux: `~/.config/librewin/turbotalk/`
+/// - Windows: `%APPDATA%/librewin/turbotalk/`
 pub fn data_dir() -> PathBuf {
-    let mut p = dirs::home_dir().unwrap_or_default();
-    p.push(".config/librewin/turbotalk");
-    p
+    dirs::config_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default())
+        .join("librewin/turbotalk")
 }
 
 pub(crate) fn history_path() -> PathBuf {
+    data_dir().join("history.json")
+}
+
+/// Legacy data directory used in v0.9 and earlier (hardcoded `~/.config/`).
+/// On macOS/Linux this is the same as `data_dir()` since `dirs::config_dir()`
+/// returns `~/.config/`. On Windows it exists only for migration purposes.
+fn legacy_data_dir() -> PathBuf {
     let mut p = dirs::home_dir().unwrap_or_default();
-    p.push(".config/librewin/turbotalk/history.json");
+    p.push(".config/librewin/turbotalk");
     p
 }
 
@@ -531,7 +541,54 @@ pub struct LoadConfigResult {
     pub parse_error: Option<String>,
 }
 
+/// One-time migration from legacy `~/.config/librewin/turbotalk/` to `data_dir()`.
+/// On macOS/Linux both paths are identical (both resolve to `~/.config/`), so this
+/// is a no-op. On Windows the legacy path doesn't exist, so this is also a no-op
+/// for fresh installs. Existing Windows upgraders (none today) would get their
+/// config copied forward automatically.
+fn migrate_data_dir() {
+    let new = data_dir();
+    let old = legacy_data_dir();
+    if old == new {
+        return; // same path (macOS/Linux) — nothing to do
+    }
+    if !old.exists() {
+        return; // no legacy data to migrate
+    }
+    if new.exists() {
+        return; // already migrated or new config exists
+    }
+    tracing::info!(
+        "[settings] migrating data dir from {:?} to {:?}",
+        old,
+        new
+    );
+    match copy_dir_recursively(&old, &new) {
+        Ok(()) => tracing::info!("[settings] migration complete"),
+        Err(e) => tracing::warn!("[settings] migration failed: {e}"),
+    }
+}
+
+fn copy_dir_recursively(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    if !dst.exists() {
+        std::fs::create_dir_all(dst)?;
+    }
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursively(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn load_detailed() -> LoadConfigResult {
+    migrate_data_dir();
     let path = config_path();
     let Ok(contents) = std::fs::read_to_string(&path) else {
         return LoadConfigResult {
@@ -599,11 +656,11 @@ pub fn load_detailed() -> LoadConfigResult {
     }
 }
 
-/// Canonical models directory: `~/.config/librewin/turbotalk/models/`.
+/// Canonical models directory under `data_dir()` (e.g. `~/.config/librewin/turbotalk/models/`
+/// on macOS/Linux, `%APPDATA%/librewin/turbotalk/models/` on Windows).
 /// Returns `None` if the directory does not exist or cannot be canonicalized.
 pub(crate) fn canonical_models_dir() -> Option<PathBuf> {
-    let mut dir = dirs::home_dir()?;
-    dir.push(".config/librewin/turbotalk/models");
+    let dir = data_dir().join("models");
     dir.canonicalize().ok()
 }
 
