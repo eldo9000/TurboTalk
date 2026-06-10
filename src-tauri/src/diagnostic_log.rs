@@ -66,7 +66,7 @@ pub fn log_dir() -> PathBuf {
 }
 
 pub fn ensure_log_dir() -> std::io::Result<()> {
-    std::fs::create_dir_all(log_dir())
+    crate::settings::create_private_dir_all(&log_dir())
 }
 
 /// Day-stamped log files for `prefix` (named `{prefix}.YYYY-MM-DD.log`), sorted
@@ -290,7 +290,8 @@ pub async fn export_diagnostic_report(note: Option<String>) -> Result<ExportDiag
     let report = build_report_text(note_ref).await;
     let report_name = format!("turbotalk-report-{}.txt", epoch_ms());
     let report_path = log_dir().join(&report_name);
-    std::fs::write(&report_path, report.as_bytes()).map_err(|e| e.to_string())?;
+    crate::settings::write_private_file(&report_path, report.as_bytes())
+        .map_err(|e| e.to_string())?;
 
     tracing::info!("[diagnostic] exported report to {}", report_path.display());
 
@@ -400,7 +401,7 @@ pub async fn submit_bug_report(note: String) -> Result<BugReportResult, String> 
     // Local copy first — the upload may fail, but the report should never vanish.
     let report_name = format!("turbotalk-bugreport-{report_id}.txt");
     let report_path = log_dir().join(&report_name);
-    let _ = std::fs::write(&report_path, report.as_bytes());
+    let _ = crate::settings::write_private_file(&report_path, report.as_bytes());
 
     let (Some(token), Some(chat_id)) = (
         option_env!("TURBOTALK_BUGREPORT_TG_TOKEN"),

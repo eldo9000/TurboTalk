@@ -404,6 +404,48 @@ fn legacy_data_dir() -> PathBuf {
     p
 }
 
+/// Create a directory and all parents, then set Unix permissions to owner-only
+/// (0o700) on macOS/Linux. On Windows this is a no-op beyond `create_dir_all`
+/// since `%APPDATA%` is already user-profile-scoped.
+pub fn create_private_dir_all(path: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+/// Write `contents` to `path`, creating the file with owner-only permissions
+/// (0o600) on Unix (macOS/Linux). On Windows uses standard file creation
+/// since `%APPDATA%` is user-profile-scoped.
+///
+/// Uses `OpenOptionsExt::mode` on Unix so the file is created with restricted
+/// permissions from the start, avoiding the race between `std::fs::write`
+/// (default 0o644) and a subsequent `set_permissions`.
+pub fn write_private_file(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(contents)?;
+        file.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, contents)?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct HistoryEntry {
     pub text: String,
@@ -495,9 +537,9 @@ pub(crate) fn save_history_at(
         entries
     };
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        create_private_dir_all(parent)?;
     }
-    std::fs::write(path, serde_json::to_string(trimmed)?)?;
+    write_private_file(path, serde_json::to_string(trimmed)?.as_bytes())?;
     Ok(())
 }
 
@@ -556,7 +598,7 @@ fn migrate_data_dir() {
         return;
     }
     // Ensure the new directory exists (it usually does by now, but guard).
-    if let Err(e) = std::fs::create_dir_all(&new) {
+    if let Err(e) = create_private_dir_all(&new) {
         tracing::warn!("[settings] cannot create data dir {:?}: {e}", new);
         return;
     }
@@ -726,10 +768,10 @@ pub(crate) fn scan_models_dir_in(canon_dir: &std::path::Path) -> Vec<String> {
 pub fn save(cfg: &Config) -> anyhow::Result<()> {
     let path = config_path();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        create_private_dir_all(parent)?;
     }
     let contents = toml::to_string_pretty(cfg)?;
-    std::fs::write(&path, contents)?;
+    write_private_file(&path, contents.as_bytes())?;
     Ok(())
 }
 
@@ -1077,5 +1119,128 @@ mod tests {
         let result = load_history_detailed_at(&path);
         assert!(result.entries.is_empty(), "ts=0 must be filtered");
         assert_eq!(result.dropped, 1);
+    }
+
+    // ----------------------------------------------------------------------
+    // TASK-64: Private directory and file permission helpers.
+
+    #[test]
+    fn create_private_dir_all_creates_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sub = dir.path().join("a").join("b").join("c");
+
+        create_private_dir_all(&sub).expect("create_private_dir_all");
+        assert!(sub.exists(), "directory should exist");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::metadata(&sub).expect("metadata");
+            let mode = meta.permissions().mode();
+            // On Unix, 0o700 permissions: owner rwx, no group/other access.
+            // The exact bits depend on umask interaction with create_dir_all,
+            // but set_permissions after creation enforces 0o700.
+            assert_eq!(
+                mode & 0o777,
+                0o700,
+                "directory permissions must be owner-only (0o700), got {:#o}",
+                mode
+            );
+        }
+    }
+
+    #[test]
+    fn write_private_file_creates_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("test.json");
+
+        write_private_file(&path, b"hello world").expect("write_private_file");
+        assert!(path.exists(), "file should exist");
+
+        let contents = std::fs::read_to_string(&path).expect("read");
+        assert_eq!(contents, "hello world");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::metadata(&path).expect("metadata");
+            let mode = meta.permissions().mode();
+            // The mode(0o600) in OpenOptions sets the file creation mask;
+            // umask may still clear bits, so check that group/other have no
+            // read access rather than asserting an exact match.
+            let group_other_read = mode & 0o044;
+            assert_eq!(
+                group_other_read, 0,
+                "file must not be readable by group/other (got {:#o})",
+                mode
+            );
+        }
+    }
+
+    #[test]
+    fn write_private_file_overwrites_existing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("test.json");
+
+        write_private_file(&path, b"first").expect("first write");
+        write_private_file(&path, b"second").expect("second write");
+
+        let contents = std::fs::read_to_string(&path).expect("read");
+        assert_eq!(contents, "second", "file must be overwritten");
+    }
+
+    #[test]
+    fn save_history_at_uses_private_permissions() {
+        // Verify that save_history_at produces files with the same privacy
+        // guarantees enforced by the helper — this is the real integration
+        // test for the history write path.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("sub").join("history.json");
+
+        let entries = vec![HistoryEntry {
+            text: "test".into(),
+            ts: 1,
+        }];
+        save_history_at(&path, &entries).expect("save_history_at");
+        assert!(path.exists());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::metadata(&path).expect("metadata");
+            let mode = meta.permissions().mode();
+            let group_other_read = mode & 0o044;
+            assert_eq!(
+                group_other_read, 0,
+                "history.json must not be group/other readable (got {:#o})",
+                mode
+            );
+        }
+    }
+
+    #[test]
+    fn save_uses_private_permissions() {
+        // Verify that config saves produce files with owner-only permissions.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+
+        // Write directly through the private helper to simulate what save()
+        // does — we can't call save() itself because it always writes to the
+        // real config_path().
+        write_private_file(&path, toml::to_string_pretty(&Config::default()).unwrap().as_bytes())
+            .expect("write config");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::metadata(&path).expect("metadata");
+            let mode = meta.permissions().mode();
+            let group_other_read = mode & 0o044;
+            assert_eq!(
+                group_other_read, 0,
+                "config file must not be group/other readable (got {:#o})",
+                mode
+            );
+        }
     }
 }

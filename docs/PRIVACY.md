@@ -25,7 +25,8 @@ You can turn this off in Settings with the **Save history** toggle.
 
 - **History enabled (default):** Transcript history is stored in
   `~/.config/librewin/turbotalk/history.json`. It is a plain JSON array capped
-  at the newest 50 entries.
+  at the newest 50 entries. On macOS and Linux, the history file is created
+  with **owner-only permissions** (`0o600`) — other local users cannot read it.
 - **History disabled:** New transcripts are injected into the focused app and
   not written to `history.json`. Existing history on disk is left untouched
   until you clear it or delete the file.
@@ -47,6 +48,26 @@ No other network calls are made. There is no telemetry, no analytics, no crash r
 ## What Advanced cleanup sends to Ollama
 
 When Advanced cleanup is enabled, TurboTalk sends the transcript text string to your local Ollama instance. It does not send audio, microphone metadata, timestamps, app context, or any other information. The request goes to the configured loopback Ollama URL and stays on your machine.
+
+---
+
+## Local file permissions
+
+On macOS and Linux (Unix), all directories and files TurboTalk creates under
+`~/.config/librewin/turbotalk/` use restricted permissions:
+- **Directories** (`config.toml` parent, `logs/`, `models/`) are created with
+  **owner-only** permissions (`0o700`) — other local users cannot list or
+  traverse them.
+- **Files** (`config.toml`, `history.json`, diagnostic reports, log files) are
+  created with **owner-only** permissions (`0o600`) — other local users cannot
+  read them.
+
+This means that on a shared or multi-user machine, your dictation history,
+settings, and diagnostic files are not readable by other local users through
+normal filesystem access.
+
+On Windows, TurboTalk uses the standard `%APPDATA%` location, which is already
+user-profile-scoped by the operating system.
 
 ---
 

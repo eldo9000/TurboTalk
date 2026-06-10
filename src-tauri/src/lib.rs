@@ -745,7 +745,7 @@ fn save_history(entries: Vec<settings::HistoryEntry>, app: tauri::AppHandle) -> 
 fn open_data_folder() -> Result<(), String> {
     let path = crate::settings::data_dir();
     // Create the directory if it doesn't exist yet so the file manager doesn't error.
-    std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    crate::settings::create_private_dir_all(&path).map_err(|e| e.to_string())?;
 
     #[cfg(target_os = "macos")]
     {
@@ -874,6 +874,11 @@ async fn download_model(
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
     let canon_dir = dir.canonicalize().map_err(|e| e.to_string())?;
     let filename = format!("{}.bin", model_id);
     if filename.contains(std::path::MAIN_SEPARATOR) || filename.contains("..") {
@@ -1178,6 +1183,11 @@ async fn download_moonshine_model(
     tokio::fs::create_dir_all(&dest_dir)
         .await
         .map_err(|e| format!("Failed to create model directory: {}", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dest_dir, std::fs::Permissions::from_mode(0o700));
+    }
     let canon_dir = dest_dir
         .canonicalize()
         .map_err(|e| format!("Failed to canonicalize model directory: {}", e))?;
@@ -1490,6 +1500,11 @@ async fn download_parakeet_model(
     tokio::fs::create_dir_all(&dest_dir)
         .await
         .map_err(|e| format!("Failed to create model directory: {}", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dest_dir, std::fs::Permissions::from_mode(0o700));
+    }
     let canon_dir = dest_dir
         .canonicalize()
         .map_err(|e| format!("Failed to canonicalize model directory: {}", e))?;
