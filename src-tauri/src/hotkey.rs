@@ -251,7 +251,7 @@ pub(crate) mod common {
     /// Audio cue events. Each maps to one of the four `sound_on_*` config
     /// toggles and a distinct macOS system sound, so the user can keep them
     /// individually on/off and tell them apart by ear.
-    #[derive(Clone, Copy)]
+    #[derive(Debug, Clone, Copy)]
     pub(super) enum ChimeEvent {
         Start,
         Finish,

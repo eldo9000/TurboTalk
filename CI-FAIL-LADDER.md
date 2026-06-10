@@ -51,3 +51,19 @@
 - **Verdict:** **ARC** (third attempt, same arc)
 - **Hypothesis:** The `.tar.lzma2` extension is non-standard — 7z 26.00 on Windows can't autodetect the inner LZMA2 format from the filename. The pyke.io dist archives use raw LZMA2 compression (not XZ container, not legacy .lzma) which neither Python's `lzma` module nor 7z's autodetect handles well.
 - **Next:** switched strategy — download `Microsoft.ML.OnnxRuntime` NuGet package (official Microsoft distribution, standard .zip format) and extract `runtimes/win-x64/native/onnxruntime.dll` via 7z. NuGet version pinned to 1.26.0 matching the ort-sys dist.txt. Pushed with this ladder update.
+
+## Fail arc closed — 2026-06-10 — 5 entries — green CI (NuGet fetch working, SHA-256 verified in TASK-62)
+
+## Fail #1 (new arc) — 2026-06-10 — Windows build: ChimeEvent missing Debug impl in hotkey.rs
+
+- **Q1 in-last-commit:** no — last commit `a3373f5` touched onnxruntime/scripts/docs; hotkey.rs not in diff
+- **Q2 named-error:** yes — `error[E0277]: ChimeEvent doesn't implement Debug` at hotkey.rs:312
+- **Q3 seen-before:** no — first time this failure class
+- **Q4 broken-vs-missing:** missing — `Debug` trait derive absent from `ChimeEvent`; never added when Windows chime block was implemented
+- **Verdict:** ARC (Q1 blocks QUICK)
+- **Root-cause class:** MISSING_DEBUG_DERIVE
+- **Hypothesis (premise):** `ChimeEvent` at hotkey.rs:255 has `#[derive(Clone, Copy)]` but not `#[derive(Debug)]`, while `#[cfg(target_os = "windows")]` block uses `{:?}` on event
+- **Falsification:** add `Debug` to derive list, push, watch Windows CI
+- **Falsif-result:** deferred — cannot compile Windows target from macOS; CI is the only validator
+- **Strike count:** 1 of 8
+- **Next:** `hotkey.rs:254` — add `Debug` to `#[derive(Clone, Copy)]`
