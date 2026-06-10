@@ -152,10 +152,19 @@ it:
 
 > "Turbo Talk" cannot be opened because the developer cannot be verified.
 
+**CI path (preferred for signed builds):** configure the four `APPLE_*` GitHub
+secrets (`APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`)
+and push a tag. The `release.yml` workflow automatically detects the credentials
+and produces a Developer-ID-signed, notarized DMG without any local changes.
+
+**Local path (one-time setup needed):** follow the section below. You'll need
+the Developer ID Application certificate in your login keychain and the four
+`APPLE_*` env vars set in your shell.
+
 For external distribution (beta testers, friends, anyone who is not you),
 the DMG must be signed with a real **Developer ID Application**
-certificate **and** notarized by Apple. This section walks through that
-end-to-end. Read it once front to back before starting — every command
+certificate **and** notarized by Apple. This section walks through both
+paths end-to-end. Read it once front to back before starting — every command
 and env var you need is here.
 
 ### One-time setup

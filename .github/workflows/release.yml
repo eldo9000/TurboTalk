@@ -1,8 +1,13 @@
 # TurboTalk — Release pipeline (macOS arm64 only)
 #
-# Builds, ad-hoc signs, repacks, and re-signs the updater tarball so the
-# embedded pubkey in tauri.conf.json can verify it. Generates latest.json
-# and creates a GitHub release on tag push.
+# Builds, ad-hoc or Developer-ID signs, repacks, and re-signs the updater
+# tarball so the embedded pubkey in tauri.conf.json can verify it. Generates
+# latest.json and creates a GitHub release on tag push.
+#
+# Signing is conditional: if Apple Developer ID credentials are present as
+# GitHub secrets, the macOS .app and .dmg are Developer-ID-signed and
+# notarized by Apple. If absent, ad-hoc signing is used (Gatekeeper warning
+# on downloaded artifacts).
 #
 # BEFORE FIRST USE:
 #   1. Run: npx tauri signer generate -w ~/.tauri/turbotalk.key
@@ -12,6 +17,16 @@
 #   4. Copy the public key output and replace PLACEHOLDER_REPLACE_WITH_TAURI_PUBKEY_AFTER_npx_tauri_signer_generate
 #      in src-tauri/tauri.conf.json
 #   5. Add LIBRE_APPS_TOKEN (fine-grained PAT, Contents:Read on eldo9000/Libre-Apps)
+#
+# OPTIONAL (enables Developer ID signing + notarization):
+#   6. Add APPLE_SIGNING_IDENTITY — SHA-1 hash or full "Developer ID Application: ..." string
+#   7. Add APPLE_ID — Apple ID email for notarization
+#   8. Add APPLE_PASSWORD — app-specific password (not your Apple ID password)
+#   9. Add APPLE_TEAM_ID — 10-character Apple Team ID
+#  10. Add WINDOWS_SIGNING_CERTIFICATE — base64-encoded PFX/P12 cert
+#  11. Add WINDOWS_SIGNING_PASSWORD — PFX/P12 private-key password
+#
+# See docs/BUILD.md → "Release build (signed + notarized)" for setup steps.
 
 name: Release
 
@@ -43,16 +58,31 @@ jobs:
     env:
       _RAW_TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       _RAW_TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # Apple Developer ID signing — set these secrets to enable Developer ID
+      # signing + notarization. When absent, ad-hoc signing is used.
+      _RAW_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
 
     outputs:
       version: ${{ steps.tag.outputs.version }}
       tag: ${{ steps.tag.outputs.tag }}
+      macos_signed: ${{ steps.apple_signing_check.outputs.macos_signed }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Check Apple signing credentials
+        id: apple_signing_check
+        run: |
+          if [ -n "${_RAW_APPLE_SIGNING_IDENTITY:-}" ]; then
+            echo "macos_signed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Apple Developer ID credentials found — will sign and notarize."
+          else
+            echo "macos_signed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No Apple Developer ID credentials — using ad-hoc signing."
+          fi
 
       - name: Decode signing key from armored secret
         # TAURI_SIGNING_PRIVATE_KEY must be: base64 -i ~/.tauri/turbotalk.key | tr -d '\n'
@@ -175,13 +205,21 @@ jobs:
         run: npm run fetch-vad-model
 
       - name: Build Tauri app
+        # When Apple signing credentials are available, export them so Tauri
+        # uses Developer ID signing + notarization instead of ad-hoc.
         # Enable updater artifacts (.app.tar.gz + .sig) here, NOT in
         # tauri.conf.json. createUpdaterArtifacts is kept false in the committed
         # config so local `npm run package` stays DMG-only and does not require
         # TAURI_SIGNING_PRIVATE_KEY. CI has the decoded key in env (see "Decode
         # signing key" step), so the build can produce the signed tarball the
         # Locate step requires. The tarball is later re-packed and re-signed from
-        # the ad-hoc-signed .app.
+        # the ad-hoc-signed .app (unsigned beta) or Developer-ID-signed .app
+        # (signed release).
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ steps.apple_signing_check.outputs.macos_signed == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run tauri build -- --target aarch64-apple-darwin --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
       - name: Locate macOS build output
@@ -215,6 +253,10 @@ jobs:
           echo "bundle_dir=$BUNDLE_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Ad-hoc codesign and strip quarantine
+        # Only needed for unsigned beta builds. When Developer ID signing was
+        # used during `tauri build`, the .app is already properly signed and
+        # re-signing with ad-hoc would strip the Developer ID signature.
+        if: steps.apple_signing_check.outputs.macos_signed == 'false'
         run: |
           set -euo pipefail
           APP='${{ steps.mac_artifacts.outputs.app_path }}'
@@ -227,6 +269,22 @@ jobs:
         # previously only ran locally, so a bad release bundle could ship; the
         # inline `codesign --verify … || true` here was a no-op. Now it fails hard.
         run: node scripts/verify-macos-bundle.mjs '${{ steps.mac_artifacts.outputs.app_path }}'
+
+      - name: Verify Developer ID signing and notarization
+        # Runs only when Apple signing credentials were used. Confirms the .app
+        # carries a Developer ID signature and the DMG is notarized.
+        if: steps.apple_signing_check.outputs.macos_signed == 'true'
+        run: |
+          set -euo pipefail
+          APP='${{ steps.mac_artifacts.outputs.app_path }}'
+          DMG='${{ steps.mac_artifacts.outputs.dmg }}'
+          echo "=== Code signature ==="
+          codesign -dv --verbose=4 "$APP" 2>&1
+          echo "=== App assessment ==="
+          spctl --assess --type execute --verbose=4 "$APP" 2>&1
+          echo "=== DMG assessment ==="
+          spctl -a -t open --context context:primary-signature -v "$DMG" 2>&1
+          echo "Notarization verified."
 
       - name: Re-pack updater tarball from signed .app
         run: |
@@ -298,6 +356,9 @@ jobs:
       run:
         shell: bash
 
+    env:
+      _RAW_WINDOWS_SIGNING_CERTIFICATE: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -348,6 +409,33 @@ jobs:
 
       - name: Package
         run: npm run package
+
+      - name: Authenticode sign installer (conditional)
+        # Signs the NSIS installer with an Authenticode certificate when
+        # WINDOWS_SIGNING_CERTIFICATE and WINDOWS_SIGNING_PASSWORD are
+        # configured as GitHub secrets. Skips cleanly for unsigned beta builds.
+        env:
+          WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${_RAW_WINDOWS_SIGNING_CERTIFICATE:-}" ]; then
+            echo "WINDOWS_SIGNING_CERTIFICATE not set — skipping Authenticode signing."
+            exit 0
+          fi
+          CERT_FILE="$RUNNER_TEMP/signing.pfx"
+          if ! printf '%s' "$_RAW_WINDOWS_SIGNING_CERTIFICATE" | base64 --decode > "$CERT_FILE" 2>/dev/null; then
+            echo "::warning::Could not base64-decode WINDOWS_SIGNING_CERTIFICATE — skipping."
+            exit 0
+          fi
+          INSTALLER=$(ls dist-artifacts/*.exe | head -n1)
+          if [ -z "$INSTALLER" ]; then
+            echo "::warning::No installer found in dist-artifacts/ — skipping signing."
+            rm -f "$CERT_FILE"
+            exit 0
+          fi
+          signtool sign /fd SHA256 /a /f "$CERT_FILE" /p "${WINDOWS_SIGNING_PASSWORD:-}" "$INSTALLER"
+          rm -f "$CERT_FILE"
+          echo "Windows installer signed successfully."
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -445,6 +533,42 @@ jobs:
           echo "--- latest.json ---"
           cat latest.json
 
+      - name: Generate release body
+        id: release_body
+        env:
+          MACOS_SIGNED: ${{ needs.build.outputs.macos_signed }}
+        run: |
+          if [ "$MACOS_SIGNED" = "true" ]; then
+            cat > /tmp/release-body.md <<'BODY_EOF'
+          ## TurboTalk ${{ steps.tag.outputs.tag }}
+
+          macOS (Apple Silicon) only.
+          Distribution is signed with Developer ID and notarized by Apple.
+
+          **Install:** open the DMG and drag `TurboTalk.app` to `/Applications`.
+
+          **Existing users:** the in-app updater will pick this release up
+          automatically within a week of last check.
+          BODY_EOF
+          else
+            cat > /tmp/release-body.md <<'BODY_EOF'
+          ## TurboTalk ${{ steps.tag.outputs.tag }}
+
+          macOS (Apple Silicon) only.
+          Distribution is ad-hoc signed (no Apple Developer ID).
+
+          **Install:** open the DMG and drag `TurboTalk.app` to `/Applications`.
+          If Gatekeeper blocks launch, run:
+
+          ```
+          xattr -cr /Applications/TurboTalk.app
+          ```
+
+          **Existing users:** the in-app updater will pick this release up
+          automatically within a week of last check.
+          BODY_EOF
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -453,22 +577,8 @@ jobs:
           draft: false
           prerelease: ${{ contains(steps.tag.outputs.version, '-') }}
           fail_on_unmatched_files: true
+          body_path: /tmp/release-body.md
           files: |
             dist/turbotalk-darwin-aarch64/*
             dist/turbotalk-windows-x64/*
             latest.json
-          body: |
-            ## TurboTalk ${{ steps.tag.outputs.tag }}
-
-            macOS (Apple Silicon) only.
-            Distribution is ad-hoc signed (no Apple Developer ID).
-
-            **Install:** open the DMG and drag `TurboTalk.app` to `/Applications`.
-            If Gatekeeper blocks launch, run:
-
-            ```
-            xattr -cr /Applications/TurboTalk.app
-            ```
-
-            **Existing users:** the in-app updater will pick this release up
-            automatically within a week of last check.

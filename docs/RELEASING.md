@@ -1,6 +1,8 @@
 # Releasing TurboTalk
 
-> **This beta release is unsigned/not notarized.** GitHub-downloaded macOS artifacts carry Apple's download quarantine flag, so users will see Gatekeeper warnings and may need right-click → Open or System Settings → Privacy & Security → Open Anyway. The Windows `.exe` has no Authenticode signature and will trigger SmartScreen. Do not run any code-signing or notarization step for this beta. The Developer ID + notarization scaffolding is present in this repo and `BUILD.md` for a future signed release — see [Future signed releases (deferred)](#future-signed-releases-deferred) below — but it is **not** executed for this version.
+> **Current beta: unsigned/not notarized.** GitHub-downloaded macOS artifacts carry Apple's download quarantine flag, so users will see Gatekeeper warnings and may need right-click → Open or System Settings → Privacy & Security → Open Anyway. The Windows `.exe` has no Authenticode signature and will trigger SmartScreen.
+>
+> **Skipping to signed?** The CI workflow conditionally uses Developer ID signing + notarization when the `APPLE_SIGNING_IDENTITY` secret is configured — see the [Signing secrets reference](#signing-secrets-reference) below. Follow the beta procedure here; CI will detect the credentials and produce signed artifacts automatically.
 
 ## Scope
 
@@ -192,6 +194,66 @@ Add a single line under "Where We Are":
 
 Commit as `chore(status): record v<new-version> release`.
 
+## Signing secrets reference
+
+The CI pipeline (`release.yml`) checks for the following secrets at workflow start and adjusts signing behavior accordingly. None of these are required for unsigned beta builds; all are optional until you configure them.
+
+| Secret | Platform | Purpose | Required for signed release? |
+|--------|----------|---------|------------------------------|
+| `APPLE_SIGNING_IDENTITY` | macOS | Developer ID Application cert hash or full name | Yes (macOS) |
+| `APPLE_ID` | macOS | Apple ID email for notarization upload | Yes (macOS notarization) |
+| `APPLE_PASSWORD` | macOS | App-specific password for notarytool | Yes (macOS notarization) |
+| `APPLE_TEAM_ID` | macOS | 10-character Apple Team ID | Yes (macOS notarization) |
+| `WINDOWS_SIGNING_CERTIFICATE` | Windows | Base64-encoded PFX/P12 Authenticode cert | Yes (Windows) |
+| `WINDOWS_SIGNING_PASSWORD` | Windows | PFX/P12 private-key password | Yes (Windows) |
+
+### macOS: how CI detects signing
+
+The `APPLE_SIGNING_IDENTITY` secret is the gate. When present:
+1. Tauri exports `APPLE_SIGNING_IDENTITY` during `tauri build`, producing a Developer-ID-signed `.app` and `.dmg`.
+2. Tauri also calls `notarytool` (using `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`) to submit the DMG to Apple's notary service and staple the ticket.
+3. The `Ad-hoc codesign` step is skipped — re-signing with ad-hoc would strip the Developer ID signature.
+4. An additional `Verify Developer ID signing and notarization` step runs `codesign -dv` and `spctl --assess` on the `.app` and DMG.
+
+When `APPLE_SIGNING_IDENTITY` is absent, the pipeline falls back to ad-hoc signing (the current beta behavior). All steps remain green — just without notarization.
+
+### Windows: how CI detects signing
+
+The `WINDOWS_SIGNING_CERTIFICATE` secret is the gate. When present with a base64-decoded PFX:
+1. After `tauri build` finishes, `signtool sign /fd SHA256 /a /f <cert>` is called on the NSIS installer.
+2. The certificate tempfile is cleaned up immediately after signing.
+
+When absent, the signing step prints a skip message and exits cleanly. The installer is uploaded unsigned.
+
+### Setting up secrets
+
+Secrets are configured at **GitHub repo → Settings → Secrets and variables → Actions**. Do not commit secret values anywhere in the repo — `.env*` is gitignored, but the safer pattern is to never write secrets to a file in the checkout.
+
+For local (non-CI) signing, see `BUILD.md` → [Release build (signed + notarized)](./BUILD.md#release-build-signed--notarized).
+
+### Verifying a signed artifact
+
+After a signed CI run completes, download the DMG and run:
+
+```bash
+codesign -dv --verbose=4 "Turbo Talk.app"
+spctl --assess --type execute --verbose=4 "Turbo Talk.app"
+spctl -a -t open --context context:primary-signature -v TurboTalk-<version>-macos-arm64.dmg
+```
+
+Expected `spctl` output for the DMG:
+```
+TurboTalk-<version>-macos-arm64.dmg: accepted
+source=Notarized Developer ID
+```
+
+For Windows:
+```powershell
+Get-AuthenticodeSignature TurboTalk-<version>-windows-x64-setup.exe
+```
+
+Expected: `SignerCertificate` chain resolves to the code-signing CA and `Status` is `Valid`.
+
 ## Update policy
 
 TurboTalk ships a **manual check-for-updates** button in the Settings tab. The Tauri updater plugin is wired and will check `https://github.com/eldo9000/TurboTalk-App/releases/latest/download/latest.json` when the user clicks "Check for updates." It does **not** check automatically on launch and does not run in the background — the check is strictly user-initiated and throttled to once per week via localStorage.
@@ -200,20 +262,47 @@ This is not a full auto-updater. Users who never click the button will not recei
 
 Before enabling background auto-update we need: (1) a long-lived updater signing key with a documented secure-custody plan, (2) a stable artifact-hosting URL that we control, (3) a written key-rotation/loss procedure. Until those three exist, do not change the updater from its current manual-check-only mode.
 
-## Future signed releases (deferred)
+## Signed release paths
 
-> **Not used for this beta.** The commands and env vars below are kept here so the procedure is not lost when we eventually do sign a release. Do not run any of them for the current beta.
+### macOS (CI, preferred)
 
-When we eventually publish a signed and notarized macOS DMG, the procedure is:
+Configure the required [signing secrets](#signing-secrets-reference) (`APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`) in the GitHub repo. Then follow the normal [tag and publish](#step-4--tag-and-publish) flow. The `release.yml` build job detects the credentials automatically and produces a Developer-ID-signed, notarized DMG with a matching updater tarball.
 
-1. Set the four `APPLE_*` environment variables described in `BUILD.md` → "Release build (signed + notarized)" → "Required env vars" (Apple ID, app-specific password, team ID, signing identity).
-2. Run `npm run package` from a Mac with the Developer ID Application certificate installed in the login keychain.
-3. The notarization upload + scan typically takes 5–15 minutes; the build will appear to hang during that window.
-4. Verify with `spctl -a -t open --context context:primary-signature -v <dmg>` — expect `accepted` and `source=Notarized Developer ID`.
+No code changes needed — `tauri.conf.json` keeps `signingIdentity: "-"` because CI overrides it via the `APPLE_SIGNING_IDENTITY` environment variable.
 
-Future Windows signing will require an EV or OV code-signing certificate and `signtool`. Future Linux signing for an AppImage typically uses GPG-signed `.zsync` + a detached `.sig` — neither is set up.
+### macOS (local)
 
-None of this is in scope for the current beta. The `tauri.conf.json` `signingIdentity` is `"-"` (ad-hoc) deliberately.
+For local signed builds (not CI):
+
+1. Install the Developer ID Application certificate in your login keychain (Xcode → Settings → Accounts → Manage Certificates → + → Developer ID Application).
+2. Set the four `APPLE_*` environment variables described in `BUILD.md` → "Release build (signed + notarized)" → "Required env vars".
+3. Run `npm run package` from the Mac with the cert installed.
+4. The notarization upload + scan typically takes 5–15 minutes; the build will appear to hang during that window.
+5. Verify with:
+   ```
+   spctl -a -t open --context context:primary-signature -v dist-artifacts/TurboTalk-<version>-macos-arm64.dmg
+   ```
+   Expect `accepted` and `source=Notarized Developer ID`.
+
+### Windows
+
+For signed Windows installers, configure `WINDOWS_SIGNING_CERTIFICATE` and `WINDOWS_SIGNING_PASSWORD` as GitHub secrets. The CI pipeline applies Authenticode signing via `signtool` after the build completes.
+
+For local Windows signing, use:
+```powershell
+signtool sign /fd SHA256 /a /f <path-to.pfx> /p <password> dist-artifacts/TurboTalk-<version>-windows-x64-setup.exe
+```
+
+### Linux
+
+Linux AppImage signing is not set up. Future work: GPG-signed `.zsync` + detached `.sig`. The current unsigned AppImage is acceptable for the beta audience (users `chmod +x` and run directly).
+
+### `tauri.conf.json` — why `signingIdentity` stays `"-"`
+
+The committed config keeps `signingIdentity: "-"` (ad-hoc). This is deliberate:
+- Local `npm run package` stays DMG-only, fast, and does not require Apple credentials.
+- CI overrides via the `APPLE_SIGNING_IDENTITY` environment variable when configured.
+- Dev builds (`npm run tauri dev`) are unaffected regardless of environment variables.
 
 ## Release notes template
 

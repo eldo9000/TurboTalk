@@ -244,7 +244,7 @@ When you hit a step that does not match the Expected behavior:
 
 Run this section after every release build (unsigned/ad-hoc DMG for this beta) and **before publishing** the release. The 7 dev-build tests above catch code regressions; this section catches packaging-layer regressions that only appear once the app is installed from a real DMG. It covers the macOS permission prompt flow when launched from `/Applications`, one end-to-end dictation, and the documented uninstall + data cleanup path. Skipping this section is how broken DMGs reach users.
 
-> **Note for this beta:** the DMG/app is **unsigned/ad-hoc only** (`signingIdentity: "-"`). It is not Apple-notarized. GitHub-downloaded artifacts also carry macOS's quarantine flag, so first launch on a fresh user account requires the right-click → **Open** trick or System Settings → Privacy & Security → **Open Anyway**. Steps 2 and 4 below are written for the unsigned/ad-hoc case. Developer ID + notarization is wired up in `tauri.conf.json` for a future release but is intentionally not used here — see `RELEASING.md` → "Future signed releases (deferred)".
+> **Signing status determines first-run behavior.** This is a beta of TurboTalk. The smoke test steps below describe the **unsigned/ad-hoc** case (the default when `APPLE_SIGNING_IDENTITY` is not configured). If signing secrets were configured in CI, the artifact is Developer-ID-signed and notarized: skip the right-click → Open trick in step 4 (double-click works), and step 2 shows `accepted` with `source=Notarized Developer ID` instead of `rejected`. See `RELEASING.md` → [Signing secrets reference](../RELEASING.md#signing-secrets-reference) for how to configure CI signing.
 
 #### Prerequisites
 
@@ -275,7 +275,9 @@ Run this section after every release build (unsigned/ad-hoc DMG for this beta) a
    spctl -a -t open --context context:primary-signature -v TurboTalk-<version>-macos-arm64.dmg
    ```
 
-   **Expected for this beta:** `rejected` with `source=no usable signature` or similar — that is correct for an unsigned/ad-hoc DMG. The right-click → Open trick in step 4 is how users get past it. If output is `accepted` with `source=Notarized Developer ID`, somebody enabled notarization for this release; back out and rebuild without it (we are not publishing notarized in this beta).
+   **Expected (unsigned beta):** `rejected` with `source=no usable signature` or similar — correct for an unsigned/ad-hoc DMG. The right-click → Open trick in step 4 is how users get past it.
+
+   **Expected (signed release):** `accepted` with `source=Notarized Developer ID`. The DMG is Developer-ID-signed and Apple-notarized; double-click launch in step 4 works without the Gatekeeper dialog.
 
 3. **Mount and install.**
 

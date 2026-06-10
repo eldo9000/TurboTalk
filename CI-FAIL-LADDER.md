@@ -67,3 +67,5 @@
 - **Falsif-result:** deferred — cannot compile Windows target from macOS; CI is the only validator
 - **Strike count:** 1 of 8
 - **Next:** `hotkey.rs:254` — add `Debug` to `#[derive(Clone, Copy)]`
+
+## Fail arc closed — 2026-06-10 — ChimeEvent Debug — green CI 27299535365

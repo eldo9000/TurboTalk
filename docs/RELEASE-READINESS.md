@@ -111,7 +111,7 @@ For the next beta, run a coordinated scan pass before tagging. Treat each item a
 - [ ] Rust risk scan: all non-test `unwrap()`, `expect()`, `unsafe`, `dbg!`, `println!`, `TODO`, and `FIXME` hits are reviewed.
 - [ ] Dependency advisory scan: `npm audit --omit=dev` and `cargo audit` have been run. Any warnings accepted for the release are listed below with their scope.
 - [ ] Bundle asset scan: sidecars, libraries, model resources, app icons, artifact outputs, and checksums are present and valid for the release host.
-- [ ] Unsigned-beta scan: artifacts are intentionally unsigned/not notarized and release notes warn users exactly how to launch them.
+- [ ] Signing-status scan: confirm which signing mode was used (unsigned/beta or Developer ID signed). For unsigned beta, verify release notes explicitly warn about Gatekeeper/SmartScreen. For a signed release, verify `codesign -dv` and `spctl --assess` pass on the .app and DMG, and release notes no longer mention the Gatekeeper workaround.
 - [ ] Installed-artifact scan: the packaged app passes the clean-account smoke path, including permission prompts and uninstall/data cleanup.
 - [ ] Orphan-process scan: quitting the app leaves no `whisper-server` or related sidecar process behind.
 - [ ] Docs-reality scan: README, privacy, build, releasing, and smoke-test docs match the exact app behavior being shipped.
