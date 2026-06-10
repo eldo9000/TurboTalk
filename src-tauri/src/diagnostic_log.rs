@@ -322,6 +322,7 @@ fn short_report_id() -> String {
 
 /// Truncate to at most `max` chars on a char boundary; substitutes a placeholder
 /// when empty so the message caption is never blank.
+#[cfg(feature = "dev-telegram-bugreport")]
 fn note_for_summary(s: &str, max: usize) -> &str {
     if s.is_empty() {
         return "(no description provided)";
@@ -335,6 +336,7 @@ fn note_for_summary(s: &str, max: usize) -> &str {
 /// Upload the report to a Telegram chat via the Bot API `sendDocument` method.
 /// The full report rides as a file attachment; a short caption carries the
 /// version/OS/id and a snippet of the tester's note.
+#[cfg(feature = "dev-telegram-bugreport")]
 async fn upload_to_telegram(
     token: &str,
     chat_id: &str,
@@ -389,6 +391,9 @@ async fn upload_to_telegram(
 /// Bundle the diagnostic report (with the tester's note) and upload it to the
 /// configured webhook. Always writes a local copy first so nothing is lost when
 /// the network or webhook is unavailable.
+///
+/// Upload is gated behind the `dev-telegram-bugreport` Cargo feature — public
+/// release builds never embed Telegram credentials (TASK-66).
 #[tauri::command]
 #[specta::specta]
 pub async fn submit_bug_report(note: String) -> Result<BugReportResult, String> {
@@ -398,36 +403,58 @@ pub async fn submit_bug_report(note: String) -> Result<BugReportResult, String> 
     let note = note.trim();
     let report = build_report_text(if note.is_empty() { None } else { Some(note) }).await;
 
-    // Local copy first — the upload may fail, but the report should never vanish.
+    // Always save a local copy — the upload may fail, but the report never vanishes.
     let report_name = format!("turbotalk-bugreport-{report_id}.txt");
     let report_path = log_dir().join(&report_name);
     let _ = crate::settings::write_private_file(&report_path, report.as_bytes());
 
-    let (Some(token), Some(chat_id)) = (
-        option_env!("TURBOTALK_BUGREPORT_TG_TOKEN"),
-        option_env!("TURBOTALK_BUGREPORT_TG_CHAT"),
-    ) else {
+    // Upload attempt — only compiled in dev builds with the feature enabled.
+    // Public release builds cannot accidentally embed Telegram credentials.
+    #[cfg(feature = "dev-telegram-bugreport")]
+    {
+        let (Some(token), Some(chat_id)) = (
+            option_env!("TURBOTALK_BUGREPORT_TG_TOKEN"),
+            option_env!("TURBOTALK_BUGREPORT_TG_CHAT"),
+        ) else {
+            tracing::warn!(
+                "[bugreport] Telegram credentials not configured in this build; saved locally as {}",
+                report_path.display()
+            );
+            return Ok(BugReportResult {
+                report_id,
+                uploaded: false,
+            });
+        };
+
+        match upload_to_telegram(token, chat_id, &report_id, note, report.into_bytes()).await {
+            Ok(()) => {
+                tracing::info!("[bugreport] uploaded report #{report_id}");
+                Ok(BugReportResult {
+                    report_id,
+                    uploaded: true,
+                })
+            }
+            Err(e) => {
+                tracing::error!("[bugreport] upload failed for #{report_id}: {e}");
+                Err(format!(
+                    "Couldn't send the report ({e}). A local copy was saved as {report_name}."
+                ))
+            }
+        }
+    }
+
+    // Default path when the dev feature is not enabled — always local-only.
+    #[cfg(not(feature = "dev-telegram-bugreport"))]
+    {
         tracing::warn!(
-            "[bugreport] Telegram credentials not configured in this build; saved locally as {}",
+            "[bugreport] Telegram upload not compiled in; saved locally as {} \
+             (enable dev-telegram-bugreport feature for uploads)",
             report_path.display()
         );
-        return Err("Bug-report uploads aren't enabled in this build. Your report was saved locally — use \"Open logs folder\" to find it.".into());
-    };
-
-    match upload_to_telegram(token, chat_id, &report_id, note, report.into_bytes()).await {
-        Ok(()) => {
-            tracing::info!("[bugreport] uploaded report #{report_id}");
-            Ok(BugReportResult {
-                report_id,
-                uploaded: true,
-            })
-        }
-        Err(e) => {
-            tracing::error!("[bugreport] upload failed for #{report_id}: {e}");
-            Err(format!(
-                "Couldn't send the report ({e}). A local copy was saved as {report_name}."
-            ))
-        }
+        Ok(BugReportResult {
+            report_id,
+            uploaded: false,
+        })
     }
 }
 

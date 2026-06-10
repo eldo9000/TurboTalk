@@ -110,7 +110,10 @@ export const commands = {
 	stopRecording: () => __TAURI_INVOKE<void>("stop_recording"),
 	// Open the TurboTalk data folder in the platform's file manager.
 	openDataFolder: () => typedError<null, string>(__TAURI_INVOKE("open_data_folder")),
-	// Open the canonical TurboTalk GitHub releases page in the user's browser.
+	/**
+	 *  Open the canonical TurboTalk GitHub releases page in the user's browser.
+	 *  Uses the `open` crate for non-shell URL opening on all platforms.
+	 */
 	openReleasesPage: () => typedError<null, string>(__TAURI_INVOKE("open_releases_page")),
 	/**
 	 *  Check whether `model_name` is present in the configured Ollama instance's
@@ -169,6 +172,9 @@ export const commands = {
 	 *  Bundle the diagnostic report (with the tester's note) and upload it to the
 	 *  configured webhook. Always writes a local copy first so nothing is lost when
 	 *  the network or webhook is unavailable.
+	 * 
+	 *  Upload is gated behind the `dev-telegram-bugreport` Cargo feature — public
+	 *  release builds never embed Telegram credentials (TASK-66).
 	 */
 	submitBugReport: (note: string) => typedError<BugReportResult, string>(__TAURI_INVOKE("submit_bug_report", { note })),
 	openLogsFolder: () => typedError<null, string>(__TAURI_INVOKE("open_logs_folder")),

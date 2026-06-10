@@ -32,6 +32,14 @@ Before doing anything else, confirm:
 - The beta release scan pack in `RELEASE-READINESS.md` has no undocumented blockers:
   version consistency, updater/manual-update consistency, local-only/privacy network surface, Tauri IPC/capability surface, Rust risk scan, bundle asset scan, unsigned-beta packaging state, installed-artifact smoke, orphan-process check, and docs-reality check.
 
+- `cargo build` (or `npm run package`) confirms that `TURBOTALK_BUGREPORT_TG_TOKEN`
+  and `TURBOTALK_BUGREPORT_TG_CHAT` are **not** embedded in the binary.
+  These environment variables are gated behind the `dev-telegram-bugreport`
+  Cargo feature (off by default). To verify the binary has no embedded secrets,
+  run `strings <binary> | rg 'TURBOTALK_BUGREPORT'` — it must return nothing.
+  The release CI does not set these variables and does not enable the feature
+  (see `release.yml` and `Cargo.toml`).
+
 If any of the above fails, stop. Do not cut a release on top of a red tree.
 
 ## Step 1 — Bump the version

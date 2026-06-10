@@ -773,35 +773,13 @@ fn open_data_folder() -> Result<(), String> {
 }
 
 /// Open the canonical TurboTalk GitHub releases page in the user's browser.
+/// Uses the `open` crate for non-shell URL opening on all platforms.
 #[tauri::command]
 #[specta::specta]
 fn open_releases_page() -> Result<(), String> {
     const RELEASES_URL: &str = "https://github.com/eldo9000/TurboTalk-App/releases/latest";
 
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(RELEASES_URL)
-            .spawn()
-            .map_err(|e| format!("failed to open releases page: {e}"))?;
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", RELEASES_URL])
-            .spawn()
-            .map_err(|e| format!("failed to open releases page: {e}"))?;
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(RELEASES_URL)
-            .spawn()
-            .map_err(|e| format!("failed to open releases page: {e}"))?;
-    }
-
+    open::that_in_background(RELEASES_URL);
     Ok(())
 }
 

@@ -62,6 +62,10 @@ Each item is a hard gate for cutting a peer-share release. Items map back to "th
 - [ ] `npm run typecheck` passes.
 - [ ] `npm run check` (svelte-check) passes if it exists in `package.json`.
 - [ ] Beta packaging is intentionally unsigned/ad-hoc: no `APPLE_*` signing environment was used, macOS `signingIdentity` remains `"-"`, and the artifact is not notarized.
+- [ ] No embedded build-time secrets in release binaries: `TURBOTALK_BUGREPORT_TG_TOKEN`
+  and `TURBOTALK_BUGREPORT_TG_CHAT` are gated behind the `dev-telegram-bugreport`
+  Cargo feature (not in default features). Run `strings <binary> | rg TURBOTALK_BUGREPORT`
+  to confirm the release binary has zero hits.
 - [ ] Manual-update policy matches the code. `RELEASING.md` says the updater is intentionally not enabled for this beta; if updater dependencies/config/plugin registration remain present, document whether they are inert or remove/disable them before release.
 
 ### 3. Runtime hygiene
@@ -109,6 +113,7 @@ For the next beta, run a coordinated scan pass before tagging. Treat each item a
 - [ ] Browser-open scan: user-facing links are opened through narrow backend commands or fixed allowlisted URLs; there is no generic arbitrary URL opener in the frontend fallback path.
 - [ ] IPC/permissions scan: Tauri capabilities and commands expose only the minimum app surface needed for settings, model selection/download, diagnostics, paste, tray, and local cleanup.
 - [ ] Rust risk scan: all non-test `unwrap()`, `expect()`, `unsafe`, `dbg!`, `println!`, `TODO`, and `FIXME` hits are reviewed.
+- [ ] Embedded-secrets scan: release binary has no embedded `TURBOTALK_BUGREPORT_*` strings; the `dev-telegram-bugreport` Cargo feature is not in the default features set.
 - [ ] Dependency advisory scan: `npm audit --omit=dev` and `cargo audit` have been run. Any warnings accepted for the release are listed below with their scope.
 - [ ] Bundle asset scan: sidecars, libraries, model resources, app icons, artifact outputs, and checksums are present and valid for the release host.
 - [ ] Signing-status scan: confirm which signing mode was used (unsigned/beta or Developer ID signed). For unsigned beta, verify release notes explicitly warn about Gatekeeper/SmartScreen. For a signed release, verify `codesign -dv` and `spctl --assess` pass on the .app and DMG, and release notes no longer mention the Gatekeeper workaround.

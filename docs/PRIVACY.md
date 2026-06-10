@@ -77,6 +77,22 @@ Application logs do not contain the body of any transcript. Transcript content i
 
 ---
 
+## Bug reports
+
+When you submit a bug report from the Diagnostics tab, TurboTalk saves a
+diagnostic report file locally to `~/.config/librewin/turbotalk/logs/`. This
+report includes sanitized configuration, UI events, and recent session logs
+— no transcript text, no audio, no personally identifying content.
+
+**By default, bug reports are local-only.** The app never attempts to upload
+them unless it was built with the `dev-telegram-bugreport` Cargo feature
+enabled, which is intentionally excluded from public release builds. Even in
+dev builds with the feature enabled, upload only happens when
+`TURBOTALK_BUGREPORT_TG_TOKEN` and `TURBOTALK_BUGREPORT_TG_CHAT` environment
+variables are set at build time.
+
+The report file stays on your machine regardless of upload success or failure.
+
 ## How to delete everything
 
 To remove all data TurboTalk stores on your machine:

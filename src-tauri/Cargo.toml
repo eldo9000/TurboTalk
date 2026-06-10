@@ -23,6 +23,10 @@ default = ["moonshine", "parakeet"]
 moonshine = ["dep:transcribe-rs"]
 # `parakeet` activates ParakeetBackend in transcribe_backends/parakeet.rs.
 parakeet  = ["dep:transcribe-rs"]
+# `dev-telegram-bugreport` enables Telegram uploads for bug reports.
+# Intentionally a dev-only feature — public release builds must not embed
+# Telegram bot credentials (TASK-66).
+dev-telegram-bugreport = []
 
 [lib]
 name = "turbotalk_lib"
@@ -77,6 +81,10 @@ url             = "2"
 # Conflict resolved in TASK-62: vad-rs replaced with direct ort rc.12 in vad.rs.
 # Both ort rc.12 (above) and transcribe-rs (below) now unify on the same pin.
 transcribe-rs   = { version = "0.3.11", features = ["onnx"], optional = true }
+
+# Platform-agnostic URL/directory opener (replaces platform-specific cmd.exe,
+# open, and xdg-open invocations — see TASK-66).
+open            = "5"
 
 # Misc
 dirs            = "5"

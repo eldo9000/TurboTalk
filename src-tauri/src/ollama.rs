@@ -430,29 +430,9 @@ pub fn open_url(url: String) -> Result<(), String> {
     }
 
     // ── Open ──────────────────────────────────────────────────────────────────
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(url.trim())
-            .spawn()
-            .map_err(|e| format!("failed to open URL: {e}"))?;
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", url.trim()])
-            .spawn()
-            .map_err(|e| format!("failed to open URL: {e}"))?;
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(url.trim())
-            .spawn()
-            .map_err(|e| format!("failed to open URL: {e}"))?;
-    }
-
+    // Use the `open` crate for cross-platform non-shell URL opening.
+    // On macOS this calls `open`, on Windows `ShellExecuteW`, on Linux `xdg-open`
+    // — all without passing through cmd.exe or a shell interpreter.
+    open::that_in_background(url.trim());
     Ok(())
 }
