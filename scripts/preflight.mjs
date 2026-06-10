@@ -8,7 +8,8 @@
 // If a check fails on a host where TASK-27 has not been run, that's the expected error.
 
 import { execFileSync } from 'node:child_process';
-import { statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, statSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertNoCoreMLLinkage } from './lib/dylib-guard.mjs';
@@ -117,6 +118,51 @@ if (process.platform === 'darwin') {
     console.error('[preflight]   run `npm run fetch-vad-model`');
     process.exit(1);
   }
+}
+
+// Verify committed native binary hashes against MANIFEST.sha256 (macOS only).
+if (process.platform === 'darwin') {
+  const manifestPath = resolve(repoRoot, 'src-tauri/binaries/MANIFEST.sha256');
+  const binariesDir = resolve(repoRoot, 'src-tauri/binaries');
+  const manifest = readFileSync(manifestPath, 'utf8');
+  let manifestOk = 0;
+  let manifestErrors = 0;
+  for (const line of manifest.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const parts = trimmed.split(/\s+/);
+    if (parts.length < 2) continue;
+    const [expectedHash, ...nameParts] = parts;
+    const fileName = nameParts.join(' ');
+    const filePath = resolve(binariesDir, fileName);
+    let st;
+    try {
+      st = statSync(filePath);
+    } catch {
+      console.error(`[preflight] manifest: missing file — ${fileName}`);
+      manifestErrors += 1;
+      continue;
+    }
+    if (!st.isFile()) {
+      console.error(`[preflight] manifest: not a file — ${fileName}`);
+      manifestErrors += 1;
+      continue;
+    }
+    const actualHash = createHash('sha256').update(readFileSync(filePath)).digest('hex');
+    if (actualHash !== expectedHash) {
+      console.error(`[preflight] manifest: SHA-256 mismatch — ${fileName}`);
+      console.error(`  expected: ${expectedHash}`);
+      console.error(`  actual:   ${actualHash}`);
+      manifestErrors += 1;
+    } else {
+      manifestOk += 1;
+    }
+  }
+  if (manifestErrors > 0) {
+    console.error(`[preflight] ${manifestErrors} manifest verification error(s)`);
+    process.exit(1);
+  }
+  console.log(`[preflight] manifest: ${manifestOk} file(s) verified`);
 }
 
 console.log(`[preflight] all required bundle assets present for host ${process.platform}`);

@@ -29,7 +29,9 @@ npm run package
 
 `npm run package` chains:
 
-1. `npm run preflight` — verifies the bundled Whisper sidecar/dylibs exist.
+1. `npm run preflight` — verifies the bundled Whisper sidecar/dylibs exist and
+   checks every committed macOS native binary against the SHA-256 manifest at
+   `src-tauri/binaries/MANIFEST.sha256`.
 2. `tauri build` — produces the unsigned/ad-hoc `.app` and `.dmg` under
    `src-tauri/target/release/bundle/`.
 3. `node scripts/rename-artifact.mjs` — copies the DMG to a stable,
@@ -114,6 +116,10 @@ release zip (version + sha256 are baked into
 `whisper-cli.exe` plus the runtime DLLs into `src-tauri/binaries/`.
 Companion DLLs are bundled into the installer via
 `src-tauri/tauri.windows.conf.json` (`bundle.resources`).
+
+`npm run fetch-onnxruntime` downloads the
+Microsoft.ML.OnnxRuntime NuGet package, verifies its SHA-256 against
+a pinned digest in the script, and extracts `onnxruntime.dll`.
 
 The fetch step downloads sidecars only on Windows hosts; it is a no-op on
 non-Windows hosts. Packaging can complete, but the resulting app is still not a

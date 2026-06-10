@@ -20,6 +20,13 @@ Before doing anything else, confirm:
 - `cargo test` passes (run from `src-tauri/`).
 - `cargo clippy -- -D warnings` is green (run from `src-tauri/`).
 - A manual smoke test on a fresh `npm run tauri dev` build passes — at minimum, complete Test 3 in `SMOKE-TEST.md` (push-to-talk → transcript pastes into the focused editor).
+- Preflight integrity checks pass: `npm run preflight` verifies that all
+  committed macOS native binaries match their pinned SHA-256 digests in
+  `src-tauri/binaries/MANIFEST.sha256`. On Windows, `npm run fetch-sidecars`
+  and `npm run fetch-onnxruntime` each verify their downloaded archives
+  against pinned hashes before extracting.
+- Runtime Whisper `.bin`, Moonshine ONNX, and Parakeet ONNX model downloads
+  are verified against pinned SHA-256 hashes before being persisted to disk.
 - The beta release scan pack in `RELEASE-READINESS.md` has no undocumented blockers:
   version consistency, updater/manual-update consistency, local-only/privacy network surface, Tauri IPC/capability surface, Rust risk scan, bundle asset scan, unsigned-beta packaging state, installed-artifact smoke, orphan-process check, and docs-reality check.
 

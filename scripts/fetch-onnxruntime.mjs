@@ -11,7 +11,8 @@
 // Wired via package.json: `npm run fetch-onnxruntime`.
 // Safe to run on any platform — skips silently on non-Windows.
 
-import { mkdirSync, statSync, copyFileSync } from 'node:fs';
+import { mkdirSync, statSync, copyFileSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -23,6 +24,16 @@ const binariesDir = resolve(repoRoot, 'src-tauri', 'binaries');
 // Pin to the ONNX Runtime version that ort-sys 2.0.0-rc.12 uses (1.26.0).
 // See ort-sys/build/download/dist.txt → ms@1.26.0 URLs.
 const ORT_VERSION = '1.26.0';
+
+// SHA-256 of the Microsoft.ML.OnnxRuntime 1.26.0 NuGet package
+// (Microsoft.ML.OnnxRuntime.1.26.0.nupkg).
+// To refresh when ORT_VERSION changes:
+//   1. curl -sL -o /tmp/pkg.nupkg
+//      "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/${NEW_VERSION}"
+//   2. shasum -a 256 /tmp/pkg.nupkg
+//   3. Replace the constant below with the new hash.
+const NUGET_SHA256 =
+  '50cc3772668f04b8373ad65a36793f94699bc4e818f6e691fc68f1578c38ce42';
 const NUGET_URL =
   `https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/${ORT_VERSION}`;
 const NUGET_DLL_PATH = 'runtimes/win-x64/native/onnxruntime.dll';
@@ -67,6 +78,16 @@ try {
   console.error('[fetch-onnxruntime] nuget package was not downloaded');
   process.exit(1);
 }
+
+// Verify package SHA-256 before extraction.
+const actualHash = createHash('sha256').update(readFileSync(nupkgPath)).digest('hex');
+if (actualHash !== NUGET_SHA256) {
+  console.error(`[fetch-onnxruntime] SHA-256 mismatch for NuGet package ${ORT_VERSION}`);
+  console.error(`  expected: ${NUGET_SHA256}`);
+  console.error(`  actual:   ${actualHash}`);
+  process.exit(1);
+}
+console.log(`[fetch-onnxruntime] NuGet package SHA-256 verified (${actualHash})`);
 
 // Extract onnxruntime.dll from the nupkg (standard zip) using 7z.
 // 7z is pre-installed on windows-latest GitHub runners.

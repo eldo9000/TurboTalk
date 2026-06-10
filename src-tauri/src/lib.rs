@@ -814,19 +814,32 @@ async fn download_model(
 ) -> Result<String, String> {
     use tokio::io::AsyncWriteExt;
 
-    const MAX_MODEL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+    /// Per-Whisper-model metadata including the pinned SHA-256 digest.
+    /// Hashes were derived from the HuggingFace LFS pointer files at:
+    ///   https://huggingface.co/ggerganov/whisper.cpp/raw/main/<filename>
+    struct WhisperModelSpec {
+        url: &'static str,
+        sha256: &'static str,
+        max_bytes: u64,
+    }
 
-    fn catalog_url(model_id: &str) -> Option<&'static str> {
+    fn catalog_model(model_id: &str) -> Option<WhisperModelSpec> {
         match model_id {
-            "ggml-large-v3-turbo" => Some(
-                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
-            ),
-            "ggml-large-v3-turbo-q5_0" => Some(
-                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
-            ),
-            "ggml-large-v3" => Some(
-                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
-            ),
+            "ggml-large-v3-turbo" => Some(WhisperModelSpec {
+                url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+                sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+                max_bytes: 1_624_555_275,
+            }),
+            "ggml-large-v3-turbo-q5_0" => Some(WhisperModelSpec {
+                url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+                sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+                max_bytes: 574_041_195,
+            }),
+            "ggml-large-v3" => Some(WhisperModelSpec {
+                url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
+                sha256: "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
+                max_bytes: 3_095_033_483,
+            }),
             _ => None,
         }
     }
@@ -851,8 +864,8 @@ async fn download_model(
         Ok(())
     }
 
-    let url = catalog_url(&model_id).ok_or_else(|| format!("unknown model id: {}", model_id))?;
-    validate_catalog_url(url)?;
+    let spec = catalog_model(&model_id).ok_or_else(|| format!("unknown model id: {}", model_id))?;
+    validate_catalog_url(spec.url)?;
 
     // Build the destination path — create the directory if it doesn't exist yet.
     // (canonical_models_dir() requires the dir to already exist, so we build manually.)
@@ -868,13 +881,39 @@ async fn download_model(
     }
     let dest = canon_dir.join(filename);
 
+    // If the destination file already exists, verify its hash before
+    // treating it as installed. This covers the case where the file was
+    // placed by a previous download that may have been interrupted or
+    // tampered with.
+    if tokio::fs::try_exists(&dest).await.unwrap_or(false) {
+        match sha256_file_hex(&dest).await {
+            Ok(actual) if actual.eq_ignore_ascii_case(spec.sha256) => {
+                let canonical = dest.canonicalize().map_err(|e| e.to_string())?;
+                if !canonical.starts_with(&canon_dir) {
+                    let _ = tokio::fs::remove_file(&canonical).await;
+                    return Err("download destination escaped models directory".into());
+                }
+                let _ = app.emit(
+                    "download-progress",
+                    serde_json::json!({ "name": &model_id, "pct": 100u8 }),
+                );
+                return Ok(canonical.to_string_lossy().into_owned());
+            }
+            _ => {
+                // Hash mismatch or unreadable — remove the stale file
+                // and proceed with fresh download.
+                let _ = tokio::fs::remove_file(&dest).await;
+            }
+        }
+    }
+
     let client = reqwest::Client::builder()
         .user_agent("TurboTalk/0.0.1")
         .build()
         .map_err(|e| e.to_string())?;
 
     let mut resp = client
-        .get(url)
+        .get(spec.url)
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
@@ -884,7 +923,7 @@ async fn download_model(
     }
 
     let total = resp.content_length();
-    if total.is_some_and(|t| t > MAX_MODEL_BYTES) {
+    if total.is_some_and(|t| t > spec.max_bytes) {
         return Err("model file is larger than the allowed limit".into());
     }
     let mut downloaded: u64 = 0;
@@ -913,7 +952,7 @@ async fn download_model(
         match resp.chunk().await {
             Ok(Some(chunk)) => {
                 downloaded += chunk.len() as u64;
-                if downloaded > MAX_MODEL_BYTES {
+                if downloaded > spec.max_bytes {
                     drop(file);
                     let _ = tokio::fs::remove_file(&temp_file_path).await;
                     return Err("model file is larger than the allowed limit".into());
@@ -942,7 +981,20 @@ async fn download_model(
     }
 
     file.flush().await.map_err(|e| e.to_string())?;
+    // Sync metadata so the file is fully on disk before hashing.
+    file.sync_all().await.map_err(|e| e.to_string())?;
     drop(file);
+
+    // Verify SHA-256 before persisting. If the hash doesn't match,
+    // remove the temp file and fail closed.
+    let actual_hash = sha256_file_hex(&temp_file_path).await?;
+    if !actual_hash.eq_ignore_ascii_case(spec.sha256) {
+        let _ = tokio::fs::remove_file(&temp_file_path).await;
+        return Err(format!(
+            "SHA-256 mismatch for {}: expected {} got {}",
+            model_id, spec.sha256, actual_hash
+        ));
+    }
 
     tokio::fs::rename(&temp_file_path, &dest)
         .await
@@ -1092,7 +1144,7 @@ async fn download_moonshine_model(
                 remote_path: "tokenizer.json",
                 local_name: "tokenizer.json",
                 max_bytes: 8 * MIB,
-                sha256: None,
+                sha256: Some("e1f9d42221e82686d50cfa0cebfa9e26d3770aa785db0937449409a20b5e7118"),
             },
         ],
         "base" => &[
@@ -1112,7 +1164,7 @@ async fn download_moonshine_model(
                 remote_path: "tokenizer.json",
                 local_name: "tokenizer.json",
                 max_bytes: 8 * MIB,
-                sha256: None,
+                sha256: Some("e1f9d42221e82686d50cfa0cebfa9e26d3770aa785db0937449409a20b5e7118"),
             },
         ],
         _ => unreachable!(),
@@ -1398,7 +1450,7 @@ async fn download_parakeet_model(
                 remote_path: "vocab.txt",
                 local_name: "vocab.txt",
                 max_bytes: 64 * KIB,
-                sha256: None,
+                sha256: Some("20eefde5cae181c8c19481f6d6f8b2abdc44b3243c946bd1967f98281bbe5739"),
             },
         ],
         "tdt-0.6b-v3" => &[
@@ -1424,7 +1476,7 @@ async fn download_parakeet_model(
                 remote_path: "vocab.txt",
                 local_name: "vocab.txt",
                 max_bytes: 256 * KIB,
-                sha256: None,
+                sha256: Some("6c3109e5fb3769941c1ce19580f0008c3c6687a58bd99ac7c097c4cb98f37304"),
             },
         ],
         _ => unreachable!(),
