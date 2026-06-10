@@ -108,10 +108,7 @@ export const commands = {
 	cancelRecording: () => typedError<null, string>(__TAURI_INVOKE("cancel_recording")),
 	startRecording: () => __TAURI_INVOKE<void>("start_recording"),
 	stopRecording: () => __TAURI_INVOKE<void>("stop_recording"),
-	/**
-	 *  Open the TurboTalk data folder (`~/.config/librewin/turbotalk/`) in Finder.
-	 *  macOS only — uses the system `open` command.
-	 */
+	// Open the TurboTalk data folder in the platform's file manager.
 	openDataFolder: () => typedError<null, string>(__TAURI_INVOKE("open_data_folder")),
 	// Open the canonical TurboTalk GitHub releases page in the user's browser.
 	openReleasesPage: () => typedError<null, string>(__TAURI_INVOKE("open_releases_page")),
@@ -167,7 +164,7 @@ export const commands = {
 	pullOllamaModel: (modelName: string) => typedError<null, string>(__TAURI_INVOKE("pull_ollama_model", { modelName })),
 	runDiagnostics: () => __TAURI_INVOKE<DiagnosticsResult>("run_diagnostics"),
 	logClientEvent: (event: string, detail: string | null) => typedError<null, string>(__TAURI_INVOKE("log_client_event", { event, detail })),
-	exportDiagnosticReport: () => typedError<ExportDiagnosticResult, string>(__TAURI_INVOKE("export_diagnostic_report")),
+	exportDiagnosticReport: (note: string | null) => typedError<ExportDiagnosticResult, string>(__TAURI_INVOKE("export_diagnostic_report", { note })),
 	/**
 	 *  Bundle the diagnostic report (with the tester's note) and upload it to the
 	 *  configured webhook. Always writes a local copy first so nothing is lost when

@@ -5,6 +5,8 @@
   const LS_KEY = 'turbotalk.lastUpdateCheck';
   const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
+  let { shiftHeld = false, onClearWarmup = undefined, warmupBusy = false } = $props();
+
   let updateState = $state('idle'); // 'idle' | 'checking' | 'available' | 'up-to-date'
   let updateVersion = $state('');
 
@@ -39,7 +41,15 @@
   });
 </script>
 
-{#if updateState === 'available'}
+{#if shiftHeld && onClearWarmup}
+  <button
+    onclick={onClearWarmup}
+    disabled={warmupBusy}
+    class="tt-btn tt-btn-block tt-btn-success"
+  >
+    {warmupBusy ? 'Clearing…' : 'Clear warmup cache'}
+  </button>
+{:else if updateState === 'available'}
   <button onclick={openReleasesPage} class="tt-btn tt-btn-block tt-btn-accent">
     Download update{updateVersion ? ` v${updateVersion}` : ''}
   </button>

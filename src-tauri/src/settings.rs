@@ -544,28 +544,47 @@ pub struct LoadConfigResult {
 /// One-time migration from legacy `~/.config/librewin/turbotalk/` to `data_dir()`.
 /// On macOS/Linux both paths are identical (both resolve to `~/.config/`), so this
 /// is a no-op. On Windows the legacy path doesn't exist, so this is also a no-op
-/// for fresh installs. Existing Windows upgraders (none today) would get their
-/// config copied forward automatically.
+/// for fresh installs.
+///
+/// Important: the new directory may already exist (created by first-run model
+/// downloads or history writes) while config.toml is still at the legacy path.
+/// We check individual files rather than bailing if the directory exists.
 fn migrate_data_dir() {
     let new = data_dir();
     let old = legacy_data_dir();
-    if old == new {
-        return; // same path (macOS/Linux) — nothing to do
+    if old == new || !old.exists() {
+        return;
     }
-    if !old.exists() {
-        return; // no legacy data to migrate
+    // Ensure the new directory exists (it usually does by now, but guard).
+    if let Err(e) = std::fs::create_dir_all(&new) {
+        tracing::warn!("[settings] cannot create data dir {:?}: {e}", new);
+        return;
     }
-    if new.exists() {
-        return; // already migrated or new config exists
+    // Migrate individual files that may only exist at the legacy path.
+    migrate_file_if_newer(&old, &new, "config.toml");
+    migrate_file_if_newer(&old, &new, "history.json");
+    migrate_file_if_newer(&old, &new, "settings-ui.json");
+    // Migrate the models directory — a one-time heavyweight copy, skip if target exists.
+    let old_models = old.join("models");
+    let new_models = new.join("models");
+    if old_models.exists() && !new_models.exists() {
+        tracing::info!("[settings] migrating models dir");
+        match copy_dir_recursively(&old_models, &new_models) {
+            Ok(()) => tracing::info!("[settings] models migration complete"),
+            Err(e) => tracing::warn!("[settings] models migration failed: {e}"),
+        }
     }
-    tracing::info!(
-        "[settings] migrating data dir from {:?} to {:?}",
-        old,
-        new
-    );
-    match copy_dir_recursively(&old, &new) {
-        Ok(()) => tracing::info!("[settings] migration complete"),
-        Err(e) => tracing::warn!("[settings] migration failed: {e}"),
+}
+
+fn migrate_file_if_newer(old_dir: &std::path::Path, new_dir: &std::path::Path, name: &str) {
+    let old_file = old_dir.join(name);
+    let new_file = new_dir.join(name);
+    if !old_file.exists() || new_file.exists() {
+        return;
+    }
+    tracing::info!("[settings] migrating {} → {}", name, new_dir.display());
+    if let Err(e) = std::fs::copy(&old_file, &new_file) {
+        tracing::warn!("[settings] failed to migrate {}: {e}", name);
     }
 }
 

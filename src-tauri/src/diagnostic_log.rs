@@ -283,10 +283,11 @@ pub async fn build_report_text(note: Option<&str>) -> String {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn export_diagnostic_report() -> Result<ExportDiagnosticResult, String> {
+pub async fn export_diagnostic_report(note: Option<String>) -> Result<ExportDiagnosticResult, String> {
     ensure_log_dir().map_err(|e| e.to_string())?;
 
-    let report = build_report_text(None).await;
+    let note_ref = note.as_deref().filter(|s| !s.is_empty());
+    let report = build_report_text(note_ref).await;
     let report_name = format!("turbotalk-report-{}.txt", epoch_ms());
     let report_path = log_dir().join(&report_name);
     std::fs::write(&report_path, report.as_bytes()).map_err(|e| e.to_string())?;

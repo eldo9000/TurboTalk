@@ -176,6 +176,7 @@
   let resetBusy    = $state(false);
   let resetError   = $state('');
   let shiftHeld    = $state(false);
+  const IS_DEV     = import.meta.env.DEV;
   let warmupResetBusy = $state(false);
   let warmupResetMsg  = $state('');
 
@@ -370,34 +371,18 @@ Reply with only the single word, lowercase, no punctuation.
   async function exportTestLog() {
     diagnosticMsg = 'Exporting…';
     try {
-      const res = await commands.exportDiagnosticReport();
+      const note = bugNote.trim() || null;
+      const res = await commands.exportDiagnosticReport(note);
       diagnosticMsg = `Saved: ${res.report_path}`;
+      bugNote = '';
       logUi('diagnostic-export', res.report_path);
+      await commands.openLogsFolder();
     } catch (e) {
       diagnosticMsg = `Export failed: ${e}`;
     }
   }
 
   let bugNote          = $state('');
-  let bugReportMsg     = $state('');
-  let bugSending       = $state(false);
-
-  async function sendBugReport() {
-    if (bugSending) return;
-    bugSending = true;
-    bugReportMsg = 'Sending…';
-    try {
-      const res = await commands.submitBugReport(bugNote.trim());
-      bugReportMsg = `Sent — report #${res.report_id}. Thanks!`;
-      bugNote = '';
-      logUi('bug-report-sent', res.report_id);
-    } catch (e) {
-      bugReportMsg = String(e);
-      logUi('bug-report-failed', String(e));
-    } finally {
-      bugSending = false;
-    }
-  }
 
   let cfgHotkeyKey         = $state('right_option');
   let cfgHotkeyMode        = $state('hold');
@@ -2121,46 +2106,47 @@ Reply with only the single word, lowercase, no punctuation.
                 {shiftHeld ? 'Re-run Welcome Screen' : 'Reset TurboTalk'}
               </button>
               <div class="flex-1">
-                <UpdateManager />
+                <UpdateManager shiftHeld={shiftHeld} onClearWarmup={clearWarmupCache} warmupBusy={warmupResetBusy} />
               </div>
             </div>
+            {#if warmupResetMsg}
+              <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug mt-1">{warmupResetMsg}</p>
+            {/if}
           </div>
         </div>
 
         <!-- Developer -->
         <div class="tt-section tt-section-last">
           <div class="subsection-hd subsection-hd-dev"><span class="subsection-hd-title">Developer</span></div>
-          <div class="tt-row tt-row-field" data-tip="Clear the warmed transcription backend so the next dictation cold-starts and shows the warm-up overlay">
-            <div class="flex flex-col gap-1.5 w-full">
-              <button
-                onclick={clearWarmupCache}
-                disabled={warmupResetBusy}
-                class="tt-btn w-full justify-center"
-              >
-                {warmupResetBusy ? 'Clearing…' : 'Clear warmup cache'}
-              </button>
-              {#if warmupResetMsg}
-                <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug">{warmupResetMsg}</p>
-              {/if}
-            </div>
-          </div>
-          <div class="tt-row tt-row-field" data-tip="Export a text file with config, UI events, and backend logs — attach when reporting Windows/macOS test results">
-            <div class="flex flex-col gap-1.5 w-full">
+          {#if IS_DEV}
+            <div class="tt-row tt-row-field" data-tip="Shortcuts for shift-held actions in System — no key hold required in dev builds">
               <div class="flex gap-2 w-full">
-                <button onclick={exportTestLog} class="tt-btn flex-1 justify-center">Export test log</button>
-                <button onclick={() => commands.openLogsFolder()} class="tt-btn flex-1 justify-center">Open logs folder</button>
+                <button
+                  onclick={() => { commands.resetOnboarding(); recheckReadiness(); }}
+                  class="tt-btn tt-btn-success flex-1 justify-center"
+                >Re-run Welcome Screen</button>
+                <button
+                  onclick={clearWarmupCache}
+                  disabled={warmupResetBusy}
+                  class="tt-btn tt-btn-success flex-1 justify-center"
+                >{warmupResetBusy ? 'Clearing…' : 'Clear warmup cache'}</button>
               </div>
-              {#if diagnosticMsg}
-                <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug">{diagnosticMsg}</p>
-              {/if}
             </div>
-          </div>
-          <div class="tt-row tt-row-col" data-tip="Send accumulated diagnostics — config, UI events, and recent logs. No transcribed text is included. Add an optional note below if helpful.">
+          {:else}
+            <div class="tt-row tt-row-field" data-tip="Clear the warmed transcription backend so the next dictation cold-starts and shows the warm-up overlay">
+              <div class="flex flex-col gap-1.5 w-full">
+                <button
+                  onclick={clearWarmupCache}
+                  disabled={warmupResetBusy}
+                  class="tt-btn w-full justify-center"
+                >
+                  {warmupResetBusy ? 'Clearing…' : 'Clear warmup cache'}
+                </button>
+              </div>
+            </div>
+          {/if}
+          <div class="tt-row tt-row-col" data-tip="Export a diagnostic log and open the folder — add an optional note and it'll be included at the top of the file">
             <label for="bug-note" class="tt-lbl tt-lbl-fixed">Report a bug</label>
-            <button
-              onclick={sendBugReport}
-              disabled={bugSending}
-              class="tt-btn w-full justify-center">{bugSending ? 'Sending…' : 'Send bug report'}</button>
             <textarea
               id="bug-note"
               bind:value={bugNote}
@@ -2168,8 +2154,9 @@ Reply with only the single word, lowercase, no punctuation.
               placeholder="Optional — what happened? What were you trying to do?"
               class="tt-input"
             ></textarea>
-            {#if bugReportMsg}
-              <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug">{bugReportMsg}</p>
+            <button onclick={exportTestLog} class="tt-btn w-full justify-center">Create Bug Report</button>
+            {#if diagnosticMsg}
+              <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug">{diagnosticMsg}</p>
             {/if}
           </div>
         </div>

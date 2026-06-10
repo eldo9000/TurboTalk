@@ -75,7 +75,7 @@
 
   const CANVAS_W   = 140; // CSS pixels
   const CANVAS_H   = 28;
-  const HISTORY    = 52;  // columns in the histogram
+  const HISTORY    = 104;  // columns in the histogram
 
   let levels = Array(HISTORY).fill(0);
   let cursorInZone = $state(false);

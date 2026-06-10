@@ -89,7 +89,7 @@
       {#each items as item}
         {#if item.category}
           <div class="px-3 pt-2 pb-0.5 text-[10px] font-medium uppercase tracking-wider
-                      text-[var(--text-secondary)] select-none">{item.category}</div>
+                      text-[var(--text-secondary)] bg-[var(--surface-hint)] select-none">{item.category}</div>
         {:else}
           <button
             type="button"
