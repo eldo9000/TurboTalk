@@ -201,6 +201,34 @@ Modal dialog with backdrop, focus trap, and escape-to-close.
 
 ---
 
+### `SegmentedControl`
+
+Pill-style toggle group for mutually-exclusive choices. Variants: `filled`, `underline`, `sliding`, `tinted`.
+
+```svelte
+<script>
+  let mode = 'transcribe';
+  const modes = [
+    { value: 'transcribe', label: 'Transcribe' },
+    { value: 'cleanup',    label: 'Clean Up', trustedIconHtml: '<svg>...</svg>' },
+  ];
+</script>
+
+<SegmentedControl options={modes} bind:value={mode} variant="filled" />
+```
+
+**Props:**
+- `options` — `{ value, label, trustedIconHtml? }[]`
+- `value` — bindable current value
+- `variant` — `'filled' | 'underline' | 'sliding' | 'tinted'`. Default: `'filled'`
+- `size` — `'sm' | 'md'`. Default: `'md'`
+- `onchange` — callback `(value) => void`
+- `class` — extra classes on container
+
+**Icon safety:** `trustedIconHtml` must be a trusted SVG string only (must start with `<svg` and must not contain `<script`). Never pass user/model text or server-supplied strings through `trustedIconHtml`. All dynamic text goes through normal Svelte interpolation (`{opt.label}`), never through `trustedIconHtml`.
+
+---
+
 ### `Menu`
 
 Dropdown / context menu anchored to a trigger element.
@@ -212,7 +240,7 @@ Dropdown / context menu anchored to a trigger element.
 
   const items = [
     { label: 'Rename',  onclick: rename },
-    { label: 'Duplicate', onclick: duplicate },
+    { label: 'Duplicate', onclick: duplicate, trustedIconHtml: '<svg ...>' },
     { separator: true },
     { label: 'Delete',  onclick: deleteItem, disabled: !canDelete },
   ];
@@ -226,7 +254,9 @@ Dropdown / context menu anchored to a trigger element.
 - `open` — bindable boolean
 - `anchor` — `HTMLElement | null`. Menu positions below this element.
 - `x` / `y` — fixed position (px) when `anchor` is null
-- `items` — `{ label, icon?, onclick, disabled?, separator? }[]`
+- `items` — `{ label, trustedIconHtml?, onclick, disabled?, separator? }[]`
+
+**Icon safety:** `trustedIconHtml` must be a trusted SVG string only (must start with `<svg` and must not contain `<script`). Never pass user/model text or server-supplied strings as `trustedIconHtml`. All dynamic text goes through normal Svelte interpolation (`{item.label}`), never through `trustedIconHtml`.
 
 **Keyboard:** `ArrowDown/Up` navigate; `Enter/Space` activate; `Esc` closes; `Home/End` jump to first/last.
 

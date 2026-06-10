@@ -9,7 +9,7 @@
    *   x      — fixed x position (px) when anchor is null. Default: 0.
    *   y      — fixed y position (px) when anchor is null. Default: 0.
    *   items  — Array of menu items (see type below).
-   *            { label: string, icon?: string, onclick: () => void,
+   *            { label: string, trustedIconHtml?: string, onclick: () => void,
    *              disabled?: boolean, separator?: boolean }
    *            Set separator: true (and omit label/onclick) for a divider row.
    *
@@ -23,6 +23,15 @@
    *   Esc                 — close menu
    *   Home / End          — jump to first / last item
    */
+
+  /**
+   * Safety: Icons must be trusted SVG strings only (start with `<svg`).
+   * Pass them via `trustedIconHtml` on each item. Never pass user/model
+   * text or arbitrary HTML through this property — it uses `{@html}`.
+   */
+  function isTrustedSvgHtml(s) {
+    return typeof s === 'string' && /^<svg[\s>]/i.test(s) && !/<script/i.test(s);
+  }
 
   let {
     open = $bindable(false),
@@ -144,9 +153,9 @@
                      : 'text-[var(--text-primary)] hover:bg-[var(--surface-raised)] cursor-default'}
                    focus:bg-[var(--surface-raised)]"
           >
-            {#if item.icon}
+            {#if item.trustedIconHtml && isTrustedSvgHtml(item.trustedIconHtml)}
               <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-              <span class="shrink-0 text-[var(--text-secondary)]">{@html item.icon}</span>
+              <span class="shrink-0 text-[var(--text-secondary)]">{@html item.trustedIconHtml}</span>
             {/if}
             {item.label}
           </button>

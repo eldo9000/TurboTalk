@@ -16,7 +16,22 @@
    *   tinted    — Connected bordered segments; active option gets an
    *               accent-tinted background + border (TurboTalk theme-selector
    *               pattern). Good for compact settings UIs.
+   *
+   * Options: `{ value, label, trustedIconHtml?, ... }`
+   *   - `trustedIconHtml`: trusted SVG string only. Must start with `<svg` and
+   *     must not contain `<script`. Use for static SVG icons only. All user/model
+   *     text goes through normal Svelte interpolation (`{opt.label}`), never
+   *     through `trustedIconHtml`.
    */
+
+  /**
+   * Safety: Icons must be trusted SVG strings only (start with `<svg`).
+   * Pass them via `trustedIconHtml` on each option. Never pass user/model
+   * text or arbitrary HTML through this property — it uses `{@html}`.
+   */
+  function isTrustedSvgHtml(s) {
+    return typeof s === 'string' && /^<svg[\s>]/i.test(s) && !/<script/i.test(s);
+  }
 
   let {
     options = [],
@@ -80,7 +95,7 @@
                border-radius:{first ? '4px 0 0 4px' : last ? '0 4px 4px 0' : '0'};"
       >
         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-        {#if opt.icon}{@html opt.icon}{/if}
+        {#if opt.trustedIconHtml && isTrustedSvgHtml(opt.trustedIconHtml)}{@html opt.trustedIconHtml}{/if}
         {opt.label}
       </button>
     {/each}
@@ -110,7 +125,7 @@
                  : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
       >
         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-        {#if opt.icon}{@html opt.icon}{/if}
+        {#if opt.trustedIconHtml && isTrustedSvgHtml(opt.trustedIconHtml)}{@html opt.trustedIconHtml}{/if}
         {opt.label}
       </button>
     {/each}
@@ -132,7 +147,7 @@
                  : 'seg-inactive border-[var(--border)] text-[color-mix(in_srgb,var(--text-primary)_70%,transparent)] hover:z-10'}"
       >
         <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-        {#if opt.icon}{@html opt.icon}{/if}
+        {#if opt.trustedIconHtml && isTrustedSvgHtml(opt.trustedIconHtml)}{@html opt.trustedIconHtml}{/if}
         {opt.label}
       </button>
     {/each}
