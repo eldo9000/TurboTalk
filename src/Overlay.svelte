@@ -106,27 +106,33 @@
     const H   = canvasEl.height;
     const dpr = W / CANVAS_W;
 
-    ctx.clearRect(0, 0, W, H);
+    // Fill background so sub-pixel slivers don't show the desktop through.
+    ctx.fillStyle = 'rgb(16, 16, 16)';
+    ctx.fillRect(0, 0, W, H);
 
-    const barW    = W / HISTORY;
-    const gap     = Math.max(1, Math.round(dpr));
-    ctx.fillStyle = mode === 'recording'
-      ? 'rgba(255,255,255,0.95)'
-      : 'rgba(255,255,255,0.35)';
+    const peak   = Math.max(meterVisualPeak, METER_FLOOR);
+    const midY   = H / 2;
+    const stepX  = W / (HISTORY - 1);
+    const color  = mode === 'recording' ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.30)';
 
-    const peak = Math.max(meterVisualPeak, METER_FLOOR);
-
+    // Draw a smooth mirrored waveform — continuous filled path
+    // instead of discrete bars, for a clean modern look.
+    ctx.beginPath();
+    ctx.moveTo(0, midY);
     for (let i = 0; i < HISTORY; i++) {
-      const gainNorm = Math.min(1, levels[i] / peak); // normalize against rolling peak
-      const norm = Math.sqrt(gainNorm); // sqrt for perceptual scaling
-      const barH = Math.max(2 * dpr, norm * H);
-      ctx.fillRect(
-        Math.round(i * barW),
-        Math.round((H - barH) / 2),
-        Math.max(1, Math.round(barW) - gap),
-        Math.round(barH),
-      );
+      const gainNorm = Math.min(1, levels[i] / peak);
+      const norm = Math.pow(gainNorm, 0.45); // gentle perceptual curve
+      ctx.lineTo(i * stepX, midY - norm * midY);
     }
+    for (let i = HISTORY - 1; i >= 0; i--) {
+      const gainNorm = Math.min(1, levels[i] / peak);
+      const norm = Math.pow(gainNorm, 0.45);
+      ctx.lineTo(i * stepX, midY + norm * midY);
+    }
+    ctx.closePath();
+
+    ctx.fillStyle = color;
+    ctx.fill();
   }
 
   function stopTranscribing(nextMode = 'idle') {
