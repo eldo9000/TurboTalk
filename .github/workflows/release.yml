@@ -216,7 +216,7 @@ jobs:
         # the ad-hoc-signed .app (unsigned beta) or Developer-ID-signed .app
         # (signed release).
         env:
-          APPLE_SIGNING_IDENTITY: ${{ steps.apple_signing_check.outputs.macos_signed == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ steps.apple_signing_check.outputs.macos_signed == 'true' && secrets.APPLE_SIGNING_IDENTITY || '-' }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
