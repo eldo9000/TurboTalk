@@ -1,6 +1,6 @@
 [package]
 name = "turbotalk"
-version = "0.9.5"
+version = "0.9.8"
 description = "TurboTalk — personal voice dictation utility"
 authors = ["IronTree Software"]
 edition = "2021"
