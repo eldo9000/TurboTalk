@@ -343,6 +343,22 @@ pub fn open_system_settings(pane: String) -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 pub fn restart_app(app: tauri::AppHandle) {
+    #[cfg(debug_assertions)]
+    {
+        use tauri::Emitter;
+
+        let _ = app.emit(
+            "ui-error",
+            serde_json::json!({
+                "kind": "restart-dev-mode",
+                "message": "Restart is disabled in dev mode. Stop the local run and launch it again.",
+                "recoverable": true
+            }),
+        );
+        tracing::warn!("[permissions] restart_app ignored in debug/dev mode");
+    }
+
+    #[cfg(not(debug_assertions))]
     app.restart();
 }
 
