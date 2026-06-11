@@ -69,3 +69,17 @@
 - **Next:** `hotkey.rs:254` — add `Debug` to `#[derive(Clone, Copy)]`
 
 ## Fail arc closed — 2026-06-10 — ChimeEvent Debug — green CI 27299535365
+
+## Fail #2 (new arc) — 2026-06-10 — Release CI (v0.9.8): codesign/notarization env
+
+- **Q1 in-last-commit:** no — last commit `9c6b3ca` was a version bump; the codesigning issue is a CI config gap, not a code change
+- **Q2 named-error:** yes — `codesign fails with identity ""` then `Team ID must be at least 3 characters`
+- **Q3 seen-before:** no — first time this release arc
+- **Q4 broken-vs-missing:** broken — `APPLE_SIGNING_IDENTITY` env fallback was `''` instead of `'-'`; Apple ID/PW/TEAM_ID env vars were always set even when empty, triggering Tauri notarization
+- **Verdict:** ARC (Q1 blocks QUICK)
+- **Root-cause class:** CI_SIGNING_ENV_GATE
+- **Hypothesis (premise):** Release workflow sets `APPLE_SIGNING_IDENTITY` to `''` when no Developer ID credentials exist, and unconditionally sets `APPLE_ID`/`APPLE_PASSWORD`/`APPLE_TEAM_ID` — Tauri uses these to trigger notarization even when empty
+- **Falsification:** commit `b40fda9` separates signing env into a conditional step that only writes Apple creds when `macos_signed=true`; ad-hoc path only writes `APPLE_SIGNING_IDENTITY=-`
+- **Falsif-result:** deferred — CI is the only validator
+- **Strike count:** 1 of 8
+- **Next:** CI run #27322438132 from `main`
