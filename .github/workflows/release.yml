@@ -204,9 +204,18 @@ jobs:
       - name: Fetch Silero VAD model
         run: npm run fetch-vad-model
 
+      - name: Set Apple signing env (if Developer ID credentials present)
+        run: |
+          if [ "${{ steps.apple_signing_check.outputs.macos_signed }}" = "true" ]; then
+            echo "APPLE_SIGNING_IDENTITY=${{ secrets.APPLE_SIGNING_IDENTITY }}" >> "$GITHUB_ENV"
+            echo "APPLE_ID=${{ secrets.APPLE_ID }}"                     >> "$GITHUB_ENV"
+            echo "APPLE_PASSWORD=${{ secrets.APPLE_PASSWORD }}"         >> "$GITHUB_ENV"
+            echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}"           >> "$GITHUB_ENV"
+          else
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+          fi
+
       - name: Build Tauri app
-        # When Apple signing credentials are available, export them so Tauri
-        # uses Developer ID signing + notarization instead of ad-hoc.
         # Enable updater artifacts (.app.tar.gz + .sig) here, NOT in
         # tauri.conf.json. createUpdaterArtifacts is kept false in the committed
         # config so local `npm run package` stays DMG-only and does not require
@@ -215,11 +224,6 @@ jobs:
         # Locate step requires. The tarball is later re-packed and re-signed from
         # the ad-hoc-signed .app (unsigned beta) or Developer-ID-signed .app
         # (signed release).
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ steps.apple_signing_check.outputs.macos_signed == 'true' && secrets.APPLE_SIGNING_IDENTITY || '-' }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run tauri build -- --target aarch64-apple-darwin --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
       - name: Locate macOS build output
