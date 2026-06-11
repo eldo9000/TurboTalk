@@ -1073,7 +1073,7 @@ mod imp {
 
         let usage = IOHIDElementGetUsage(element);
         // Only react to buttons 3, 4, 5 (middle, back, forward)
-        if usage < 3 || usage > 5 {
+        if !(3..=5).contains(&usage) {
             return;
         }
 

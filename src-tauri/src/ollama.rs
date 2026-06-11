@@ -348,7 +348,7 @@ pub async fn prewarm_ollama() {
 
     // Spawn on the blocking thread pool and immediately drop the handle —
     // caller returns before the generate completes.
-    let _ = tokio::task::spawn_blocking(move || {
+    std::mem::drop(tokio::task::spawn_blocking(move || {
         let base = match crate::cleanup::validate_ollama_url(&url) {
             Ok(u) => u,
             Err(_) => return,
@@ -375,7 +375,7 @@ pub async fn prewarm_ollama() {
             Ok(_)  => tracing::info!("[ollama-prewarm] model loaded"),
             Err(e) => tracing::debug!("[ollama-prewarm] skipped: {e}"),
         }
-    });
+    }));
 }
 
 /// Scan `~/.ollama/models/blobs/` for any `*-partial*` files, which are left

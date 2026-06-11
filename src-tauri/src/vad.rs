@@ -66,7 +66,7 @@ const ONSET_FRAMES: usize = 2;
 const HANGOVER_FRAMES: usize = 15;
 
 /// LSTM state size: [2, 1, 64] = 128 elements.
-const LSTM_STATE_LEN: usize = 2 * 1 * 64;
+const LSTM_STATE_LEN: usize = 128;
 
 /// Silero v4 VAD backed directly by `ort` rc.12.
 ///

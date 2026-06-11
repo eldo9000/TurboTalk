@@ -10,15 +10,18 @@ use serde::Serialize;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing_appender::non_blocking::NonBlocking;
 
 const MAX_CLIENT_EVENTS: usize = 500;
 const MAX_LOG_TAIL_BYTES: usize = 2 * 1024 * 1024;
 
-static CLIENT_EVENTS: LazyLock<Mutex<VecDeque<String>>> =
-    LazyLock::new(|| Mutex::new(VecDeque::new()));
+static CLIENT_EVENTS: OnceLock<Mutex<VecDeque<String>>> = OnceLock::new();
+
+fn client_events() -> &'static Mutex<VecDeque<String>> {
+    CLIENT_EVENTS.get_or_init(|| Mutex::new(VecDeque::new()))
+}
 
 /// Filename prefix for the full session log. Day-rotated files are named
 /// `turbotalk.YYYY-MM-DD.log`.
@@ -39,18 +42,22 @@ pub const LOG_SUFFIX: &str = "log";
 /// Dedicated writer for the transcript debug log. Set once at startup. Kept
 /// entirely separate from the tracing pipeline so transcript content cannot
 /// leak into the session log, errors log, console, or uploaded reports.
-static TRANSCRIPT_WRITER: LazyLock<Mutex<Option<NonBlocking>>> = LazyLock::new(|| Mutex::new(None));
+static TRANSCRIPT_WRITER: OnceLock<Mutex<Option<NonBlocking>>> = OnceLock::new();
+
+fn transcript_writer() -> &'static Mutex<Option<NonBlocking>> {
+    TRANSCRIPT_WRITER.get_or_init(|| Mutex::new(None))
+}
 
 /// Install the transcript-log writer (called once during logging init).
 pub fn init_transcript_writer(writer: NonBlocking) {
-    *TRANSCRIPT_WRITER.lock() = Some(writer);
+    *transcript_writer().lock() = Some(writer);
 }
 
 /// Append one transcript to the local-only transcript debug log. No-op unless
 /// the debug-only writer is installed. See [`TRANSCRIPT_LOG_PREFIX`] for the
 /// privacy contract — this content is never uploaded.
 pub fn record_transcript(backend: &str, text: &str, rejection_dbg: &str) {
-    let guard = TRANSCRIPT_WRITER.lock();
+    let guard = transcript_writer().lock();
     if let Some(writer) = guard.as_ref() {
         let mut writer = writer.clone();
         let _ = writeln!(
@@ -111,7 +118,7 @@ fn epoch_ms() -> u128 {
 /// the *only* place raw transcript text may be written.
 pub fn record_client_event(event: &str, detail: &str) {
     let line = format!("{} [ui] {event} {detail}", epoch_ms());
-    let mut buf = CLIENT_EVENTS.lock();
+    let mut buf = client_events().lock();
     buf.push_back(line.clone());
     while buf.len() > MAX_CLIENT_EVENTS {
         buf.pop_front();
@@ -218,7 +225,7 @@ pub async fn build_report_text(note: Option<&str>) -> String {
     let readiness = crate::permissions::check_readiness();
     let diagnostics = crate::diagnostics::run_diagnostics().await;
     let cfg = crate::settings::load();
-    let client_events: Vec<String> = CLIENT_EVENTS.lock().iter().cloned().collect();
+    let client_events: Vec<String> = client_events().lock().iter().cloned().collect();
     let log_body = read_recent_logs(MAIN_LOG_PREFIX, MAX_LOG_TAIL_BYTES);
 
     let mut out = String::new();
