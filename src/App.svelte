@@ -176,7 +176,6 @@
   let resetBusy    = $state(false);
   let resetError   = $state('');
   let shiftHeld    = $state(false);
-  const IS_DEV     = import.meta.env.DEV;
   let warmupResetBusy = $state(false);
   let warmupResetMsg  = $state('');
 
@@ -2118,33 +2117,19 @@ Reply with only the single word, lowercase, no punctuation.
         <!-- Developer -->
         <div class="tt-section tt-section-last">
           <div class="subsection-hd subsection-hd-dev"><span class="subsection-hd-title">Developer</span></div>
-          {#if IS_DEV}
-            <div class="tt-row tt-row-field" data-tip="Shortcuts for shift-held actions in System — no key hold required in dev builds">
-              <div class="flex gap-2 w-full">
-                <button
-                  onclick={() => { commands.resetOnboarding(); recheckReadiness(); }}
-                  class="tt-btn tt-btn-success flex-1 justify-center"
-                >Re-run Welcome Screen</button>
-                <button
-                  onclick={clearWarmupCache}
-                  disabled={warmupResetBusy}
-                  class="tt-btn tt-btn-success flex-1 justify-center"
-                >{warmupResetBusy ? 'Clearing…' : 'Clear warmup cache'}</button>
-              </div>
+          <div class="tt-row tt-row-field" data-tip="Developer shortcuts for re-running setup and clearing the warmed transcription backend">
+            <div class="flex gap-2 w-full">
+              <button
+                onclick={() => { commands.resetOnboarding(); recheckReadiness(); }}
+                class="tt-btn tt-btn-success flex-1 justify-center"
+              >Re-run Welcome Screen</button>
+              <button
+                onclick={clearWarmupCache}
+                disabled={warmupResetBusy}
+                class="tt-btn tt-btn-success flex-1 justify-center"
+              >{warmupResetBusy ? 'Clearing…' : 'Clear warmup cache'}</button>
             </div>
-          {:else}
-            <div class="tt-row tt-row-field" data-tip="Clear the warmed transcription backend so the next dictation cold-starts and shows the warm-up overlay">
-              <div class="flex flex-col gap-1.5 w-full">
-                <button
-                  onclick={clearWarmupCache}
-                  disabled={warmupResetBusy}
-                  class="tt-btn w-full justify-center"
-                >
-                  {warmupResetBusy ? 'Clearing…' : 'Clear warmup cache'}
-                </button>
-              </div>
-            </div>
-          {/if}
+          </div>
           <div class="tt-row tt-row-col" data-tip="Export a diagnostic log and open the folder — add an optional note and it'll be included at the top of the file">
             <label for="bug-note" class="tt-lbl tt-lbl-fixed">Report a bug</label>
             <textarea
