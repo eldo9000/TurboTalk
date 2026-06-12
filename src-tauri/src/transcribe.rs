@@ -381,7 +381,10 @@ fn find_whisper(configured_bin: &str) -> anyhow::Result<PathBuf> {
 /// stale dylibs alongside the Homebrew ones → two libggml instances → two
 /// `get_reg()` statics → `ggml_backend_dev_count()` returns 0 → GGML_ASSERT.
 /// Using the `binaries/` symlink → Homebrew binary sidesteps this entirely.
-fn find_whisper_server(configured_bin: &str) -> anyhow::Result<PathBuf> {
+/// NOTE: this function is used by `kill_orphans` to scope the pkill pattern
+/// to TurboTalk's specific whisper-server binary rather than killing any
+/// whisper-server process on the machine.
+pub(crate) fn find_whisper_server(configured_bin: &str) -> anyhow::Result<PathBuf> {
     let sidecars = server_sidecar_candidates();
 
     // Dev mode: binaries/ symlink → Homebrew binary. Checked FIRST to avoid
@@ -1182,15 +1185,27 @@ pub fn prewarm_in_flight() -> bool {
 /// terminated before its `RunEvent::Exit` cleanup fired (e.g. SIGKILL from
 /// Tauri's dev runner during rapid file-change rebuilds). Best-effort: logs
 /// at warn on failure but never blocks startup.
+///
+/// TASK-6: uses the exact resolved binary path (via `find_whisper_server`)
+/// instead of a generic `pkill -f whisper-server` so it only kills
+/// TurboTalk's own whisper-server, not another user's or another instance's.
 pub fn kill_orphans() {
+    // Resolve the exact binary path so pkill only matches TurboTalk's
+    // own whisper-server instance. Falls back to the generic name if
+    // resolution fails (binaries dir missing, etc.) — in that case
+    // there's nothing to kill anyway.
+    let pattern = find_whisper_server("whisper-server")
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "whisper-server".to_string());
+
     #[cfg(not(target_os = "windows"))]
     {
         let result = std::process::Command::new("pkill")
-            .args(["-f", "whisper-server"])
+            .args(["-f", &pattern])
             .output();
         match result {
             Ok(out) if out.status.success() => {
-                tracing::info!("[transcribe] kill_orphans: terminated leftover whisper-server(s)");
+                tracing::info!("[transcribe] kill_orphans: terminated leftover whisper-server (pattern: {})", pattern);
             }
             Ok(_) => {} // exit 1 = no matching process, normal case
             Err(e) => tracing::warn!("[transcribe] kill_orphans: pkill failed: {}", e),

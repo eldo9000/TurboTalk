@@ -32,6 +32,13 @@ pub(crate) mod common {
     /// a stray key-up while idle must not poison the next start.
     static START_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
+    /// Set by a second `ptt_down` press arriving during toggle-mode arming
+    /// (while `START_IN_FLIGHT` is true and prewarm is in flight). The poll
+    /// loop reads this to cancel the arming tile. Hold mode cancels via
+    /// key-up → `CANCEL_PENDING`; toggle has no key-up, so this flag gives
+    /// the user an explicit "press again during warmup = cancel" path.
+    static CANCEL_ARMING: AtomicBool = AtomicBool::new(false);
+
     struct StartInFlightGuard;
 
     impl Drop for StartInFlightGuard {
@@ -347,10 +354,22 @@ pub(crate) mod common {
     // therefore spawn a worker thread and return immediately.
 
     pub(super) fn ptt_down(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
-        // Clear any stale CANCEL_PENDING flag set by a previous orphaned
-        // key-up (TASK-2). Without this the next legitimate press can
-        // instantly cancel itself.
+        // Clear any stale CANCEL_PENDING / CANCEL_ARMING flags set by a
+        // previous orphaned key-up or cancelled arming (TASK-2). Without
+        // this the next legitimate press can instantly cancel itself.
         CANCEL_PENDING.store(false, Ordering::Relaxed);
+        CANCEL_ARMING.store(false, Ordering::Relaxed);
+
+        // Toggle-mode arming cancel: while `START_IN_FLIGHT` is true and the
+        // first press's worker is polling prewarm readiness, a second press
+        // is blocked by the gate below and can't reach the inner
+        // `prewarm_in_flight()` cancel branch. Signal the poll loop instead.
+        if crate::transcribe::prewarm_in_flight() {
+            tracing::info!("[hotkey] arm cancelled — user pressed again during warmup (toggle mode)");
+            CANCEL_ARMING.store(true, Ordering::Release);
+            return;
+        }
+
         if START_IN_FLIGHT.swap(true, Ordering::AcqRel) {
             tracing::debug!("[hotkey] start ignored — start already in flight");
             return;
@@ -428,6 +447,10 @@ pub(crate) mod common {
                         break;
                     }
                     if CANCEL_PENDING.swap(false, Ordering::AcqRel) {
+                        cancelled = true;
+                        break;
+                    }
+                    if CANCEL_ARMING.swap(false, Ordering::AcqRel) {
                         cancelled = true;
                         break;
                     }
@@ -615,9 +638,15 @@ pub(crate) mod common {
 
                     // TASK-55: run garbage detection on the fully assembled
                     // transcript (segments + tail), not just the tail outcome.
-                    let transcribe_result: anyhow::Result<(String, Option<crate::transcribe::RejectReason>)> = match tail_result {
+                    // TASK-6: also carry individual part texts so per-part
+                    // garbage checks can salvage clean portions instead of
+                    // blocking the entire paste when one part is clean.
+                    type TranscribeResult = (String, Option<crate::transcribe::RejectReason>, String, String);
+                    //                                   ^assembled   ^rejection                 ^seg_part   ^tail_part
+                    let transcribe_result: anyhow::Result<TranscribeResult> = match tail_result {
                         Ok(outcome) => {
-                            let parts: Vec<&str> = [seg_text.as_str(), outcome.text.as_str()]
+                            let tail_text = outcome.text;
+                            let parts: Vec<&str> = [seg_text.as_str(), tail_text.as_str()]
                                 .into_iter()
                                 .filter(|s| !s.is_empty())
                                 .collect();
@@ -627,7 +656,7 @@ pub(crate) mod common {
                             } else {
                                 crate::transcribe::detect_garbage(&assembled)
                             };
-                            Ok((assembled, rejection))
+                            Ok((assembled, rejection, seg_text, tail_text))
                         }
                         Err(e) => {
                             if !seg_text.is_empty() {
@@ -638,7 +667,7 @@ pub(crate) mod common {
                                     seg_text.chars().count(),
                                     e
                                 );
-                                Ok((seg_text, None))
+                                Ok((seg_text, None, String::new(), String::new()))
                             } else {
                                 Err(e)
                             }
@@ -663,16 +692,156 @@ pub(crate) mod common {
                     }
 
                     match transcribe_result {
-                        Ok((raw_text, rejection)) => {
+                        Ok((raw_text, rejection, seg_part, tail_part)) => {
                             tracing::info!(
                                 "[transcribe job_id={:?}] raw transcript received ({} chars)",
                                 job_id_opt,
                                 raw_text.chars().count()
                             );
 
-                            // If the transcript tripped a hallucination filter,
-                            // block the paste entirely. Emit the rejected badge
-                            // for observability, then discard and return.
+                            // If the assembled transcript tripped a hallucination
+                            // filter, check individual parts (segments + tail)
+                            // rather than blocking everything. If any part is
+                            // clean, use only that; block only when both parts
+                            // are individually garbage or the only available part
+                            // is garbage.
+                            let usable_parts: Option<String> = if let Some(ref _reason) = rejection {
+                                let seg_garbage = !seg_part.is_empty()
+                                    && crate::transcribe::detect_garbage(&seg_part).is_some();
+                                let tail_garbage = !tail_part.is_empty()
+                                    && crate::transcribe::detect_garbage(&tail_part).is_some();
+
+                                if !seg_garbage && !tail_garbage {
+                                    // Both parts clean individually — reassemble.
+                                    let clean_parts: Vec<&str> = [seg_part.as_str(), tail_part.as_str()]
+                                        .into_iter()
+                                        .filter(|s| !s.is_empty())
+                                        .collect();
+                                    if clean_parts.is_empty() {
+                                        None
+                                    } else {
+                                        Some(clean_parts.join(" "))
+                                    }
+                                } else if !seg_garbage && !seg_part.is_empty() {
+                                    Some(seg_part)
+                                } else if !tail_garbage && !tail_part.is_empty() {
+                                    Some(tail_part)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
+                            if let Some(salvaged_text) = usable_parts {
+                                tracing::warn!(
+                                    "[cleanup job_id={:?}] transcript partially rejected — \
+                                     using {} chars of clean text from individual parts",
+                                    job_id_opt,
+                                    salvaged_text.chars().count()
+                                );
+                                // Emit the rejected badge for observability, then
+                                // proceed with the salvaged clean text.
+                                emit_critical(
+                                    &app,
+                                    "transcription-rejected",
+                                    serde_json::json!({
+                                        "text": raw_text,
+                                        "reason": format!("partial_rejection — used clean {} chars", salvaged_text.chars().count()),
+                                    }),
+                                );
+
+                                // Fall through to the normal cleanup path using
+                                // `salvaged_text` instead of `raw_text`.
+                                let final_text = crate::cleanup::process(&salvaged_text, &app);
+                                tracing::info!(
+                                    "[cleanup   job_id={:?}] final transcript ready ({} chars)",
+                                    job_id_opt,
+                                    final_text.chars().count()
+                                );
+                                if final_text.is_empty() {
+                                    tracing::info!(
+                                        "[cleanup   job_id={:?}] empty final transcript — skipping paste",
+                                        job_id_opt
+                                    );
+                                    emit_critical(&app, "recording-discarded", "empty-final-text");
+                                    rec.finish_guarded();
+                                    let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                                    if let Some(job_id) = job_id_opt {
+                                        emit_stage(&app, job_id, "ready");
+                                    }
+                                    play_chime(ChimeEvent::Finish);
+                                    return;
+                                }
+                                emit_critical(&app, "transcript", final_text.clone());
+
+                                // Cleaning → Pasting
+                                if rec.begin_pasting().is_err() {
+                                    rec.finish_guarded();
+                                    let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                                    if let Some(job_id) = job_id_opt {
+                                        emit_stage(&app, job_id, "ready");
+                                    }
+                                    return;
+                                }
+                                if let Some(job_id) = job_id_opt {
+                                    emit_stage(&app, job_id, "pasting");
+                                }
+
+                                let focus_at_paste = crate::paste::frontmost_app();
+                                tracing::info!(
+                                    "[paste job_id={:?}] focus_at_start={:?} focus_at_paste={:?}",
+                                    job_id_opt,
+                                    focus_at_start,
+                                    focus_at_paste
+                                );
+                                if let (Some(job_id), Some(start), Some(now)) =
+                                    (job_id_opt, focus_at_start.as_ref(), focus_at_paste.as_ref())
+                                {
+                                    if start != now {
+                                        tracing::warn!(
+                                            "[paste job_id={}] focus changed before paste: {:?} → {:?}",
+                                            job_id,
+                                            start,
+                                            now
+                                        );
+                                        emit_critical(
+                                            &app,
+                                            "focus-changed-before-paste",
+                                            FocusChangedBeforePaste {
+                                                job_id,
+                                                focus_at_start: Some(start.clone()),
+                                                focus_at_paste: Some(now.clone()),
+                                            },
+                                        );
+                                    }
+                                }
+                                let paste_text = format!("{} ", final_text);
+                                match crate::paste::paste(&paste_text) {
+                                    Ok(true) => {
+                                        play_chime(ChimeEvent::Finish);
+                                    }
+                                    Ok(false) => {
+                                        tracing::warn!("[paste job_id={:?}] no focused text element — text left in clipboard", job_id_opt);
+                                        play_chime(ChimeEvent::Finish);
+                                        emit_critical(&app, "paste-miss", "Paste missed — text is in your clipboard".to_string());
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("[paste job_id={:?}] {:?}", job_id_opt, e);
+                                        emit_critical(&app, "paste-error", "Couldn't paste — check Accessibility permission".to_string());
+                                    }
+                                }
+                                // End of lifecycle — the salvaged path ends here.
+                                rec.finish_guarded();
+                                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                                if let Some(job_id) = job_id_opt {
+                                    emit_stage(&app, job_id, "ready");
+                                }
+                                return;
+                            }
+
+                            // If the transcript tripped a hallucination filter with
+                            // no salvageable clean parts, block the paste entirely.
                             if let Some(reason) = rejection {
                                 tracing::warn!(
                                     "[cleanup job_id={:?}] transcript rejected ({:?}) — blocking paste",
@@ -845,6 +1014,21 @@ pub(crate) mod common {
 
                             if !seg_text.is_empty() {
                                 let final_text = crate::cleanup::process(&seg_text, &app);
+
+                                // Re-check: cleanup::process can block ~2s on
+                                // Ollama. If a new job started during that
+                                // window, the old recovery must not emit,
+                                // paste, or touch the tray — the new job owns
+                                // the UI state now.
+                                if CURRENT_JOB_ID.lock().is_some() {
+                                    tracing::warn!(
+                                        "[hotkey job_id={:?}] seg-recovery: new job started during \
+                                         cleanup::process — abandoning recovery to protect new job's UI",
+                                        job_id_opt
+                                    );
+                                    return;
+                                }
+
                                 if final_text.is_empty() {
                                     emit_critical(&app, "recording-discarded", "empty-final-text");
                                     play_chime(ChimeEvent::Finish);
