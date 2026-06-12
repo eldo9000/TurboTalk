@@ -1,4 +1,4 @@
-# TurboTalk-App Observer State
+# TurboTalk Observer State
 Last updated: 2026-05-26  ·  Run 3
 
 ---

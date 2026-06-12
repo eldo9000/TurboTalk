@@ -2,7 +2,7 @@
   /**
    * Select — custom dropdown with optional category headers.
    *
-   * Markup ported verbatim from Fade-App/src/lib/VideoOptions.svelte
+   * Markup ported verbatim from Fade/src/lib/VideoOptions.svelte
    * (the Video Codec / Encode Preset dropdowns) so the visual treatment
    * stays identical.
    *

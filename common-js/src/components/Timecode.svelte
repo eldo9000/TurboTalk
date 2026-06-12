@@ -8,7 +8,7 @@
    *
    * Bottom row shows remaining (left) and duration (right) in the same mode.
    *
-   * Pattern lifted from Flicker-App's App.svelte timecode block.
+   * Pattern lifted from Flicker's App.svelte timecode block.
    *
    * @typedef {{
    *   time?: number,         // playhead position in seconds

@@ -2,7 +2,7 @@
   /**
    * Checkbox — Fade-style bordered tile with custom check mark.
    *
-   * Markup pattern ported from Fade-App/src/lib/VideoOptions.svelte
+   * Markup pattern ported from Fade/src/lib/VideoOptions.svelte
    * ("Preserve metadata" tile near the bottom of the Video Options panel).
    * Uses the global .fade-check class defined in @libre/ui/src/tokens.css.
    *

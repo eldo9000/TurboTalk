@@ -2,7 +2,7 @@
   /**
    * Transport — canonical media transport bar (skip-start / J / play-pause / L / skip-end).
    *
-   * Pattern lifted from Flicker-App's EditTab transport row.
+   * Pattern lifted from Flicker's EditTab transport row.
    *
    * @typedef {{
    *   playing?: boolean,

@@ -2,7 +2,7 @@
   /**
    * PanelTabs — secondary text-only tab strip with an accent underline.
    *
-   * Pattern lifted from Flicker-App's Edit-page panel headers (Media /
+   * Pattern lifted from Flicker's Edit-page panel headers (Media /
    * Effects / Source). Visually quiet by design: no background, no border
    * around the group, no fill on the active tab — just a 2px accent
    * border on the bottom of the active tab to mark selection. Use for

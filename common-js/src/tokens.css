@@ -112,7 +112,7 @@ html:not(.dark) .subsection-hd {
 
 /* ── Segmented controls (active / inactive) ─────────────────────────────────
    Shared across SegmentedControl, custom Select trigger, and any control that
-   wants Fade's "subtle bevel" look. Source: Fade-App/src/app.css. */
+   wants Fade's "subtle bevel" look. Source: Fade/src/app.css. */
 .seg-active {
   background: color-mix(in srgb, var(--accent) 37.5%, #000);
   color: #fff;
@@ -172,7 +172,7 @@ html:not(.dark) .subsection-hd {
 }
 
 /* ── Custom checkbox ───────────────────────────────────────────────────────
-   Source: Fade-App/src/app.css. Used by @libre/ui Checkbox component and any
+   Source: Fade/src/app.css. Used by @libre/ui Checkbox component and any
    raw <input type="checkbox" class="fade-check"> instance. */
 .fade-check {
   appearance: none;
