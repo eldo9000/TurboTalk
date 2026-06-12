@@ -940,6 +940,7 @@ pub(crate) mod common {
 mod imp {
     use super::common;
     use crate::recorder::Recorder;
+    use core_foundation::base::TCFType;
     use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
     use core_graphics::event::{
         CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
@@ -954,6 +955,12 @@ mod imp {
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
         fn AXIsProcessTrusted() -> bool;
+
+        /// Returns true if the event tap is currently enabled.
+        fn CGEventTapIsEnabled(tap: *const c_void) -> bool;
+
+        /// Enable or disable an event tap.
+        fn CGEventTapEnable(tap: *const c_void, enable: bool);
     }
 
     pub fn accessibility_trusted() -> bool {
@@ -1402,6 +1409,10 @@ mod imp {
                                 "[hotkey] CGEventTap rebuilt after Accessibility permission grant"
                             );
                         }
+                        // Clone the CFMachPort before it is borrowed by
+                        // create_runloop_source, so the watchdog thread can
+                        // inspect and re-enable it independently.
+                        let mach_port = tap.mach_port.clone();
                         let source = tap
                             .mach_port
                             .create_runloop_source(0)
@@ -1413,7 +1424,41 @@ mod imp {
                         CFRunLoop::get_current()
                             .add_source(&source, unsafe { kCFRunLoopCommonModes });
                         tap.enable();
+
+                        // Watchdog thread: macOS disables an event tap that is
+                        // slow to respond (e.g. under system load, debugger pause,
+                        // heavy swap).  Once disabled the tap silently stops
+                        // delivering events — dictation is dead until app restart.
+                        // This watchdog polls the tap every 8 s and re-enables it
+                        // if macOS has disabled it (kCGEventTapDisabledByTimeout
+                        // or kCGEventTapDisabledByUserInput).
+                        // Extract raw pointer before spawning — CFMachPort is not Send
+                        let tap_raw = mach_port.as_concrete_TypeRef() as usize;
+                        let shutdown = Arc::new(AtomicBool::new(false));
+                        let shutdown_flag = shutdown.clone();
+                        std::thread::spawn(move || {
+                            let raw = tap_raw as *const c_void;
+                            loop {
+                                std::thread::sleep(std::time::Duration::from_secs(8));
+                                if shutdown_flag.load(Ordering::Acquire) {
+                                    return;
+                                }
+                                // SAFETY: raw points to a CFMachPort that
+                                // outlives this thread (the parent thread
+                                // runs CFRunLoop::run_current and holds
+                                // mach_port alive).
+                                let enabled = unsafe { CGEventTapIsEnabled(raw) };
+                                if !enabled {
+                                    tracing::warn!(
+                                        "[hotkey] CGEventTap was disabled by macOS — re-enabling"
+                                    );
+                                    unsafe { CGEventTapEnable(raw, true) };
+                                }
+                            }
+                        });
+
                         CFRunLoop::run_current();
+                        shutdown.store(true, Ordering::Release);
                         return;
                     }
                     Err(()) => {
