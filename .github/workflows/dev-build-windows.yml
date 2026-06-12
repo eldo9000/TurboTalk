@@ -64,9 +64,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: windows-dev-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          key: windows-dev-cargo-v2-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
-            windows-dev-cargo-
+            windows-dev-cargo-v2-
 
       - name: Install npm deps
         run: npm ci

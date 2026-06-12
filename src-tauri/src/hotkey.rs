@@ -27,6 +27,19 @@ pub(crate) mod common {
     /// "quick tap → overlay stuck forever" bug.
     static CANCEL_PENDING: AtomicBool = AtomicBool::new(false);
 
+    /// True while a key-down worker is arming or starting a recording. A quick
+    /// hold-mode key-up may arrive while this is true and request cancellation;
+    /// a stray key-up while idle must not poison the next start.
+    static START_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+    struct StartInFlightGuard;
+
+    impl Drop for StartInFlightGuard {
+        fn drop(&mut self) {
+            START_IN_FLIGHT.store(false, Ordering::Release);
+        }
+    }
+
     /// Number of pending `ptt_up` invocations that should be silently
     /// swallowed. The cancel paths (Esc, hold-to-cancel, IPC, tray) increment
     /// this so the matching key-up no-ops instead of cascading into
@@ -156,16 +169,20 @@ pub(crate) mod common {
     /// timer's deadline check sees "no longer held" and bails.
     static HOLD_CANCEL_KEY_DOWN: AtomicBool = AtomicBool::new(false);
 
+    /// True when a newly pressed trigger key should arm hold-to-cancel.
+    /// The start press itself is intentionally excluded: a user who holds the
+    /// key while a toggle recording is warming up/starting should not
+    /// accidentally cancel the recording they just began.
+    pub(super) fn should_arm_hold_cancel(recorder: &Arc<Recorder>) -> bool {
+        matches!(
+            recorder.state(),
+            crate::recorder::State::Recording | crate::recorder::State::Transcribing
+        )
+    }
+
     /// Arm a hold-to-cancel timer. When the deadline elapses, if the same
     /// press is still held and the recorder is Recording or Transcribing,
     /// fire `trigger_cancel`.
-    ///
-    /// The timer is spawned unconditionally — the state check happens at
-    /// deadline time, not arm time. This is important because on the very
-    /// press that starts recording, the recorder is still `Ready` when the
-    /// timer is armed (ptt_down's worker hasn't called `rec.start()` yet).
-    /// By the deadline 1 second later, the state is `Recording` and the
-    /// check passes.
     ///
     /// `toggle_mode` controls whether `SUPPRESS_PTT_UP_COUNT` is armed: in
     /// hold mode a key-up `ptt_up` is always coming and needs the suppression
@@ -305,10 +322,14 @@ pub(crate) mod common {
                 ChimeEvent::Finish => "[System.Media.SystemSounds]::Asterisk.Play()",
                 ChimeEvent::Cancel => "[System.Media.SystemSounds]::Exclamation.Play()",
             };
-            match std::process::Command::new("powershell")
-                .args(["-NoProfile", "-NonInteractive", "-Command", ps_cmd])
-                .spawn()
+            let mut cmd = std::process::Command::new("powershell");
+            cmd.args(["-NoProfile", "-NonInteractive", "-Command", ps_cmd]);
+            #[cfg(target_os = "windows")]
             {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000);
+            }
+            match cmd.spawn() {
                 Ok(_) => tracing::info!("[chime] powershell SystemSounds ({:?})", event),
                 Err(e) => tracing::warn!("[chime] powershell failed for {:?}: {}", event, e),
             }
@@ -326,10 +347,15 @@ pub(crate) mod common {
     // therefore spawn a worker thread and return immediately.
 
     pub(super) fn ptt_down(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
+        if START_IN_FLIGHT.swap(true, Ordering::AcqRel) {
+            tracing::debug!("[hotkey] start ignored — start already in flight");
+            return;
+        }
         let rec = recorder.clone();
         let tray = tray_icon.clone();
         let app = app.clone();
         std::thread::spawn(move || {
+            let _start_guard = StartInFlightGuard;
             // One-in-flight policy: only `Ready` is allowed to start a new job.
             // If the recorder is busy (anything from FinalizingAudio through
             // Pasting still running from a prior press), report it as
@@ -629,17 +655,12 @@ pub(crate) mod common {
                                 raw_text.chars().count()
                             );
 
-                            // TASK-55: if the transcript was flagged as a
-                            // hallucination, emit `transcription-rejected` as a
-                            // UI badge but continue to paste and save to history.
-                            // The garbage detector is a heuristic that catches
-                            // legitimate speech (stuttering, repeated S's, etc.)
-                            // as false positives — blocking paste/history for
-                            // those is worse than the occasional hallucination
-                            // that slips through.
+                            // If the transcript tripped a hallucination filter,
+                            // block the paste entirely. Emit the rejected badge
+                            // for observability, then discard and return.
                             if let Some(reason) = rejection {
                                 tracing::warn!(
-                                    "[cleanup job_id={:?}] transcript rejected ({:?}) — continuing to paste",
+                                    "[cleanup job_id={:?}] transcript rejected ({:?}) — blocking paste",
                                     job_id_opt,
                                     reason
                                 );
@@ -651,8 +672,13 @@ pub(crate) mod common {
                                         "reason": reason.description(),
                                     }),
                                 );
-                                // fall through — still emit transcript event
-                                // (history) and paste the text.
+                                rec.finish_guarded();
+                                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                                if let Some(job_id) = job_id_opt {
+                                    emit_stage(&app, job_id, "ready");
+                                }
+                                play_chime(ChimeEvent::Finish);
+                                return;
                             }
 
                             // Stage 2: cleanup as its own explicit call site.
@@ -888,7 +914,16 @@ pub(crate) mod common {
                             ..
                         }
                     ) {
-                        CANCEL_PENDING.store(true, Ordering::Release);
+                        if START_IN_FLIGHT.load(Ordering::Acquire)
+                            || crate::transcribe::prewarm_in_flight()
+                        {
+                            CANCEL_PENDING.store(true, Ordering::Release);
+                        } else {
+                            tracing::debug!(
+                                "[hotkey job_id={:?}] idle key-up ignored without pending start",
+                                job_id_opt
+                            );
+                        }
                     }
                     tracing::warn!("[hotkey job_id={:?}] stop ignored: {}", job_id_opt, e);
                     let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
@@ -1101,7 +1136,7 @@ mod imp {
         if pressed {
             if !was_down {
                 HID_BUTTON_STATE.fetch_or(bit, Ordering::Relaxed);
-                if cancel_on_hold {
+                if cancel_on_hold && common::should_arm_hold_cancel(&context.recorder) {
                     common::arm_hold_cancel(
                         &context.recorder,
                         &context.tray_icon,
@@ -1294,7 +1329,9 @@ mod imp {
                             match etype {
                                 CGEventType::KeyDown => {
                                     if keycode == fkc && !FKEY_DOWN.swap(true, Ordering::AcqRel) {
-                                        if cancel_on_hold {
+                                        if cancel_on_hold
+                                            && common::should_arm_hold_cancel(&recorder_cb)
+                                        {
                                             common::arm_hold_cancel(&recorder_cb, &tray_cb, &app_cb, toggle_mode);
                                         }
                                         if toggle_mode {
@@ -1330,7 +1367,9 @@ mod imp {
                             if keycode == target_keycode {
                                 let is_key_down = flags.contains(target_flag);
                                 if is_key_down {
-                                    if cancel_on_hold {
+                                    if cancel_on_hold
+                                        && common::should_arm_hold_cancel(&recorder_cb)
+                                    {
                                         common::arm_hold_cancel(&recorder_cb, &tray_cb, &app_cb, toggle_mode);
                                     }
                                 } else {
@@ -1628,7 +1667,7 @@ mod imp {
                         // Hold-to-cancel: arm a 1 s timer if the recorder
                         // is busy. Held past the deadline → cancel; released
                         // early → no-op and normal PTT semantics apply.
-                        if cancel_on_hold {
+                        if cancel_on_hold && common::should_arm_hold_cancel(&recorder) {
                             common::arm_hold_cancel(&recorder, &tray_icon, &app, toggle_mode);
                         }
                         if toggle_mode {

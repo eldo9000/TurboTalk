@@ -61,6 +61,12 @@ pub enum RejectReason {
     /// of (war,war,war) before the 4th position shifts to "warm-up", but 4
     /// bigrams of (war,war)).
     BigramRepetition,
+    /// A word repeats 3+ times and the immediately following distinct word
+    /// starts with that word as a strict prefix — Parakeet's specific failure
+    /// mode of emitting a partial syllable before resolving to the full word
+    /// (e.g. "war war war warm-up"). The bigram filter requires 4+ hits to
+    /// fire; this catches shorter bursts of 3.
+    PrefixFragmentRepetition,
     /// More than `GARBAGE_NON_LETTER_RATIO` of characters are not letters,
     /// digits, spaces, or common punctuation — likely all-zeros or junk.
     NonLetterJunk,
@@ -76,6 +82,8 @@ impl RejectReason {
                 "Repetition loop detected — the same phrase appeared too many times.",
             RejectReason::BigramRepetition =>
                 "Repetition loop detected — the same word was repeated too many times.",
+            RejectReason::PrefixFragmentRepetition =>
+                "Repetition loop detected — a partial syllable was repeated before the full word.",
             RejectReason::NonLetterJunk =>
                 "Junk characters detected — Whisper produced garbage output on silence.",
         }
@@ -168,6 +176,50 @@ pub fn detect_garbage(text: &str) -> Option<RejectReason> {
                     );
                     return Some(RejectReason::BigramRepetition);
                 }
+            }
+        }
+    }
+
+    // ── Signal 2c: prefix-fragment repetition ────────────────────────────────
+    // Parakeet-specific failure mode: emits the first syllable of a word N
+    // times before resolving to the full word (e.g. "war war war warm-up").
+    // The bigram filter requires 4+ consecutive bigram hits to fire; this
+    // catches shorter bursts of 3+ where the repeated token is a strict prefix
+    // of the next distinct word. Minimum fragment length of 2 skips
+    // single-letter false positives ("a a a about").
+    {
+        let words: Vec<&str> = text.split_whitespace().collect();
+        if words.len() >= 4 {
+            let mut i = 0;
+            while i < words.len() {
+                let fragment = words[i];
+                if fragment.len() < 2 {
+                    i += 1;
+                    continue;
+                }
+                let frag_lower = fragment.to_lowercase();
+                let mut run_end = i + 1;
+                while run_end < words.len()
+                    && words[run_end].to_lowercase() == frag_lower
+                {
+                    run_end += 1;
+                }
+                let run_len = run_end - i;
+                if run_len >= 3 && run_end < words.len() {
+                    let next_lower = words[run_end].to_lowercase();
+                    if next_lower.starts_with(frag_lower.as_str())
+                        && next_lower.len() > frag_lower.len()
+                    {
+                        tracing::debug!(
+                            "[detect_garbage] prefix-fragment {:?} ×{} before {:?}",
+                            fragment,
+                            run_len,
+                            words[run_end]
+                        );
+                        return Some(RejectReason::PrefixFragmentRepetition);
+                    }
+                }
+                i = if run_end > i + 1 { run_end } else { i + 1 };
             }
         }
     }
@@ -683,6 +735,11 @@ impl WhisperBackend {
         .env_clear()
         .stdout(std::process::Stdio::null())
         .stderr(stderr_stdio);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
 
         // TASK-56: Silero VAD pre-filter. When enabled, whisper-server skips
         // silent regions before the decoder runs, preventing hallucination on
@@ -1100,9 +1157,13 @@ pub fn kill_orphans() {
     }
     #[cfg(target_os = "windows")]
     {
-        let result = std::process::Command::new("taskkill")
-            .args(["/F", "/IM", "whisper-server.exe"])
-            .output();
+        let mut cmd = std::process::Command::new("taskkill");
+        cmd.args(["/F", "/IM", "whisper-server.exe"]);
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        let result = cmd.output();
         match result {
             Ok(out) if out.status.success() => {
                 tracing::info!("[transcribe] kill_orphans: terminated leftover whisper-server(s)");
@@ -1628,6 +1689,44 @@ mod tests {
             detect_garbage(text),
             None,
             "alternating pairs should not be flagged"
+        );
+    }
+
+    /// Prefix-fragment stutter with 3 repetitions — caught by Signal 2c.
+    /// "war war war warm-up" produces only 2 bigram (war,war) hits, below
+    /// the bigram threshold, but the prefix-fragment detector fires.
+    #[test]
+    fn detect_garbage_prefix_fragment_caught() {
+        let text = "Let's change the button to clear war war war warm-up cache.";
+        let result = detect_garbage(text);
+        assert_eq!(
+            result,
+            Some(RejectReason::PrefixFragmentRepetition),
+            "3-word prefix-fragment stutter should be caught, got {:?}",
+            result
+        );
+    }
+
+    /// Prefix-fragment with a single-letter fragment must NOT fire —
+    /// "a a a about" is legitimate hesitation speech.
+    #[test]
+    fn detect_garbage_single_letter_prefix_passes() {
+        let text = "I want to do a a a about that thing.";
+        assert_eq!(
+            detect_garbage(text),
+            None,
+            "single-letter prefix fragment should not be flagged"
+        );
+    }
+
+    /// Prefix-fragment where the run is only 2 (below threshold) must pass.
+    #[test]
+    fn detect_garbage_short_prefix_run_passes() {
+        let text = "Let's clear war war warm-up cache.";
+        assert_eq!(
+            detect_garbage(text),
+            None,
+            "run of 2 before prefix should not be flagged"
         );
     }
 
