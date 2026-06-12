@@ -264,7 +264,7 @@ Expected: `SignerCertificate` chain resolves to the code-signing CA and `Status`
 
 ## Update policy
 
-TurboTalk ships a **manual check-for-updates** button in the Settings tab. The Tauri updater plugin is wired and will check `https://github.com/eldo9000/TurboTalk-App/releases/latest/download/latest.json` when the user clicks "Check for updates." It does **not** check automatically on launch and does not run in the background — the check is strictly user-initiated and throttled to once per week via localStorage.
+TurboTalk ships a **manual check-for-updates** button in the Settings tab. The Tauri updater plugin is wired and will check `https://github.com/eldo9000/TurboTalk/releases/latest/download/latest.json` when the user clicks "Check for updates." It does **not** check automatically on launch and does not run in the background — the check is strictly user-initiated and throttled to once per week via localStorage.
 
 This is not a full auto-updater. Users who never click the button will not receive update prompts. Communicating new releases via direct message / release notes is still the primary distribution path for this beta.
 
@@ -352,7 +352,7 @@ Copy this into `RELEASE_NOTES.md` and fill in the `<placeholders>`. For a single
 
 Compare the Windows hash output against the contents of `TurboTalk-<version>-windows-x64-setup.exe.sha256`.
 
-**Feedback** — file an issue at https://github.com/eldo9000/TurboTalk-App/issues
+**Feedback** — file an issue at https://github.com/eldo9000/TurboTalk/issues
 ```
 
 ## Hotfix path

@@ -519,7 +519,7 @@ jobs:
           export NOTES PUB_DATE DARWIN_SIG_FILE TARBALL_NAME
           node - <<'NODE_EOF' > latest.json
           const fs = require('fs');
-          const base = 'https://github.com/eldo9000/TurboTalk-App/releases/download/' + process.env.TAG + '/';
+          const base = 'https://github.com/eldo9000/TurboTalk/releases/download/' + process.env.TAG + '/';
           const manifest = {
             version: process.env.VERSION,
             notes: process.env.NOTES,

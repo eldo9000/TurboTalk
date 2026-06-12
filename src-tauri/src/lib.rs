@@ -777,7 +777,7 @@ fn open_data_folder() -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 fn open_releases_page() -> Result<(), String> {
-    const RELEASES_URL: &str = "https://github.com/eldo9000/TurboTalk-App/releases/latest";
+    const RELEASES_URL: &str = "https://github.com/eldo9000/TurboTalk/releases/latest";
 
     open::that_in_background(RELEASES_URL);
     Ok(())

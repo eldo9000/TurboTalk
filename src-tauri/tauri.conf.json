@@ -89,7 +89,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFBREY0NTM2QUJBNDU0QTQKUldTa1ZLU3JOa1hmR25rQytkaDZjNkgrMzU0eWtVcGcvNmdiekl1VlpmMldZQmxmcGpncWRhelcK",
       "endpoints": [
-        "https://github.com/eldo9000/TurboTalk-App/releases/latest/download/latest.json"
+        "https://github.com/eldo9000/TurboTalk/releases/latest/download/latest.json"
       ]
     }
   },

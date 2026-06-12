@@ -6,11 +6,11 @@
 
 
 <p align="center">
-  <a href="https://github.com/eldo9000/TurboTalk-App/releases/latest/download/TurboTalk-macOS-arm64.dmg">
+  <a href="https://github.com/eldo9000/TurboTalk/releases/latest/download/TurboTalk-macOS-arm64.dmg">
     <img src="https://img.shields.io/badge/Download-macOS%20Apple%20Silicon-blue?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS (Apple Silicon)" />
   </a>
   &nbsp;
-  <a href="https://github.com/eldo9000/TurboTalk-App/releases/latest/download/TurboTalk-Windows-x64-setup.exe">
+  <a href="https://github.com/eldo9000/TurboTalk/releases/latest/download/TurboTalk-Windows-x64-setup.exe">
     <img src="https://img.shields.io/badge/Download-Windows%20x64%20Beta-0078d4?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows (x64) — Beta" />
   </a>
 </p>
