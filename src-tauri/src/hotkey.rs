@@ -347,6 +347,10 @@ pub(crate) mod common {
     // therefore spawn a worker thread and return immediately.
 
     pub(super) fn ptt_down(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
+        // Clear any stale CANCEL_PENDING flag set by a previous orphaned
+        // key-up (TASK-2). Without this the next legitimate press can
+        // instantly cancel itself.
+        CANCEL_PENDING.store(false, Ordering::Relaxed);
         if START_IN_FLIGHT.swap(true, Ordering::AcqRel) {
             tracing::debug!("[hotkey] start ignored — start already in flight");
             return;
@@ -516,31 +520,37 @@ pub(crate) mod common {
             // Drop on the floor so we don't fall into IllegalTransition and
             // arm CANCEL_PENDING for the next press.
             if try_consume_ptt_up_suppression() {
-                let _ = CURRENT_JOB_ID.lock().take();
-                let _ = FOCUS_AT_START.lock().take();
-                let _ = CURRENT_SEG_TRANSCRIBER.lock().take();
                 return;
             }
-            // Recover the job id allocated when this recording started. If the
-            // upstroke arrives without a matching downstroke (no in-flight job),
-            // we still call `rec.stop()` defensively but skip stage emissions.
-            let job_id_opt = CURRENT_JOB_ID.lock().take();
-            // Recover the focus identity captured at recording start. Outer
-            // `Option` = "was a recording in flight"; inner `Option<String>` =
-            // "did the macOS query succeed". We only compare-and-emit later if
-            // we actually have a job and reach the paste stage.
-            let focus_at_start: Option<String> = FOCUS_AT_START.lock().take().flatten();
-            // Recover the segment transcriber started at key-down. Used in the
-            // Wav arm to assemble concurrent segment results with the tail.
-            // Dropped automatically (joining its worker) in Discard / Err arms.
-            let seg_transcriber_opt = CURRENT_SEG_TRANSCRIBER.lock().take();
 
             // Tray-state policy: Recording icon only during literal capture; the
             // moment we enter FinalizingAudio (inside `rec.stop()`) the tray flips
             // to Transcribing and stays that way through Cleaning + Pasting.
             // Idle is restored exactly once at the end of the lifecycle.
+            //
+            // Stop the recorder BEFORE reading statics. In toggle mode, two
+            // rapid presses can spawn two ptt_up workers; the winner is the one
+            // whose rec.stop() succeeds. By calling stop() first and only
+            // taking statics on the Ok arms, we guarantee the winner reads
+            // the statics after initiating the stop transition.
             match rec.stop() {
                 Ok(StopOutcome::Wav { path, speech_detected }) => {
+                    // Only now, after rec.stop() succeeded, take the statics
+                    // that ptt_down wrote. The Err arm's loser takes nothing.
+                    // Recover the job id allocated when this recording started. If the
+                    // upstroke arrives without a matching downstroke (no in-flight job),
+                    // we still call `rec.stop()` defensively but skip stage emissions.
+                    let job_id_opt = CURRENT_JOB_ID.lock().take();
+                    // Recover the focus identity captured at recording start. Outer
+                    // `Option` = "was a recording in flight"; inner `Option<String>` =
+                    // "did the macOS query succeed". We only compare-and-emit later if
+                    // we actually have a job and reach the paste stage.
+                    let focus_at_start: Option<String> = FOCUS_AT_START.lock().take().flatten();
+                    // Recover the segment transcriber started at key-down. Used in the
+                    // Wav arm to assemble concurrent segment results with the tail.
+                    // Dropped automatically (joining its worker) in Discard / Err arms.
+                    let seg_transcriber_opt = CURRENT_SEG_TRANSCRIBER.lock().take();
+
                     // We are now in `FinalizingAudio` per recorder contract.
                     let _ = tray.set_icon(Some(tray::make_icon(TrayState::Transcribing)));
                     emit_critical(&app, "ptt-up", ());
@@ -786,6 +796,12 @@ pub(crate) mod common {
                     // `path` drops here → WAV file deleted from /tmp.
                 }
                 Ok(StopOutcome::Discard(reason)) => {
+                    // Take statics only after rec.stop() succeeded, matching
+                    // the Wav arm's post-stop read pattern.
+                    let job_id_opt = CURRENT_JOB_ID.lock().take();
+                    let focus_at_start: Option<String> = FOCUS_AT_START.lock().take().flatten();
+                    let seg_transcriber_opt = CURRENT_SEG_TRANSCRIBER.lock().take();
+
                     // Tail-empty recovery: when a silence-boundary segment cut
                     // takes all the audio just before stop(), the tail has 0
                     // samples and stop() returns TooShort. The segment
@@ -920,16 +936,12 @@ pub(crate) mod common {
                             CANCEL_PENDING.store(true, Ordering::Release);
                         } else {
                             tracing::debug!(
-                                "[hotkey job_id={:?}] idle key-up ignored without pending start",
-                                job_id_opt
+                                "idle key-up ignored without pending start"
                             );
                         }
                     }
-                    tracing::warn!("[hotkey job_id={:?}] stop ignored: {}", job_id_opt, e);
+                    tracing::warn!("stop ignored: {}", e);
                     let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                    if let Some(job_id) = job_id_opt {
-                        emit_stage(&app, job_id, "ready");
-                    }
                 }
             }
         });
