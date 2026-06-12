@@ -484,18 +484,11 @@ pub(crate) mod common {
             let job_id = next_job_id();
             *CURRENT_JOB_ID.lock() = Some(job_id);
 
-            // Capture the frontmost app at recording start (best-effort; may be
-            // `None` if osascript fails). Stored under its own mutex so the
-            // upstroke worker can recover it without entangling JOB_ID's lock.
-            // Logged with the job_id so a single grep gives the full lifecycle.
-            let focus_start = crate::paste::frontmost_app();
-            *FOCUS_AT_START.lock() = Some(focus_start.clone());
-            tracing::info!(
-                "[hotkey job_id={}] recording started focus_at_start={:?}",
-                job_id,
-                focus_start
-            );
-
+            // Emit the ptt-down event and start cue *before* the frontmost-app
+            // query so the user's "recording started" audio/visual feedback
+            // lands immediately. `frontmost_app()` spawns osascript (~50-200ms);
+            // audio capture is already running, so moving it after the cue is a
+            // pure latency win with no data loss (TASK-4).
             let _ = tray.set_icon(Some(tray::make_icon(TrayState::Recording)));
             // Pin the overlay window to the cursor's monitor *before* emitting
             // ptt-down so the recording UI never flashes on the wrong display.
@@ -505,6 +498,18 @@ pub(crate) mod common {
             emit_critical(&app, "ptt-down", ());
             emit_stage(&app, job_id, "recording");
             play_chime(ChimeEvent::Start);
+
+            // Capture the frontmost app at recording start (best-effort; may be
+            // `None` if the query fails). Stored under its own mutex so the
+            // upstroke worker can recover it without entangling JOB_ID's lock.
+            // Logged with the job_id so a single grep gives the full lifecycle.
+            let focus_start = crate::paste::frontmost_app();
+            *FOCUS_AT_START.lock() = Some(focus_start.clone());
+            tracing::info!(
+                "[hotkey job_id={}] recording started focus_at_start={:?}",
+                job_id,
+                focus_start
+            );
         });
     }
 

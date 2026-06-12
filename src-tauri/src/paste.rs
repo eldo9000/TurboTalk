@@ -1,5 +1,7 @@
 // Active-application text injection.
-// macOS: write to clipboard (arboard), send Cmd+V via osascript, restore prior clipboard.
+// macOS: write to clipboard (arboard), send Cmd+V via CGEventPost (native,
+// sub-millisecond — TASK-4), restore prior clipboard. `frontmost_app()` uses
+// NSWorkspace via objc2 instead of osascript (also sub-millisecond).
 // Other platforms: not supported — both entry points return a clear
 // "unsupported platform" signal so the caller (and the UI banner) can react.
 //
@@ -27,39 +29,46 @@
 // focused element at all. A pre-paste AX role check therefore produces
 // constant false "paste miss" reports even when injection succeeded.
 //
-// Success is defined by a successful osascript Cmd+V keystroke; the prior
-// clipboard is always restored afterward (same policy as the Windows branch).
+// Cmd+V is sent via CGEventPost (sub-millisecond native keystroke injection);
+// the prior clipboard is always restored afterward (same policy as the
+// Windows branch).
 
 #[cfg(target_os = "macos")]
 use arboard::Clipboard;
 
 /// Best-effort frontmost application identifier on macOS. Returns `None` if
-/// the osascript query fails for any reason (no Accessibility permission,
-/// process exit, malformed output). Callers must treat `None` as "unknown"
-/// and never block paste on it.
+/// the native NSWorkspace query fails for any reason. Callers must treat
+/// `None` as "unknown" and never block paste on it.
 ///
-/// We query the frontmost *process* name rather than bundle id because
-/// `System Events` exposes process name without the extra `tell application
-/// "Finder"` round-trip and without requiring Automation permission for each
-/// individual app. For the personal-use focus-change observability we want,
-/// the process name is sufficient.
+/// Uses `NSWorkspace.sharedWorkspace.frontmostApplication.localizedName`
+/// via the `objc2` crate — sub-millisecond native call, replaces the old
+/// `osascript` subprocess spawn (~50-200ms per dictation, TASK-4).
+/// The process name is sufficient for focus-change observability.
 #[cfg(target_os = "macos")]
 pub fn frontmost_app() -> Option<String> {
-    let out = std::process::Command::new("osascript")
-        .args([
-            "-e",
-            r#"tell application "System Events" to get name of first process whose frontmost is true"#,
-        ])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+
+    unsafe {
+        let workspace: *mut AnyObject = msg_send![objc2::class!(NSWorkspace), sharedWorkspace];
+        if workspace.is_null() {
+            return None;
+        }
+        let frontmost: *mut AnyObject = msg_send![workspace, frontmostApplication];
+        if frontmost.is_null() {
+            return None;
+        }
+        let name: *mut AnyObject = msg_send![frontmost, localizedName];
+        if name.is_null() {
+            return None;
+        }
+        // localizedName returns an autoreleased NSString*; convert via UTF8String.
+        let utf8: *const std::os::raw::c_char = msg_send![name, UTF8String];
+        if utf8.is_null() {
+            return None;
+        }
+        let c_str = std::ffi::CStr::from_ptr(utf8);
+        Some(c_str.to_string_lossy().into_owned())
     }
 }
 
@@ -136,13 +145,19 @@ fn focused_ax_role() -> Option<String> {
     }
 }
 
-/// Pastes `text` into the frontmost application.
+/// Pastes `text` into the frontmost application via native CGEventPost.
 ///
-/// Returns `Ok(true)` when the osascript Cmd+V keystroke succeeds — original
-/// clipboard is restored. Returns `Err` on a hard failure (osascript non-zero
-/// exit). AX role is logged at debug level for diagnostics only.
+/// Writes to clipboard, synthesizes Cmd+V via `CGEvent::new_keyboard_event` +
+/// `CGEventPost` (sub-millisecond, replaces the old `osascript` subprocess
+/// spawn — TASK-4), then restores the prior clipboard.
+///
+/// Returns `Ok(true)` when the keystroke is posted successfully. AX role is
+/// logged at debug level for diagnostics only.
 #[cfg(target_os = "macos")]
 pub fn paste(text: &str) -> anyhow::Result<bool> {
+    use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
     let mut cb = Clipboard::new()?;
     let prior = cb.get_text().ok();
 
@@ -151,24 +166,24 @@ pub fn paste(text: &str) -> anyhow::Result<bool> {
 
     cb.set_text(text)?;
 
-    // Small delay so the clipboard write is visible to the target app.
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    // kVK_ANSI_V from Carbon/HIToolbox/Events.h
+    const V_KEYCODE: u16 = 0x09;
 
-    let status = std::process::Command::new("osascript")
-        .args([
-            "-e",
-            r#"tell application "System Events" to keystroke "v" using command down"#,
-        ])
-        .status()?;
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+        .map_err(|()| anyhow::anyhow!("CGEventSource creation failed"))?;
 
-    if !status.success() {
-        // Hard osascript failure — restore clipboard and bail.
-        if let Some(prev) = prior {
-            let _ = cb.set_text(prev);
-        }
-        anyhow::bail!("osascript keystroke failed: {}", status);
+    // Key down with command modifier
+    if let Ok(key_down) = CGEvent::new_keyboard_event(source.clone(), V_KEYCODE, true) {
+        key_down.set_flags(CGEventFlags::CGEventFlagCommand);
+        key_down.post(CGEventTapLocation::HID);
     }
 
+    // Key up
+    if let Ok(key_up) = CGEvent::new_keyboard_event(source, V_KEYCODE, false) {
+        key_up.post(CGEventTapLocation::HID);
+    }
+
+    // Delay to let the paste land before restoring clipboard.
     std::thread::sleep(std::time::Duration::from_millis(150));
 
     if let Some(prev) = prior {
