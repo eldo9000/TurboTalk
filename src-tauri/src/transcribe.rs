@@ -563,10 +563,14 @@ pub trait TranscriptionBackend: Send + Sync {
     /// Callers inspect `TranscriptOutcome.rejection` to decide whether to paste.
     fn transcribe(&self, wav: &Path) -> anyhow::Result<TranscriptOutcome>;
 
-    /// Kill any in-flight work. After `abort()` the backend is in a broken
-    /// state — the caller must call `invalidate_worker()` and let the next
-    /// `run_raw` rebuild.
+    /// Cancel any in-flight work the backend can safely interrupt.
     fn abort(&self);
+
+    /// True when `abort()` leaves the backend unusable and the cached worker
+    /// must be rebuilt before the next dictation.
+    fn invalidate_after_abort(&self) -> bool {
+        true
+    }
 
     /// A stable string that uniquely identifies the loaded model (typically
     /// its canonicalized path). Used by `worker_for` to decide whether the
@@ -785,15 +789,37 @@ impl WhisperBackend {
         }
         let mut child = cmd.spawn()?;
 
-        // Quick early-exit check: if the process dies in the first 500 ms it's
-        // a binary/signature/ABI problem. Report the exit code immediately so
-        // we don't burn 30 s polling a dead process.
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        if let Ok(Some(status)) = child.try_wait() {
-            anyhow::bail!(
-                "whisper-server exited immediately (code {:?}) — check {}",
-                status.code(),
-                stderr_log.display()
+        // TASK-3: responsive readiness poll instead of a flat 500ms sleep.
+        // Check every 50ms whether the server has either died (binary/signature/
+        // ABI problem) or is already accepting connections. Break early if the
+        // server responds, saving up to 450ms per server start.
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        let mut server_started_early = false;
+        for _ in 0..10 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            // Did the process die immediately?
+            if let Ok(Some(status)) = child.try_wait() {
+                anyhow::bail!(
+                    "whisper-server exited immediately (code {:?}) — check {}",
+                    status.code(),
+                    stderr_log.display()
+                );
+            }
+            // Quick TCP health check — if the server is already accepting
+            // connections, skip the remaining sleep iterations.
+            if std::net::TcpStream::connect_timeout(
+                &addr,
+                std::time::Duration::from_millis(50),
+            )
+            .is_ok()
+            {
+                server_started_early = true;
+                break;
+            }
+        }
+        if server_started_early {
+            tracing::debug!(
+                "[transcribe] whisper-server accepted connections early in readiness poll"
             );
         }
 
@@ -908,7 +934,17 @@ impl WhisperBackend {
             .http_client
             .post(format!("http://127.0.0.1:{}/inference", self.server_port))
             .multipart(form)
-            .send()?;
+            .send()
+            .map_err(|e| {
+                if e.is_connect() || e.is_timeout() {
+                    tracing::warn!(
+                        "[transcribe] whisper-server appears dead ({}): invalidating cached worker",
+                        e
+                    );
+                    invalidate_worker();
+                }
+                e
+            })?;
 
         if !response.status().is_success() {
             anyhow::bail!("whisper-server returned {}", response.status());
@@ -1010,11 +1046,16 @@ static WORKER: Mutex<Option<std::sync::Arc<dyn TranscriptionBackend>>> = Mutex::
 /// dictation rebuilds it (and thus restarts the server).
 pub fn abort_active() {
     let slot = WORKER.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(worker) = &*slot {
+    let should_invalidate = if let Some(worker) = &*slot {
         worker.abort();
-    }
+        worker.invalidate_after_abort()
+    } else {
+        false
+    };
     drop(slot); // release WORKER lock before calling invalidate_worker
-    invalidate_worker();
+    if should_invalidate {
+        invalidate_worker();
+    }
 }
 
 /// Drop the cached worker. Called by `settings::save` (via `lib.rs`) when the
@@ -1219,6 +1260,33 @@ pub fn prewarm(cfg: crate::settings::Config, app: tauri::AppHandle) {
     });
 }
 
+/// Check whether `err` is a connection-level failure (refused, reset,
+/// broken pipe, timeout) from the whisper-server HTTP POST. Used by
+/// `run_raw` to decide whether to invalidate the dead worker and retry.
+fn is_connection_error(err: &anyhow::Error) -> bool {
+    use std::error::Error;
+    let mut source: Option<&(dyn Error + 'static)> = err.source();
+    while let Some(e) = source {
+        if let Some(req_err) = e.downcast_ref::<reqwest::Error>() {
+            if req_err.is_connect() || req_err.is_timeout() {
+                return true;
+            }
+        }
+        if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
+            let kind = io_err.kind();
+            if kind == std::io::ErrorKind::ConnectionRefused
+                || kind == std::io::ErrorKind::ConnectionReset
+                || kind == std::io::ErrorKind::BrokenPipe
+                || kind == std::io::ErrorKind::TimedOut
+            {
+                return true;
+            }
+        }
+        source = e.source();
+    }
+    false
+}
+
 /// Run whisper transcription on `wav` and return a `TranscriptOutcome`.
 ///
 /// This function is responsible only for the Whisper stage: locating the
@@ -1232,10 +1300,29 @@ pub fn prewarm(cfg: crate::settings::Config, app: tauri::AppHandle) {
 ///
 /// TASK-55: the returned `TranscriptOutcome.rejection` signals hallucination.
 /// Callers must skip paste when `rejection.is_some()`.
+///
+/// TASK-3: on connection-level failure (server crash / OOM kill), the dead
+/// worker is invalidated and a fresh server is started for a single inline
+/// retry. If the retry also fails, the error propagates as before.
 pub fn run_raw(wav: &Path) -> anyhow::Result<TranscriptOutcome> {
     let cfg = crate::settings::load();
     let worker = worker_for(&cfg)?;
-    worker.transcribe(wav)
+    match worker.transcribe(wav) {
+        Ok(outcome) => Ok(outcome),
+        Err(e) => {
+            if is_connection_error(&e) {
+                tracing::warn!(
+                    "[transcribe] whisper-server connection lost, retrying after worker rebuild"
+                );
+                // worker was already invalidated inside transcribe() above;
+                // worker_for will build a fresh backend.
+                let worker = worker_for(&cfg)?;
+                worker.transcribe(wav)
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 // ── Segment transcription queue (TASK-54B) ───────────────────────────────────
@@ -1649,6 +1736,20 @@ mod tests {
         assert!(
             result.is_some(),
             "'the the the...' repetition should be flagged, got None"
+        );
+    }
+
+    /// Regression for 2026-06-12 Parakeet loop: "feel" repeated in-place was
+    /// correctly detected as a trigram loop and must remain blocked upstream.
+    #[test]
+    fn detect_garbage_feel_loop_flagged() {
+        let text = "I feel feel feel feel feel feel feel feel feel feel like this should never paste.";
+        let result = detect_garbage(text);
+        assert_eq!(
+            result,
+            Some(RejectReason::TrigramRepetition),
+            "'feel feel feel...' repetition should be flagged, got {:?}",
+            result
         );
     }
 

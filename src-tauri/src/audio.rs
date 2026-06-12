@@ -162,6 +162,11 @@ pub struct AudioCapture {
     /// stream is closed so a stale capacity from the previous device's
     /// rate/channels can never affect the next stream's ring.
     preroll_capacity: Arc<AtomicUsize>,
+    /// Reusable scratch buffer for i16/u16 sample-format callbacks.
+    /// Pre-allocated and cleared (not reallocated) each callback so the
+    /// audio thread never heap-allocates. f32 is the common path and
+    /// doesn't need conversion, so this field stays cold on most devices.
+    callback_scratch: Arc<Mutex<Vec<f32>>>,
 }
 
 /// Why a recording was thrown away instead of returning a WAV path.
@@ -390,6 +395,7 @@ impl AudioCapture {
             feeder_cursor: Arc::new(AtomicUsize::new(0)),
             preroll: Arc::new(Mutex::new(VecDeque::new())),
             preroll_capacity: Arc::new(AtomicUsize::new(0)),
+            callback_scratch: Arc::new(Mutex::new(Vec::with_capacity(4096))),
         };
         capture.spawn_watchdog();
         Ok(capture)
@@ -592,42 +598,48 @@ impl AudioCapture {
                     None,
                 )?
             }
-            cpal::SampleFormat::I16 => device.build_input_stream(
-                &config.into(),
-                move |data: &[i16], _: &_| {
-                    let floats: Vec<f32> =
-                        data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
-                    let cap = pre_cap.load(Ordering::Relaxed);
-                    push_preroll(&pre, cap, &floats);
-                    if rec.load(Ordering::Relaxed) {
-                        smp.lock().extend_from_slice(&floats);
-                        lvl.store(rms(&floats).to_bits(), Ordering::Relaxed);
-                    } else {
-                        lvl.store(0_f32.to_bits(), Ordering::Relaxed);
-                    }
-                },
-                err_fn,
-                None,
-            )?,
-            cpal::SampleFormat::U16 => device.build_input_stream(
-                &config.into(),
-                move |data: &[u16], _: &_| {
-                    let floats: Vec<f32> = data
-                        .iter()
-                        .map(|&s| (s as f32 - 32768.0) / 32768.0)
-                        .collect();
-                    let cap = pre_cap.load(Ordering::Relaxed);
-                    push_preroll(&pre, cap, &floats);
-                    if rec.load(Ordering::Relaxed) {
-                        smp.lock().extend_from_slice(&floats);
-                        lvl.store(rms(&floats).to_bits(), Ordering::Relaxed);
-                    } else {
-                        lvl.store(0_f32.to_bits(), Ordering::Relaxed);
-                    }
-                },
-                err_fn,
-                None,
-            )?,
+            cpal::SampleFormat::I16 => {
+                let scratch = self.callback_scratch.clone();
+                device.build_input_stream(
+                    &config.into(),
+                    move |data: &[i16], _: &_| {
+                        let mut floats = scratch.lock();
+                        floats.clear();
+                        floats.extend(data.iter().map(|&s| s as f32 / i16::MAX as f32));
+                        let cap = pre_cap.load(Ordering::Relaxed);
+                        push_preroll(&pre, cap, &floats);
+                        if rec.load(Ordering::Relaxed) {
+                            smp.lock().extend_from_slice(&floats);
+                            lvl.store(rms(&floats).to_bits(), Ordering::Relaxed);
+                        } else {
+                            lvl.store(0_f32.to_bits(), Ordering::Relaxed);
+                        }
+                    },
+                    err_fn,
+                    None,
+                )?
+            }
+            cpal::SampleFormat::U16 => {
+                let scratch = self.callback_scratch.clone();
+                device.build_input_stream(
+                    &config.into(),
+                    move |data: &[u16], _: &_| {
+                        let mut floats = scratch.lock();
+                        floats.clear();
+                        floats.extend(data.iter().map(|&s| (s as f32 - 32768.0) / 32768.0));
+                        let cap = pre_cap.load(Ordering::Relaxed);
+                        push_preroll(&pre, cap, &floats);
+                        if rec.load(Ordering::Relaxed) {
+                            smp.lock().extend_from_slice(&floats);
+                            lvl.store(rms(&floats).to_bits(), Ordering::Relaxed);
+                        } else {
+                            lvl.store(0_f32.to_bits(), Ordering::Relaxed);
+                        }
+                    },
+                    err_fn,
+                    None,
+                )?
+            }
             other => anyhow::bail!("unsupported sample format: {:?}", other),
         };
 
@@ -974,7 +986,6 @@ impl AudioCapture {
         // Reduced from 25 ms — one full CoreAudio buffer cycle is sufficient margin.
         std::thread::sleep(Duration::from_millis(10));
 
-        let t_capture_clone_start = Instant::now();
         // Read sample-rate / channels from the warm stream. The mic-warmth
         // block below decides whether to leave the stream warm (watchdog
         // closes it after `idle_timeout_secs`) or drop it right now (OFF).
@@ -991,17 +1002,7 @@ impl AudioCapture {
         // warm stream right now if the user chose OFF — macOS will release
         // the input session and system audio routing returns to normal
         // before transcription even runs.
-        let warmth = idle_timeout_from_settings();
-        if warmth.is_zero() {
-            *self.warm_stream.lock() = None;
-            *self.warm_device_name.lock() = None;
-            self.preroll.lock().clear();
-            self.preroll_capacity.store(0, Ordering::SeqCst);
-            *self.idle_close_at.lock() = None;
-            tracing::info!("[audio] stream closed (mic warmth OFF)");
-        } else {
-            *self.idle_close_at.lock() = Some(Instant::now() + warmth);
-        }
+        self.arm_or_close_warm_stream();
 
         // Signal the capture-feeder to drain remaining samples and
         // exit, then join it. After this the streaming worker has
@@ -1012,20 +1013,8 @@ impl AudioCapture {
             let _ = h.join();
         }
 
-        // Snapshot the canonical buffer for the batch-fallback path
-        // before we tear down the streaming finalizer. Cheap: this is
-        // the same `buf.clone()` the legacy path used.
-        let buf_full = self.samples.lock().clone();
-        let capture_clone_ms = t_capture_clone_start.elapsed().as_secs_f32() * 1000.0;
-
-        tracing::info!(
-            "[audio] {} samples captured ({} Hz, {} ch — pre-resample)",
-            buf_full.len(),
-            src_sample_rate,
-            src_channels
-        );
-
         // Try the streaming finalizer first.
+        let mut capture_clone_ms = 0.0f32;
         let streaming = self.streaming.lock().take();
         if let Some(finalizer) = streaming {
             let t_streaming_finish = Instant::now();
@@ -1061,6 +1050,17 @@ impl AudioCapture {
         // path is degraded (worker init failure, mid-stream VAD/
         // resampler error). Preserved verbatim so a streaming
         // regression can never lose a recording.
+        let t_capture_clone_start = Instant::now();
+        let buf_full = self.samples.lock().clone();
+        capture_clone_ms = t_capture_clone_start.elapsed().as_secs_f32() * 1000.0;
+
+        tracing::info!(
+            "[audio] {} samples captured ({} Hz, {} ch — pre-resample, batch fallback)",
+            buf_full.len(),
+            src_sample_rate,
+            src_channels
+        );
+
         let t_downmix_start = Instant::now();
         let buf = downmix_to_mono(&buf_full, src_channels);
         let downmix_ms = t_downmix_start.elapsed().as_secs_f32() * 1000.0;
