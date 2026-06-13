@@ -1,0 +1,39 @@
+#!/bin/bash
+# Post-commit: attach crash-log summary as a git note on HEAD.
+#
+# Installed by /instrument. Reads the last 50 log lines from the repo's
+# .logs/<app>.jsonl, counts errors/warnings, and attaches a summary to
+# HEAD under refs/notes/crash-log.
+#
+# Gated by: .logs/config.json → git_notes_enabled
+
+NOTES_REF="refs/notes/crash-log"
+CONFIG_FILE=".logs/config.json"
+
+# Respect the git_notes_enabled flag
+if [ -f "$CONFIG_FILE" ]; then
+    ENABLED=$(jq -r '.git_notes_enabled' "$CONFIG_FILE" 2>/dev/null)
+    if [ "$ENABLED" = "false" ]; then
+        exit 0
+    fi
+fi
+
+# Read app name from config, fall back to basename of repo
+APP_NAME=$(jq -r '.app_name' "$CONFIG_FILE" 2>/dev/null || echo 'app')
+LOG_FILE=".logs/${APP_NAME}.jsonl"
+
+# Build summary from last 50 log lines
+if [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
+    ERRORS=$(tail -50 "$LOG_FILE" | grep '"level":"error"' | wc -l | tr -d ' ')
+    WARNS=$(tail -50 "$LOG_FILE" | grep '"level":"warn"' | wc -l | tr -d ' ')
+    EVENTS=$(tail -50 "$LOG_FILE" | wc -l | tr -d ' ')
+    SUMMARY="events:${EVENTS} errors:${ERRORS} warns:${WARNS} status:ok"
+    if [ "$ERRORS" -gt 0 ]; then
+        LAST_ERROR=$(tail -50 "$LOG_FILE" | grep '"level":"error"' | tail -1 | jq -r '.event' 2>/dev/null || echo 'unknown')
+        SUMMARY="events:${EVENTS} errors:${ERRORS} warns:${WARNS} status:errors last_error:${LAST_ERROR}"
+    fi
+else
+    SUMMARY="events:0 errors:0 warns:0 status:no-log"
+fi
+
+git notes --ref="$NOTES_REF" add -m "[crash-log] ${SUMMARY}" HEAD 2>/dev/null || true

@@ -1,0 +1,18 @@
+#!/bin/bash
+# Post-push: push crash-log notes to remote so the trail survives log cleanup.
+#
+# Installed by /instrument. Pushes refs/notes/crash-log after every push.
+# Gated by: .logs/config.json → git_notes_enabled
+
+NOTES_REF="refs/notes/crash-log"
+CONFIG_FILE=".logs/config.json"
+
+# Respect the git_notes_enabled flag
+if [ -f "$CONFIG_FILE" ]; then
+    ENABLED=$(jq -r '.git_notes_enabled' "$CONFIG_FILE" 2>/dev/null)
+    if [ "$ENABLED" = "false" ]; then
+        exit 0
+    fi
+fi
+
+git push origin "$NOTES_REF" 2>/dev/null || true

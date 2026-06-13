@@ -1,0 +1,9 @@
+{
+  "tier": "comprehensive",
+  "version": 1,
+  "app_name": "turbotalk",
+  "rotation_max_mb": 10,
+  "rotation_keep": 5,
+  "git_notes_enabled": true,
+  "git_notes_ref": "refs/notes/crash-log"
+}

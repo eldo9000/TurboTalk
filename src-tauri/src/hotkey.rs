@@ -720,7 +720,15 @@ pub(crate) mod common {
                                     if clean_parts.is_empty() {
                                         None
                                     } else {
-                                        Some(clean_parts.join(" "))
+                                        let reassembled = clean_parts.join(" ");
+                                        // Re-check reassembled text — individual parts may each
+                                        // have too few repetitions to trip the filter, but
+                                        // together they form a repetition loop.
+                                        if crate::transcribe::detect_garbage(&reassembled).is_some() {
+                                            None
+                                        } else {
+                                            Some(reassembled)
+                                        }
                                     }
                                 } else if !seg_garbage && !seg_part.is_empty() {
                                     Some(seg_part)
