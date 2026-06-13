@@ -40,7 +40,7 @@ Dev port: **1428**. For a packaged DMG: `npm run package` (produces `dist-artifa
 See `docs/ARCHITECTURE.md` for the full module plan. Key modules in `src-tauri/src/`:
 
 - `audio.rs` — mic capture via `cpal`; keeps stream warm between recordings (45s idle-close watchdog)
-- `recorder.rs` — 3-state machine (Ready / Recording / Transcribing)
+- `recorder.rs` — 6-state dictation lifecycle (Ready / Recording / FinalizingAudio / Transcribing / Cleaning / Pasting)
 - `transcribe.rs` — whisper.cpp sidecar wrapper; 300ms pre-roll ring buffer for leading-word preservation
 - `paste.rs` — active-app text injection (arboard + osascript on macOS)
 - `hotkey.rs` — global push-to-talk via CGEventTap (macOS); stub on other platforms

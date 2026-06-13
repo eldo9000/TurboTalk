@@ -818,13 +818,8 @@ pub(crate) mod common {
                                 }
                                 let paste_text = format!("{} ", final_text);
                                 match crate::paste::paste(&paste_text) {
-                                    Ok(true) => {
+                                    Ok(_) => {
                                         play_chime(ChimeEvent::Finish);
-                                    }
-                                    Ok(false) => {
-                                        tracing::warn!("[paste job_id={:?}] no focused text element — text left in clipboard", job_id_opt);
-                                        play_chime(ChimeEvent::Finish);
-                                        emit_critical(&app, "paste-miss", "Paste missed — text is in your clipboard".to_string());
                                     }
                                     Err(e) => {
                                         tracing::error!("[paste job_id={:?}] {:?}", job_id_opt, e);
@@ -939,13 +934,8 @@ pub(crate) mod common {
                             }
                             let paste_text = format!("{} ", final_text);
                             match crate::paste::paste(&paste_text) {
-                                Ok(true) => {
+                                Ok(_) => {
                                     play_chime(ChimeEvent::Finish);
-                                }
-                                Ok(false) => {
-                                    tracing::warn!("[paste job_id={:?}] no focused text element — text left in clipboard", job_id_opt);
-                                    play_chime(ChimeEvent::Finish);
-                                    emit_critical(&app, "paste-miss", "Paste missed — text is in your clipboard".to_string());
                                 }
                                 Err(e) => {
                                     tracing::error!("[paste job_id={:?}] {:?}", job_id_opt, e);
@@ -1069,13 +1059,8 @@ pub(crate) mod common {
                                     }
                                     let paste_text = format!("{} ", final_text);
                                     match crate::paste::paste(&paste_text) {
-                                        Ok(true) => {
+                                        Ok(_) => {
                                             play_chime(ChimeEvent::Finish);
-                                        }
-                                        Ok(false) => {
-                                            tracing::warn!("[paste job_id={:?}] (seg-recovery) no focused text element — text left in clipboard", job_id_opt);
-                                            play_chime(ChimeEvent::Finish);
-                                            emit_critical(&app, "paste-miss", "Paste missed — text is in your clipboard".to_string());
                                         }
                                         Err(e) => {
                                             tracing::error!("[paste job_id={:?}] (seg-recovery) {:?}", job_id_opt, e);
@@ -1325,17 +1310,14 @@ mod imp {
 
         // Read current config to check if this button is our trigger.
         // Keep the read lock as short as possible.
-        let (is_our_button, toggle_mode, cancel_on_hold) = {
+        let (toggle_mode, cancel_on_hold) = {
             let hk = context.hotkey_state.read();
             let target = hid_mouse_usage_for_name(&hk.key);
             if target != Some(usage) {
                 return; // fast path: not the configured button
             }
-            (true, hk.mode == "toggle", hk.cancel_on_hold)
+            (hk.mode == "toggle", hk.cancel_on_hold)
         };
-        if !is_our_button {
-            return;
-        }
         // Lock is dropped — ptt_* may write to settings or app state.
 
         let bit = hid_usage_bit(usage);

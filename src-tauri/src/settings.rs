@@ -275,9 +275,14 @@ impl Default for HotkeyConfig {
         #[cfg(not(target_os = "macos"))]
         let key = "right_control";
 
+        #[cfg(target_os = "windows")]
+        let mode = "toggle";
+        #[cfg(not(target_os = "windows"))]
+        let mode = "hold";
+
         Self {
             key: key.into(),
-            mode: "hold".into(),
+            mode: mode.into(),
             cancel_on_esc: true,
             cancel_on_hold: true,
         }
@@ -305,11 +310,6 @@ pub fn migrate_platform_defaults(cfg: &mut Config) -> bool {
                 "[settings] Windows: migrating hotkey right_option → right_control"
             );
             cfg.hotkey.key = "right_control".into();
-            changed = true;
-        }
-        if cfg.hotkey.mode == "toggle" {
-            tracing::info!("[settings] Windows: migrating hotkey mode toggle → hold");
-            cfg.hotkey.mode = "hold".into();
             changed = true;
         }
         changed
@@ -552,6 +552,18 @@ pub fn load() -> Config {
     let cfg = load_detailed().config;
     *cache().write() = Some(cfg.clone());
     cfg
+}
+
+/// Read `cursor_dot_indicator` from the cached config without cloning the
+/// full `Config`. Returns `false` when the cache is cold (before first load).
+/// Called at 50ms intervals from the level thread — avoids cloning the
+/// vocabulary `Vec<String>` and other fields that the thread never reads.
+pub fn cursor_dot_indicator_enabled() -> bool {
+    cache()
+        .read()
+        .as_ref()
+        .map(|c| c.cursor_dot_indicator)
+        .unwrap_or(false)
 }
 
 /// Eagerly populate the cache from disk. Idempotent — subsequent calls are

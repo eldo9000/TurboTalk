@@ -291,24 +291,8 @@ fn is_allowed_whisper_path(p: &Path) -> bool {
     roots.iter().any(|root| canon.starts_with(root))
 }
 
-/// Build the list of candidate sidecar filenames for whisper-cli, in priority
-/// order. Kept for path-validation tests.
-#[allow(dead_code)]
-fn sidecar_candidates() -> Vec<String> {
-    let triple = env!("TARGET_TRIPLE");
-    let exe_suffix = if triple.contains("windows") {
-        ".exe"
-    } else {
-        ""
-    };
-    vec![
-        format!("whisper-cli{}", exe_suffix),
-        format!("whisper-cli-{}{}", triple, exe_suffix),
-    ]
-}
-
 /// Build the list of candidate sidecar filenames for whisper-server, in
-/// priority order. Mirrors `sidecar_candidates()` but for the server binary.
+/// priority order.
 fn server_sidecar_candidates() -> Vec<String> {
     let triple = env!("TARGET_TRIPLE");
     let exe_suffix = if triple.contains("windows") {
@@ -320,53 +304,6 @@ fn server_sidecar_candidates() -> Vec<String> {
         format!("whisper-server{}", exe_suffix),
         format!("whisper-server-{}{}", triple, exe_suffix),
     ]
-}
-
-/// Locate the whisper-cli binary (used only for path-validation tests; the
-/// live transcription path now uses `find_whisper_server`).
-/// Priority: bundled sidecar (next to exe) → dev binaries dir → configured path.
-#[allow(dead_code)]
-fn find_whisper(configured_bin: &str) -> anyhow::Result<PathBuf> {
-    let sidecars = sidecar_candidates();
-
-    if let Ok(exe) = std::env::current_exe() {
-        let parent = exe.parent().unwrap_or_else(|| Path::new("."));
-        for sidecar in &sidecars {
-            let p = parent.join(sidecar);
-            if p.exists() {
-                tracing::debug!("[transcribe] using bundled sidecar: {:?}", p);
-                return Ok(p);
-            }
-        }
-    }
-
-    #[cfg(debug_assertions)]
-    {
-        for sidecar in &sidecars {
-            let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("binaries")
-                .join(sidecar);
-            if dev.exists() {
-                tracing::debug!("[transcribe] using dev sidecar: {:?}", dev);
-                return Ok(dev);
-            }
-        }
-    }
-
-    let configured = PathBuf::from(configured_bin);
-    if !configured.exists() || !is_allowed_whisper_path(&configured) {
-        tracing::error!(
-            "[transcribe] whisper-cli sidecar not found (checked bundle and dev paths); \
-             configured bin: {}",
-            configured_bin
-        );
-        anyhow::bail!(
-            "Whisper sidecar not found. Reinstall the app or check that whisper-cli exists \
-             in the app bundle."
-        );
-    }
-    tracing::debug!("[transcribe] using configured bin: {}", configured_bin);
-    Ok(configured)
 }
 
 /// Locate the whisper-server binary.

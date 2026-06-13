@@ -1979,6 +1979,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    librewin_common::logging::init(env!("CARGO_PKG_NAME"));
     let _ = diagnostic_log::ensure_log_dir();
     let log_dir = diagnostic_log::log_dir();
 
@@ -2423,9 +2424,8 @@ pub fn run() {
                 }
 
                 // Cursor-dot indicator: follow mouse while recording or transcribing.
-                let cfg = settings::load();
                 let is_busy = level_rec.state().is_busy();
-                if cfg.cursor_dot_indicator && is_busy {
+                if settings::cursor_dot_indicator_enabled() && is_busy {
                     if let Ok(cursor) = level_app.cursor_position() {
                         if let Some(dot) = level_app.get_webview_window("cursor-dot") {
                             if !dot_was_visible {
