@@ -115,11 +115,8 @@ fn focused_ax_role() -> Option<String> {
 
         let attr_focused = CFString::new("AXFocusedUIElement");
         let mut focused: CFTypeRef = ptr::null();
-        let err = AXUIElementCopyAttributeValue(
-            system,
-            attr_focused.as_concrete_TypeRef(),
-            &mut focused,
-        );
+        let err =
+            AXUIElementCopyAttributeValue(system, attr_focused.as_concrete_TypeRef(), &mut focused);
         CFRelease(system);
 
         if err != AX_SUCCESS || focused.is_null() {
@@ -128,11 +125,8 @@ fn focused_ax_role() -> Option<String> {
 
         let attr_role = CFString::new("AXRole");
         let mut role_ref: CFTypeRef = ptr::null();
-        let err2 = AXUIElementCopyAttributeValue(
-            focused,
-            attr_role.as_concrete_TypeRef(),
-            &mut role_ref,
-        );
+        let err2 =
+            AXUIElementCopyAttributeValue(focused, attr_role.as_concrete_TypeRef(), &mut role_ref);
         CFRelease(focused);
 
         if err2 != AX_SUCCESS || role_ref.is_null() {

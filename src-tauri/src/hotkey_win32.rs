@@ -82,8 +82,8 @@ fn vk_codes_for_name(name: &str) -> &'static [u32] {
         "f24" => &[0x87],
         // Mouse extra buttons — users must disable native back/forward action
         // in their mouse software to avoid double-firing.
-        "mouse_middle"  => &[0x04], // VK_MBUTTON
-        "mouse_back"    => &[0x05], // VK_XBUTTON1
+        "mouse_middle" => &[0x04],  // VK_MBUTTON
+        "mouse_back" => &[0x05],    // VK_XBUTTON1
         "mouse_forward" => &[0x06], // VK_XBUTTON2
         _ => &[],
     }
@@ -152,9 +152,7 @@ impl PollContext {
             self.down.store(true, Ordering::Release);
             MATCHED_DOWN_COUNT.fetch_add(1, Ordering::Relaxed);
             LAST_MATCHED_VK.store(vk, Ordering::Relaxed);
-            tracing::info!(
-                "[hotkey] win32 poll key down vk=0x{vk:02X} config={config_key}"
-            );
+            tracing::info!("[hotkey] win32 poll key down vk=0x{vk:02X} config={config_key}");
             if cancel_on_hold && common::should_arm_hold_cancel(&self.recorder) {
                 common::arm_hold_cancel(&self.recorder, &self.tray_icon, &self.app, toggle_mode);
             }

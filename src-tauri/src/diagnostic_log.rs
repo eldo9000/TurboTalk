@@ -145,6 +145,7 @@ struct SanitizedConfig {
     audio_device: String,
     cleanup_mode: String,
     show_overlay: bool,
+    overlay_size: String,
     theme: String,
 }
 
@@ -159,6 +160,7 @@ fn sanitized_config(cfg: &crate::settings::Config) -> SanitizedConfig {
         audio_device: cfg.audio.device.clone(),
         cleanup_mode: format!("{:?}", cfg.cleanup.mode),
         show_overlay: cfg.show_overlay,
+        overlay_size: cfg.overlay_size.clone(),
         theme: cfg.theme.clone(),
     }
 }
@@ -202,6 +204,48 @@ fn read_recent_logs(prefix: &str, cap: usize) -> String {
     }
 }
 
+#[derive(Serialize)]
+struct BackendBundleInventory {
+    family: String,
+    variant: String,
+    path: String,
+    valid: bool,
+}
+
+fn backend_bundle_inventory() -> Vec<BackendBundleInventory> {
+    let mut out = Vec::new();
+
+    #[cfg(feature = "moonshine")]
+    for variant in ["tiny", "base"] {
+        if let Some(path) = crate::transcribe_backends::moonshine::variant_dir(variant) {
+            let valid =
+                crate::transcribe_backends::moonshine::validate_moonshine_model_dir(&path).is_ok();
+            out.push(BackendBundleInventory {
+                family: "moonshine".into(),
+                variant: variant.into(),
+                path: path.to_string_lossy().into_owned(),
+                valid,
+            });
+        }
+    }
+
+    #[cfg(feature = "parakeet")]
+    for variant in ["tdt-0.6b-v2", "tdt-0.6b-v3"] {
+        if let Some(path) = crate::transcribe_backends::parakeet::variant_dir(variant) {
+            let valid =
+                crate::transcribe_backends::parakeet::validate_parakeet_model_dir(&path).is_ok();
+            out.push(BackendBundleInventory {
+                family: "parakeet".into(),
+                variant: variant.into(),
+                path: path.to_string_lossy().into_owned(),
+                valid,
+            });
+        }
+    }
+
+    out
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn log_client_event(event: String, detail: Option<String>) -> Result<(), String> {
@@ -227,6 +271,10 @@ pub async fn build_report_text(note: Option<&str>) -> String {
     let cfg = crate::settings::load();
     let client_events: Vec<String> = client_events().lock().iter().cloned().collect();
     let log_body = read_recent_logs(MAIN_LOG_PREFIX, MAX_LOG_TAIL_BYTES);
+    let error_log_body = read_recent_logs(ERROR_LOG_PREFIX, MAX_LOG_TAIL_BYTES / 2);
+    let history_meta = crate::settings::load_history_detailed();
+    let model_inventory = crate::settings::scan_models_dir();
+    let backend_bundles = backend_bundle_inventory();
 
     let mut out = String::new();
     let _ = writeln!(out, "=== TurboTalk diagnostic report ===");
@@ -238,11 +286,71 @@ pub async fn build_report_text(note: Option<&str>) -> String {
         std::env::consts::OS,
         std::env::consts::ARCH
     );
+    let _ = writeln!(out, "debug_build: {}", cfg!(debug_assertions));
+    let _ = writeln!(
+        out,
+        "features: moonshine={} parakeet={} telegram_bugreport={}",
+        cfg!(feature = "moonshine"),
+        cfg!(feature = "parakeet"),
+        cfg!(feature = "dev-telegram-bugreport")
+    );
+    let _ = writeln!(
+        out,
+        "current_exe: {}",
+        std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|e| format!("error: {e}"))
+    );
+    let _ = writeln!(
+        out,
+        "current_dir: {}",
+        std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|e| format!("error: {e}"))
+    );
 
     if let Some(note) = note {
         let _ = writeln!(out);
         let _ = writeln!(out, "=== Reporter note ===");
         let _ = writeln!(out, "{note}");
+    }
+    let _ = writeln!(out);
+
+    let _ = writeln!(out, "=== Runtime context ===");
+    let _ = writeln!(out, "data_dir: {}", crate::settings::data_dir().display());
+    let _ = writeln!(out, "log_dir: {}", log_dir().display());
+    let _ = writeln!(
+        out,
+        "newest_main_log: {}",
+        newest_main_log()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(none)".into())
+    );
+    let _ = writeln!(
+        out,
+        "history_entries_loaded: {}",
+        history_meta.entries.len()
+    );
+    let _ = writeln!(out, "history_entries_dropped: {}", history_meta.dropped);
+    let models_json =
+        serde_json::to_string_pretty(&model_inventory).unwrap_or_else(|_| "[]".into());
+    let _ = writeln!(out, "installed_whisper_models: {models_json}");
+    let backend_bundles_json =
+        serde_json::to_string_pretty(&backend_bundles).unwrap_or_else(|_| "[]".into());
+    let _ = writeln!(out, "backend_model_bundles: {backend_bundles_json}");
+    #[cfg(target_os = "macos")]
+    {
+        let sw_vers = std::process::Command::new("sw_vers").output();
+        let sw_vers = sw_vers
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "(unavailable)".into());
+        let _ = writeln!(out, "sw_vers: {}", sw_vers.replace('\n', " | "));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = writeln!(out, "os_version: (not collected on this platform yet)");
     }
     let _ = writeln!(out);
 
@@ -284,13 +392,21 @@ pub async fn build_report_text(note: Option<&str>) -> String {
     let _ = writeln!(out, "dir: {}", log_dir().display());
     let _ = writeln!(out);
     let _ = write!(out, "{log_body}");
+    let _ = writeln!(out);
+    let _ = writeln!(out);
+    let _ = writeln!(out, "=== Error log ===");
+    let _ = writeln!(out, "dir: {}", log_dir().display());
+    let _ = writeln!(out);
+    let _ = write!(out, "{error_log_body}");
 
     out
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn export_diagnostic_report(note: Option<String>) -> Result<ExportDiagnosticResult, String> {
+pub async fn export_diagnostic_report(
+    note: Option<String>,
+) -> Result<ExportDiagnosticResult, String> {
     ensure_log_dir().map_err(|e| e.to_string())?;
 
     let note_ref = note.as_deref().filter(|s| !s.is_empty());
@@ -315,6 +431,8 @@ pub struct BugReportResult {
     pub report_id: String,
     /// Whether the report was uploaded (vs. only saved locally).
     pub uploaded: bool,
+    /// Absolute path to the local report copy.
+    pub report_path: String,
 }
 
 /// Short id mixing the clock with a per-process counter so concurrent reports
@@ -413,7 +531,8 @@ pub async fn submit_bug_report(note: String) -> Result<BugReportResult, String> 
     // Always save a local copy — the upload may fail, but the report never vanishes.
     let report_name = format!("turbotalk-bugreport-{report_id}.txt");
     let report_path = log_dir().join(&report_name);
-    let _ = crate::settings::write_private_file(&report_path, report.as_bytes());
+    crate::settings::write_private_file(&report_path, report.as_bytes())
+        .map_err(|e| format!("Couldn't save the report locally: {e}"))?;
 
     // Upload attempt — only compiled in dev builds with the feature enabled.
     // Public release builds cannot accidentally embed Telegram credentials.
@@ -430,6 +549,7 @@ pub async fn submit_bug_report(note: String) -> Result<BugReportResult, String> 
             return Ok(BugReportResult {
                 report_id,
                 uploaded: false,
+                report_path: report_path.to_string_lossy().into_owned(),
             });
         };
 
@@ -439,6 +559,7 @@ pub async fn submit_bug_report(note: String) -> Result<BugReportResult, String> 
                 Ok(BugReportResult {
                     report_id,
                     uploaded: true,
+                    report_path: report_path.to_string_lossy().into_owned(),
                 })
             }
             Err(e) => {
@@ -461,6 +582,7 @@ pub async fn submit_bug_report(note: String) -> Result<BugReportResult, String> 
         Ok(BugReportResult {
             report_id,
             uploaded: false,
+            report_path: report_path.to_string_lossy().into_owned(),
         })
     }
 }
@@ -471,27 +593,7 @@ pub fn open_logs_folder() -> Result<(), String> {
     ensure_log_dir().map_err(|e| e.to_string())?;
     let path = log_dir();
 
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
+    open::that_detached(&path).map_err(|e| format!("could not open logs folder: {e}"))?;
 
     Ok(())
 }

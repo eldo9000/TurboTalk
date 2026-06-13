@@ -365,7 +365,9 @@ pub(crate) mod common {
         // is blocked by the gate below and can't reach the inner
         // `prewarm_in_flight()` cancel branch. Signal the poll loop instead.
         if crate::transcribe::prewarm_in_flight() {
-            tracing::info!("[hotkey] arm cancelled — user pressed again during warmup (toggle mode)");
+            tracing::info!(
+                "[hotkey] arm cancelled — user pressed again during warmup (toggle mode)"
+            );
             CANCEL_ARMING.store(true, Ordering::Release);
             return;
         }
@@ -405,6 +407,12 @@ pub(crate) mod common {
                 return;
             }
 
+            // Tracks whether the yellow "arming" tile has already been shown
+            // this press (by the whisper-readiness branch below). The audio-
+            // live gate after `rec.start()` reuses the same tile, so it only
+            // emits `ptt-armed` if this is still false.
+            let mut overlay_armed = false;
+
             // Two-stage arm: when whisper-server is still loading, show the
             // yellow "armed" tile (border only, no internals) until the model
             // is ready. The audio stream is opened only after readiness so a
@@ -427,6 +435,7 @@ pub(crate) mod common {
                 // arming tile never flashes on the wrong display.
                 crate::reposition_overlay_to_cursor_monitor(&app);
                 emit_critical(&app, "ptt-armed", ());
+                overlay_armed = true;
                 tracing::info!("[hotkey] arming — waiting for whisper-server readiness");
 
                 // Poll up to 30 s (matches whisper-server readiness budget
@@ -499,13 +508,68 @@ pub(crate) mod common {
             // The receiver was installed in AudioCapture during start(); taking
             // it here transfers ownership to SegmentTranscriber.
             if let Some(seg_rx) = rec.take_segment_receiver() {
-                *CURRENT_SEG_TRANSCRIBER.lock() =
-                    Some(crate::transcribe::SegmentTranscriber::start(seg_rx));
+                *CURRENT_SEG_TRANSCRIBER.lock() = Some(
+                    crate::transcribe::SegmentTranscriber::start(seg_rx, Some(app.clone())),
+                );
             }
 
             // Allocate this job's id.
             let job_id = next_job_id();
             *CURRENT_JOB_ID.lock() = Some(job_id);
+
+            // --- Audio-live gate --------------------------------------------
+            // `rec.start()` has returned, but that only means `stream.play()`
+            // succeeded — on a cold start CoreAudio doesn't deliver the first
+            // input callback for ~200 ms (more with a Bluetooth / route
+            // switch). Emitting `ptt-down` now would flash the red "recording"
+            // indicator while the mic is still silent: the user starts talking
+            // and the leading words are dropped (the pre-roll ring is empty on
+            // a cold start, so it can't backfill them). Instead, hold the
+            // overlay on the yellow "connecting" tile until the first real
+            // audio buffer lands, then flash red. On a warm stream callbacks
+            // are already flowing, so `audio_live()` is true within one tick
+            // and no yellow flash shows.
+            if !rec.audio_live() {
+                if !overlay_armed {
+                    crate::reposition_overlay_to_cursor_monitor(&app);
+                    emit_critical(&app, "ptt-armed", ());
+                }
+                // Poll up to 2 s for the first callback. 5 ms tick keeps the
+                // red flash within a frame of true-live. Bail on:
+                //   - CANCEL_PENDING (key released during the wait → cancel),
+                //   - the recorder leaving Recording (the level-broadcast
+                //     thread cancelled it on a device-lost edge; it already
+                //     emitted `device-lost`, so we just exit quietly).
+                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2000);
+                loop {
+                    if rec.audio_live() {
+                        break;
+                    }
+                    if CANCEL_PENDING.swap(false, Ordering::AcqRel) {
+                        rec.cancel();
+                        let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                        emit_critical(&app, "recording-cancelled", ());
+                        return;
+                    }
+                    if !rec.is_recording() {
+                        tracing::warn!(
+                            "[hotkey job_id={}] recorder left Recording during audio-live \
+                             wait — aborting ptt-down (device-lost handled elsewhere)",
+                            job_id
+                        );
+                        return;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        tracing::warn!(
+                            "[hotkey job_id={}] audio-live gate timed out after 2000 ms — \
+                             flashing red anyway",
+                            job_id
+                        );
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
 
             // Emit the ptt-down event and start cue *before* the frontmost-app
             // query so the user's "recording started" audio/visual feedback
@@ -562,7 +626,10 @@ pub(crate) mod common {
             // taking statics on the Ok arms, we guarantee the winner reads
             // the statics after initiating the stop transition.
             match rec.stop() {
-                Ok(StopOutcome::Wav { path, speech_detected }) => {
+                Ok(StopOutcome::Wav {
+                    path,
+                    speech_detected,
+                }) => {
                     // Only now, after rec.stop() succeeded, take the statics
                     // that ptt_down wrote. The Err arm's loser takes nothing.
                     // Recover the job id allocated when this recording started. If the
@@ -641,7 +708,12 @@ pub(crate) mod common {
                     // TASK-6: also carry individual part texts so per-part
                     // garbage checks can salvage clean portions instead of
                     // blocking the entire paste when one part is clean.
-                    type TranscribeResult = (String, Option<crate::transcribe::RejectReason>, String, String);
+                    type TranscribeResult = (
+                        String,
+                        Option<crate::transcribe::RejectReason>,
+                        String,
+                        String,
+                    );
                     //                                   ^assembled   ^rejection                 ^seg_part   ^tail_part
                     let transcribe_result: anyhow::Result<TranscribeResult> = match tail_result {
                         Ok(outcome) => {
@@ -705,7 +777,8 @@ pub(crate) mod common {
                             // clean, use only that; block only when both parts
                             // are individually garbage or the only available part
                             // is garbage.
-                            let usable_parts: Option<String> = if let Some(ref _reason) = rejection {
+                            let usable_parts: Option<String> = if let Some(ref _reason) = rejection
+                            {
                                 let seg_garbage = !seg_part.is_empty()
                                     && crate::transcribe::detect_garbage(&seg_part).is_some();
                                 let tail_garbage = !tail_part.is_empty()
@@ -713,10 +786,11 @@ pub(crate) mod common {
 
                                 if !seg_garbage && !tail_garbage {
                                     // Both parts clean individually — reassemble.
-                                    let clean_parts: Vec<&str> = [seg_part.as_str(), tail_part.as_str()]
-                                        .into_iter()
-                                        .filter(|s| !s.is_empty())
-                                        .collect();
+                                    let clean_parts: Vec<&str> =
+                                        [seg_part.as_str(), tail_part.as_str()]
+                                            .into_iter()
+                                            .filter(|s| !s.is_empty())
+                                            .collect();
                                     if clean_parts.is_empty() {
                                         None
                                     } else {
@@ -724,7 +798,8 @@ pub(crate) mod common {
                                         // Re-check reassembled text — individual parts may each
                                         // have too few repetitions to trip the filter, but
                                         // together they form a repetition loop.
-                                        if crate::transcribe::detect_garbage(&reassembled).is_some() {
+                                        if crate::transcribe::detect_garbage(&reassembled).is_some()
+                                        {
                                             None
                                         } else {
                                             Some(reassembled)
@@ -831,7 +906,12 @@ pub(crate) mod common {
                                     }
                                     Err(e) => {
                                         tracing::error!("[paste job_id={:?}] {:?}", job_id_opt, e);
-                                        emit_critical(&app, "paste-error", "Couldn't paste — check Accessibility permission".to_string());
+                                        emit_critical(
+                                            &app,
+                                            "paste-error",
+                                            "Couldn't paste — check Accessibility permission"
+                                                .to_string(),
+                                        );
                                     }
                                 }
                                 // End of lifecycle — the salvaged path ends here.
@@ -947,7 +1027,12 @@ pub(crate) mod common {
                                 }
                                 Err(e) => {
                                     tracing::error!("[paste job_id={:?}] {:?}", job_id_opt, e);
-                                    emit_critical(&app, "paste-error", "Couldn't paste — check Accessibility permission".to_string());
+                                    emit_critical(
+                                        &app,
+                                        "paste-error",
+                                        "Couldn't paste — check Accessibility permission"
+                                            .to_string(),
+                                    );
                                 }
                             }
                         }
@@ -1050,9 +1135,11 @@ pub(crate) mod common {
                                         "[paste job_id={:?}] (seg-recovery) focus_at_start={:?} focus_at_paste={:?}",
                                         job_id_opt, focus_at_start, focus_at_paste
                                     );
-                                    if let (Some(job_id), Some(start), Some(now)) =
-                                        (job_id_opt, focus_at_start.as_ref(), focus_at_paste.as_ref())
-                                    {
+                                    if let (Some(job_id), Some(start), Some(now)) = (
+                                        job_id_opt,
+                                        focus_at_start.as_ref(),
+                                        focus_at_paste.as_ref(),
+                                    ) {
                                         if start != now {
                                             emit_critical(
                                                 &app,
@@ -1071,8 +1158,17 @@ pub(crate) mod common {
                                             play_chime(ChimeEvent::Finish);
                                         }
                                         Err(e) => {
-                                            tracing::error!("[paste job_id={:?}] (seg-recovery) {:?}", job_id_opt, e);
-                                            emit_critical(&app, "paste-error", "Couldn't paste — check Accessibility permission".to_string());
+                                            tracing::error!(
+                                                "[paste job_id={:?}] (seg-recovery) {:?}",
+                                                job_id_opt,
+                                                e
+                                            );
+                                            emit_critical(
+                                                &app,
+                                                "paste-error",
+                                                "Couldn't paste — check Accessibility permission"
+                                                    .to_string(),
+                                            );
                                         }
                                     }
                                 }
@@ -1117,9 +1213,7 @@ pub(crate) mod common {
                         {
                             CANCEL_PENDING.store(true, Ordering::Release);
                         } else {
-                            tracing::debug!(
-                                "idle key-up ignored without pending start"
-                            );
+                            tracing::debug!("idle key-up ignored without pending start");
                         }
                     }
                     tracing::warn!("stop ignored: {}", e);
@@ -1141,8 +1235,8 @@ mod imp {
         CGEventType, EventField,
     };
     use std::os::raw::c_void;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::Arc;
 
     use tauri::{tray::TrayIcon, AppHandle};
 
@@ -1210,8 +1304,8 @@ mod imp {
     /// Map config name to HID Button usage ID.
     fn hid_mouse_usage_for_name(name: &str) -> Option<u32> {
         match name {
-            "mouse_middle"  => Some(3),
-            "mouse_back"    => Some(4),
+            "mouse_middle" => Some(3),
+            "mouse_back" => Some(4),
             "mouse_forward" => Some(5),
             _ => None,
         }
@@ -1257,10 +1351,7 @@ mod imp {
     #[link(name = "IOKit", kind = "framework")]
     extern "C" {
         fn IOHIDManagerCreate(allocator: CFAllocatorRef, options: u32) -> IOHIDManagerRef;
-        fn IOHIDManagerSetDeviceMatching(
-            manager: IOHIDManagerRef,
-            matching: CFDictionaryRef,
-        );
+        fn IOHIDManagerSetDeviceMatching(manager: IOHIDManagerRef, matching: CFDictionaryRef);
         fn IOHIDManagerRegisterInputValueCallback(
             manager: IOHIDManagerRef,
             callback: IOHIDValueCallback,
@@ -1382,9 +1473,7 @@ mod imp {
             // SAFETY: IOHIDManagerCreate returns an owned +1 retained ref.
             let manager = unsafe { IOHIDManagerCreate(kCFAllocatorDefault, 0) };
             if manager.is_null() {
-                tracing::error!(
-                    "[hotkey] IOHIDManagerCreate failed for HID mouse listener"
-                );
+                tracing::error!("[hotkey] IOHIDManagerCreate failed for HID mouse listener");
                 let _ = unsafe { Box::from_raw(ctx) };
                 return;
             }
@@ -1530,7 +1619,12 @@ mod imp {
                                         if cancel_on_hold
                                             && common::should_arm_hold_cancel(&recorder_cb)
                                         {
-                                            common::arm_hold_cancel(&recorder_cb, &tray_cb, &app_cb, toggle_mode);
+                                            common::arm_hold_cancel(
+                                                &recorder_cb,
+                                                &tray_cb,
+                                                &app_cb,
+                                                toggle_mode,
+                                            );
                                         }
                                         if toggle_mode {
                                             if recorder_cb.is_recording() {
@@ -1568,7 +1662,12 @@ mod imp {
                                     if cancel_on_hold
                                         && common::should_arm_hold_cancel(&recorder_cb)
                                     {
-                                        common::arm_hold_cancel(&recorder_cb, &tray_cb, &app_cb, toggle_mode);
+                                        common::arm_hold_cancel(
+                                            &recorder_cb,
+                                            &tray_cb,
+                                            &app_cb,
+                                            toggle_mode,
+                                        );
                                     }
                                 } else {
                                     common::disarm_hold_cancel();
@@ -1786,7 +1885,10 @@ mod imp {
             "numpad_subtract" => Some(Key::KpMinus),
             "numpad_multiply" => Some(Key::KpMultiply),
             unknown => {
-                tracing::warn!("[hotkey] unknown hotkey key {:?} — no rdev mapping", unknown);
+                tracing::warn!(
+                    "[hotkey] unknown hotkey key {:?} — no rdev mapping",
+                    unknown
+                );
                 None
             }
         }
@@ -1960,12 +2062,12 @@ mod imp {
 #[path = "hotkey_win32.rs"]
 mod hotkey_win32;
 
+#[cfg(target_os = "windows")]
+pub use hotkey_win32::{accessibility_trusted, diagnostic_probe, spawn, HotkeyProbe};
 #[cfg(target_os = "macos")]
 pub use imp::{accessibility_trusted, spawn};
 #[cfg(target_os = "linux")]
 pub use imp::{accessibility_trusted, spawn};
-#[cfg(target_os = "windows")]
-pub use hotkey_win32::{accessibility_trusted, diagnostic_probe, spawn, HotkeyProbe};
 
 /// Programmatically start a recording — same path as the physical PTT down stroke.
 /// Safe to call from any thread; spawns its own worker internally.

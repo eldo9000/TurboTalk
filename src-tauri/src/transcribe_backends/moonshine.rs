@@ -39,7 +39,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use transcribe_rs::onnx::moonshine::{MoonshineModel, MoonshineParams, MoonshineVariant as TrsMoonshineVariant};
+use transcribe_rs::onnx::moonshine::{
+    MoonshineModel, MoonshineParams, MoonshineVariant as TrsMoonshineVariant,
+};
 use transcribe_rs::onnx::Quantization;
 
 use crate::transcribe::{TranscriptOutcome, TranscriptionBackend};
@@ -142,8 +144,8 @@ pub fn validate_moonshine_model_dir(dir: &Path) -> anyhow::Result<PathBuf> {
     }
 
     // Check required files (fp32 or int8 — transcribe-rs naming).
-    let has_encoder = canon.join("encoder_model.onnx").exists()
-        || canon.join("encoder_model.int8.onnx").exists();
+    let has_encoder =
+        canon.join("encoder_model.onnx").exists() || canon.join("encoder_model.int8.onnx").exists();
     let has_decoder = canon.join("decoder_model_merged.onnx").exists()
         || canon.join("decoder_model_merged.int8.onnx").exists();
     if !has_encoder {
@@ -227,10 +229,7 @@ pub struct MoonshineBackend {
 
 impl MoonshineBackend {
     /// Load a Moonshine model from the given directory.
-    pub fn from_variant_dir(
-        model_dir: &Path,
-        variant_str: &str,
-    ) -> anyhow::Result<Self> {
+    pub fn from_variant_dir(model_dir: &Path, variant_str: &str) -> anyhow::Result<Self> {
         let variant = parse_variant(variant_str).ok_or_else(|| {
             anyhow::anyhow!(
                 "unknown Moonshine variant {:?} — expected \"tiny\" or \"base\"",
@@ -255,12 +254,8 @@ impl MoonshineBackend {
             quantization
         );
 
-        let model = MoonshineModel::load(
-            &canon_dir,
-            to_trs_variant(variant),
-            &quantization,
-        )
-        .map_err(|e| anyhow::anyhow!("Moonshine model load failed: {e}"))?;
+        let model = MoonshineModel::load(&canon_dir, to_trs_variant(variant), &quantization)
+            .map_err(|e| anyhow::anyhow!("Moonshine model load failed: {e}"))?;
 
         tracing::info!("[moonshine] model loaded successfully");
 

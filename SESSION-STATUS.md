@@ -1,7 +1,7 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-06-12  
-**Current state:** v0.9.8 runtime incidents patched in tree — ONNX cancel no longer reloads Parakeet/Moonshine; overlay idle polling quieted; rejected repetition transcripts are blocked in current code with a "feel" regression test.
+**Last updated:** 2026-06-13  
+**Current state:** Beta bug reporting is prepared in tree. Settings → Developer → Report a bug now calls the shipping `submit_bug_report` path, saves a local report path, opens the report folder through the cross-platform opener for Windows reliability, and includes runtime context, readiness, diagnostics, sanitized config, UI events, session log, and error log while keeping dictated transcript text out. Verified by `npm run typecheck` and `cargo check --manifest-path src-tauri/Cargo.toml`.
 
 ## Open backlog
 
@@ -17,6 +17,8 @@
 | Parakeet v3 multilingual | In catalog; end-to-end not user-confirmed |
 | **June 12 Parakeet hang/cancel** | **Patched** — logs showed job 40 (1.2s audio) entered Transcribing at 13:23:06 local, next press was ignored as busy at 13:23:09, cancel invalidated worker at 13:23:10, repeated presses during warmup were cancelled, model finished reload at 13:23:22, app restarted at 13:23:28. Fix keeps in-process ONNX workers reusable after cancel; compile checks pass. |
 | **June 12 repeat-filter paste-through** | **Patched in tree / installed app stale** — packaged log at 13:38:30 local shows detector caught `feel feel feel...` as `TrigramRepetition`, but old build logged "continuing to paste". Current `hotkey.rs` blocks rejected transcripts; added `detect_garbage_feel_loop_flagged` regression test. |
+| **Overlay size indicators** | **Patched in tree** — Settings → Indicators now exposes Visual Overlay `Small` / `Medium` / `Large`; legacy length counter settings/config/rendering removed; mini closes right-side empty space and pulses its red dot with smoothed normalized mic level; waveform + mini visuals now soft-gate below the existing speech threshold so silence noise floor is not amplified; waveform canvas background is transparent; runtime visual QA in Tauri still pending. |
+| **Beta bug reporting** | **Patched in tree** — one-click tester report now uses `submit_bug_report`; local save failures are surfaced; report folder opening no longer shells out to raw `explorer`; report includes enough diagnostics/log context to avoid first-round follow-up questions. Runtime Tauri button proof still pending. |
 
 ## Backend tradeoffs
 
@@ -33,4 +35,4 @@
 
 ## Next action
 
-Manual runtime proof: install/run patched build, trigger a Parakeet repetition loop or use a fixture; success signal is `transcription-rejected` with no `transcript`/paste event, and cancel during Transcribing does not reload the model.
+Runtime bug-report proof: run the Tauri app, open Settings → Developer, click Create Bug Report with a short note; success signal is a saved report file containing Runtime context, Readiness, Diagnostics, Config, UI events, Session log, and Error log sections, with no dictated transcript text.

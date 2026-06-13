@@ -370,17 +370,19 @@ Reply with only the single word, lowercase, no punctuation.
     commands.logClientEvent(event, detail || null).catch(() => {});
   }
 
-  async function exportTestLog() {
-    diagnosticMsg = 'Exporting…';
+  async function createBugReport() {
+    diagnosticMsg = 'Creating report…';
     try {
-      const note = bugNote.trim() || null;
-      const res = await commands.exportDiagnosticReport(note);
-      diagnosticMsg = `Saved: ${res.report_path}`;
+      const note = bugNote.trim();
+      const res = await commands.submitBugReport(note);
+      diagnosticMsg = res.uploaded
+        ? `Sent report #${res.report_id}. Local copy: ${res.report_path}`
+        : `Saved report #${res.report_id}: ${res.report_path}`;
       bugNote = '';
-      logUi('diagnostic-export', res.report_path);
+      logUi('bug-report-created', `id=${res.report_id} uploaded=${res.uploaded}`);
       await commands.openLogsFolder();
     } catch (e) {
-      diagnosticMsg = `Export failed: ${e}`;
+      diagnosticMsg = `Report failed: ${e}`;
     }
   }
 
@@ -454,9 +456,8 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgHistoryAutoDelete = $state('10d');
   let cfgSaveHistory       = $state(true);
   let cfgShowOverlay       = $state(true);
+  let cfgOverlaySize       = $state('medium');
   let cfgOverlayPosition   = $state('bottom');
-  let cfgTranscriptIndicator  = $state(false);
-  let cfgLengthIndicatorUnit  = $state('lines'); // 'lines' | 'paragraphs'
   let cfgCursorDotIndicator   = $state(false);
   let cfgSoundOnStart      = $state(false);
   let cfgSoundOnFinish     = $state(false);
@@ -912,9 +913,8 @@ Reply with only the single word, lowercase, no punctuation.
     cfgHistoryAutoDelete = cfg.history_auto_delete             ?? '10d';
     cfgSaveHistory       = cfg.save_history                    ?? true;
     cfgShowOverlay       = cfg.show_overlay                    ?? true;
+    cfgOverlaySize       = cfg.overlay_size                    ?? 'medium';
     cfgOverlayPosition   = cfg.overlay_position                ?? 'bottom';
-    cfgTranscriptIndicator  = cfg.transcript_size_indicator     ?? false;
-    cfgLengthIndicatorUnit  = cfg.length_indicator_unit        ?? 'lines';
     cfgCursorDotIndicator   = cfg.cursor_dot_indicator         ?? false;
     cfgSoundOnStart      = cfg.sound_on_start                  ?? false;
     cfgSoundOnFinish     = cfg.sound_on_finish                  ?? false;
@@ -943,9 +943,8 @@ Reply with only the single word, lowercase, no punctuation.
     cfg.history_auto_delete           = cfgHistoryAutoDelete;
     cfg.save_history                  = cfgSaveHistory;
     cfg.show_overlay                  = cfgShowOverlay;
+    cfg.overlay_size                  = cfgOverlaySize;
     cfg.overlay_position              = cfgOverlayPosition;
-    cfg.transcript_size_indicator     = cfgTranscriptIndicator;
-    cfg.length_indicator_unit         = cfgLengthIndicatorUnit;
     cfg.cursor_dot_indicator          = cfgCursorDotIndicator;
     cfg.sound_on_start                = cfgSoundOnStart;
     cfg.sound_on_finish               = cfgSoundOnFinish;
@@ -966,7 +965,7 @@ Reply with only the single word, lowercase, no punctuation.
         hotkey: cfgHotkeyKey,
         mode: cfgHotkeyMode,
         backend: cfgBackend,
-        overlay: cfgShowOverlay,
+        overlay: cfgShowOverlay ? cfgOverlaySize : 'off',
       }));
     }
   }
@@ -2000,33 +1999,21 @@ Reply with only the single word, lowercase, no punctuation.
         <!-- Audio indicators (Volume embedded) -->
         <div class="tt-section">
           <div class="subsection-hd"><span class="subsection-hd-title">Indicators</span></div>
-          <div class="tt-row tt-row-field" data-tip="Floating pill that appears on screen while recording">
+          <div class="tt-row tt-row-field" data-tip="Choose how much visual feedback the recording overlay shows">
             <span class="tt-lbl">Visual Overlay</span>
             <div class="tt-multi">
               <button
-                onclick={() => { cfgShowOverlay = !cfgShowOverlay; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgShowOverlay}
-                data-tip="Show the overlay pill while recording">Recording Active</button>
+                onclick={() => { cfgShowOverlay = true; cfgOverlaySize = 'small'; saveSettings(); }}
+                class="tt-multi-btn" class:tt-multi-on={cfgShowOverlay && cfgOverlaySize === 'small'}
+                data-tip="Bare recording dot with timer">Small</button>
               <button
-                onclick={() => { if (cfgShowOverlay) { cfgTranscriptIndicator = !cfgTranscriptIndicator; saveSettings(); } }}
-                class="tt-multi-btn" class:tt-multi-on={cfgTranscriptIndicator}
-                disabled={!cfgShowOverlay}
-                data-tip="Add a live transcript count to the overlay">Length Counter</button>
-            </div>
-          </div>
-          <div class="tt-row tt-row-field" data-tip="What the overlay counter tracks — lines or paragraph breaks">
-            <span class="tt-lbl">Length Unit</span>
-            <div class="tt-multi">
+                onclick={() => { cfgShowOverlay = true; cfgOverlaySize = 'medium'; saveSettings(); }}
+                class="tt-multi-btn" class:tt-multi-on={cfgShowOverlay && cfgOverlaySize === 'medium'}
+                data-tip="Current compact waveform overlay">Medium</button>
               <button
-                onclick={() => { if (cfgTranscriptIndicator && cfgShowOverlay) { cfgLengthIndicatorUnit = 'lines'; saveSettings(); } }}
-                class="tt-multi-btn" class:tt-multi-on={cfgLengthIndicatorUnit === 'lines'}
-                disabled={!cfgTranscriptIndicator || !cfgShowOverlay}
-                data-tip="Count lines in the transcript">Lines</button>
-              <button
-                onclick={() => { if (cfgTranscriptIndicator && cfgShowOverlay) { cfgLengthIndicatorUnit = 'paragraphs'; saveSettings(); } }}
-                class="tt-multi-btn" class:tt-multi-on={cfgLengthIndicatorUnit === 'paragraphs'}
-                disabled={!cfgTranscriptIndicator || !cfgShowOverlay}
-                data-tip="Count paragraph breaks in the transcript">Paragraphs</button>
+                onclick={() => { cfgShowOverlay = true; cfgOverlaySize = 'large'; saveSettings(); }}
+                class="tt-multi-btn" class:tt-multi-on={cfgShowOverlay && cfgOverlaySize === 'large'}
+                data-tip="Expanded waveform overlay with stronger status text">Large</button>
             </div>
           </div>
           <div class="tt-row tt-row-field" data-tip="Where the recording overlay anchors on screen">
@@ -2130,16 +2117,16 @@ Reply with only the single word, lowercase, no punctuation.
               >{warmupResetBusy ? 'Clearing…' : 'Clear warmup cache'}</button>
             </div>
           </div>
-          <div class="tt-row tt-row-col" data-tip="Export a diagnostic log and open the folder — add an optional note and it'll be included at the top of the file">
+          <div class="tt-row tt-row-col" data-tip="Create a beta bug report with diagnostics, settings, recent app events, and logs">
             <label for="bug-note" class="tt-lbl tt-lbl-fixed">Report a bug</label>
             <textarea
               id="bug-note"
               bind:value={bugNote}
               rows="2"
-              placeholder="Optional — what happened? What were you trying to do?"
+              placeholder="Optional — what happened? The report gathers the technical details."
               class="tt-input"
             ></textarea>
-            <button onclick={exportTestLog} class="tt-btn w-full justify-center">Create Bug Report</button>
+            <button onclick={createBugReport} class="tt-btn w-full justify-center">Create Bug Report</button>
             {#if diagnosticMsg}
               <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug">{diagnosticMsg}</p>
             {/if}

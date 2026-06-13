@@ -141,8 +141,8 @@ pub fn validate_parakeet_model_dir(dir: &Path) -> anyhow::Result<PathBuf> {
     }
 
     // Check required files (int8 preferred; fp32 accepted as fallback).
-    let has_encoder = canon.join("encoder-model.int8.onnx").exists()
-        || canon.join("encoder-model.onnx").exists();
+    let has_encoder =
+        canon.join("encoder-model.int8.onnx").exists() || canon.join("encoder-model.onnx").exists();
     let has_decoder = canon.join("decoder_joint-model.int8.onnx").exists()
         || canon.join("decoder_joint-model.onnx").exists();
     if !has_encoder {
@@ -232,10 +232,7 @@ pub struct ParakeetBackend {
 
 impl ParakeetBackend {
     /// Load a Parakeet model from the given directory.
-    pub fn from_variant_dir(
-        model_dir: &Path,
-        variant_str: &str,
-    ) -> anyhow::Result<Self> {
+    pub fn from_variant_dir(model_dir: &Path, variant_str: &str) -> anyhow::Result<Self> {
         let variant = parse_variant(variant_str).ok_or_else(|| {
             anyhow::anyhow!(
                 "unknown Parakeet variant {:?} — expected \"tdt-0.6b-v2\" or \"tdt-0.6b-v3\"",
@@ -382,7 +379,11 @@ mod tests {
             return;
         }
         let result = validate_parakeet_model_dir(&variant_dir);
-        assert!(result.is_ok(), "expected valid bundle to pass: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "expected valid bundle to pass: {:?}",
+            result.err()
+        );
     }
 
     /// parse_variant accepts all documented aliases.

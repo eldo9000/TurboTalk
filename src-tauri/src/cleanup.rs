@@ -736,7 +736,10 @@ mod tests {
     fn valid_single_word_a_preserved() {
         // "a" is a valid English word and must not be collapsed.
         let input = "this is a a a test sentence";
-        assert_eq!(collapse_repeated_single_chars(input), "this is a a a test sentence");
+        assert_eq!(
+            collapse_repeated_single_chars(input),
+            "this is a a a test sentence"
+        );
     }
 
     #[test]

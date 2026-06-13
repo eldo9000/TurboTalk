@@ -266,6 +266,8 @@ export type BugReportResult = {
 	report_id: string,
 	// Whether the report was uploaded (vs. only saved locally).
 	uploaded: boolean,
+	// Absolute path to the local report copy.
+	report_path: string,
 };
 
 export type CleanupConfig = {
@@ -318,20 +320,15 @@ export type Config = {
 	 */
 	show_overlay?: boolean,
 	/**
+	 *  Visual density for the floating overlay: "small", "medium" (default),
+	 *  or "large". Existing configs with `show_overlay = true` behave as medium.
+	 */
+	overlay_size?: string,
+	/**
 	 *  Where on the screen the overlay pill anchors: "bottom" (default) or "top".
 	 *  Anything else is treated as "bottom" by the positioning code.
 	 */
 	overlay_position?: string,
-	/**
-	 *  Whether the recording overlay shows a length counter to the right of the
-	 *  pill — a VAD-derived estimate of how much has been said. Defaults off.
-	 */
-	transcript_size_indicator?: boolean,
-	/**
-	 *  Unit for the length counter: "lines" (default, ~11 words/line) or
-	 *  "paragraphs" (~80 words/paragraph).
-	 */
-	length_indicator_unit?: string,
 	/**
 	 *  Whether to show a small red dot near the cursor during recording.
 	 *  The dot follows the mouse pointer and appears bottom-right of the hotspot.

@@ -84,9 +84,7 @@ fn save_config(
     // model loads. Mirrors the startup prewarm — same readiness semantics,
     // same `dictation-ready` / `dictation-ready-failed` events.
     transcribe::prewarm(cfg.clone(), app.clone());
-    // Notify other windows (overlay) of UI-relevant config changes. The
-    // overlay reads transcript_size_indicator and show_overlay on mount and
-    // refreshes when this fires.
+    // Notify other windows (overlay) of UI-relevant config changes.
     let _ = app.emit("config-update", &cfg);
     Ok(())
 }
@@ -143,23 +141,65 @@ fn apply_alt_backend_after_download(
 /// land `BOTTOM_GAP` above the screen bottom, the *window's* top-left needs
 /// to sit at `screen_bottom - (PILL_H + BOTTOM_GAP + GUTTER)`. We bake that
 /// into the y math here so the frontend never re-positions.
-const OVERLAY_W_LOGICAL: f64 = 460.0;
-const OVERLAY_PILL_BOTTOM_OFFSET: f64 = 290.0; // PILL_H 80 + BOTTOM_GAP 110 + GUTTER 100
+/// Default overlay window width (small / medium pill). The pill is centered
+/// horizontally inside it.
+const OVERLAY_W_DEFAULT: f64 = 460.0;
+/// Large-mode window width — 3× the default so the waveform and transcript
+/// bubble get a much wider canvas. The pill stays horizontally centered, so
+/// its on-screen center is unchanged; only the window's left/right edges move
+/// outward (it's transparent + click-through, so the extra width is invisible
+/// and harmless).
+const OVERLAY_W_LARGE: f64 = 1380.0;
+/// Default overlay window height (small / medium pill). The visible pill is a
+/// ~260×80 rect centered inside it with a 100 px gutter on each side.
+const OVERLAY_H_DEFAULT: f64 = 280.0;
+/// Large-mode window height. The live transcript bubble grows into the extra
+/// space — for bottom position that space is all *above* the pill, for top
+/// position all *below* it (see the anchored layout in Overlay.svelte). The
+/// pill's on-screen position is unchanged from default because the window
+/// bottom (bottom pos) / top (top pos) stays pinned; only the far edge moves.
+const OVERLAY_H_LARGE: f64 = 460.0;
+/// The overlay window's bottom edge sits this far above the screen bottom
+/// (bottom position). Window top = screen_bottom - this - height, so the pill
+/// — anchored `height - 100 - 80` from the window top (default) or to the
+/// window bottom via CSS (large) — always lands `BOTTOM_GAP` (110) above the
+/// screen bottom regardless of window height.
+const OVERLAY_BOTTOM_MARGIN: f64 = 10.0;
 /// Top-position equivalent: window top sits `TOP_GAP - GUTTER` below the
-/// screen top so the pill (centered inside the 280 px window) lands
-/// `TOP_GAP` (110 px) below the screen top. TOP_GAP matches BOTTOM_GAP so
-/// the visual breathing room is symmetric. On macOS the menu bar at the
-/// very top occupies ~24 px of that gap.
+/// screen top so the pill lands `TOP_GAP` (110 px) below the screen top.
+/// TOP_GAP matches BOTTOM_GAP so the visual breathing room is symmetric. On
+/// macOS the menu bar at the very top occupies ~24 px of that gap. Independent
+/// of window height — the window grows *downward* from this fixed top.
 const OVERLAY_PILL_TOP_OFFSET: f64 = 10.0; // TOP_GAP 110 - GUTTER 100
 
+/// Logical overlay window height for the user's size preference.
+fn overlay_height_for_size(size: &str) -> f64 {
+    if size == "large" {
+        OVERLAY_H_LARGE
+    } else {
+        OVERLAY_H_DEFAULT
+    }
+}
+
+/// Logical overlay window width for the user's size preference.
+fn overlay_width_for_size(size: &str) -> f64 {
+    if size == "large" {
+        OVERLAY_W_LARGE
+    } else {
+        OVERLAY_W_DEFAULT
+    }
+}
+
 /// Compute the window-top y for the overlay given the monitor origin, monitor
-/// height (logical), and the user's overlay_position preference. Centralises
-/// the top vs bottom branch so the macOS and Windows/Linux paths agree.
-fn overlay_y_for_position(mp_y: f64, mon_h_logical: f64, position: &str) -> f64 {
+/// height (logical), the user's overlay_position preference, and the current
+/// window height. Centralises the top vs bottom branch so the macOS and
+/// Windows/Linux paths agree. Bottom: pin the window bottom; top: pin the
+/// window top. Either way the pill stays put as height changes.
+fn overlay_y_for_position(mp_y: f64, mon_h_logical: f64, position: &str, height: f64) -> f64 {
     if position == "top" {
         mp_y + OVERLAY_PILL_TOP_OFFSET
     } else {
-        mp_y + mon_h_logical - OVERLAY_PILL_BOTTOM_OFFSET
+        mp_y + mon_h_logical - OVERLAY_BOTTOM_MARGIN - height
     }
 }
 
@@ -185,7 +225,7 @@ fn overlay_y_for_position(mp_y: f64, mon_h_logical: f64, position: &str) -> f64 
 /// which is why we do the math by hand.
 #[cfg(target_os = "macos")]
 pub fn reposition_overlay_to_cursor_monitor(app: &tauri::AppHandle) {
-    use tauri::{LogicalPosition, Manager};
+    use tauri::{LogicalPosition, LogicalSize, Manager};
     let Some(overlay) = app.get_webview_window("overlay") else {
         return;
     };
@@ -284,9 +324,19 @@ pub fn reposition_overlay_to_cursor_monitor(app: &tauri::AppHandle) {
     let scale = monitor.scale_factor();
     let mon_w_logical = ms.width as f64 / scale;
     let mon_h_logical = ms.height as f64 / scale;
-    let position = settings::load().overlay_position;
-    let x = mp.x as f64 + (mon_w_logical - OVERLAY_W_LOGICAL) / 2.0;
-    let y = overlay_y_for_position(mp.y as f64, mon_h_logical, &position);
+    let cfg = settings::load();
+    let position = cfg.overlay_position;
+    let win_h = overlay_height_for_size(&cfg.overlay_size);
+    let win_w = overlay_width_for_size(&cfg.overlay_size);
+    // Center horizontally; clamp so a window wider than the monitor never
+    // starts off the left edge.
+    let x = (mp.x as f64 + (mon_w_logical - win_w) / 2.0).max(mp.x as f64);
+    let y = overlay_y_for_position(mp.y as f64, mon_h_logical, &position, win_h);
+
+    // Size the window for the selected overlay size before positioning, so the
+    // large-mode waveform + transcript bubble have room and the y math (which
+    // depends on height for bottom position) lands the pill correctly.
+    let _ = overlay.set_size(LogicalSize::new(win_w, win_h));
 
     let pre = overlay.outer_position().ok();
     tracing::info!(
@@ -464,7 +514,7 @@ fn show_main_window(app: &tauri::AppHandle, first_manual_show: &std::sync::atomi
 /// Physical → logical: divide by `scale_factor()`.
 #[cfg(not(target_os = "macos"))]
 pub fn reposition_overlay_to_cursor_monitor(app: &tauri::AppHandle) {
-    use tauri::{LogicalPosition, Manager};
+    use tauri::{LogicalPosition, LogicalSize, Manager};
     let Some(overlay) = app.get_webview_window("overlay") else {
         return;
     };
@@ -503,11 +553,15 @@ pub fn reposition_overlay_to_cursor_monitor(app: &tauri::AppHandle) {
     let mon_y_logical = mp.y as f64 / scale;
     let mon_w_logical = ms.width as f64 / scale;
     let mon_h_logical = ms.height as f64 / scale;
-    let position = settings::load().overlay_position;
+    let cfg = settings::load();
+    let position = cfg.overlay_position;
+    let win_h = overlay_height_for_size(&cfg.overlay_size);
+    let win_w = overlay_width_for_size(&cfg.overlay_size);
     // Center overlay horizontally on the cursor's monitor in logical space.
-    let x = mon_x_logical + (mon_w_logical - OVERLAY_W_LOGICAL) / 2.0;
-    let y = overlay_y_for_position(mon_y_logical, mon_h_logical, &position);
+    let x = (mon_x_logical + (mon_w_logical - win_w) / 2.0).max(mon_x_logical);
+    let y = overlay_y_for_position(mon_y_logical, mon_h_logical, &position, win_h);
 
+    let _ = overlay.set_size(LogicalSize::new(win_w, win_h));
     let _ = overlay.set_position(LogicalPosition::new(x, y));
 }
 
@@ -1519,7 +1573,10 @@ async fn download_parakeet_model(
             return Err("cancelled".into());
         }
 
-        let url = format!("https://huggingface.co/{}/resolve/main/{}", repo, spec.remote_path);
+        let url = format!(
+            "https://huggingface.co/{}/resolve/main/{}",
+            repo, spec.remote_path
+        );
 
         // Validate URL shape — must be huggingface.co.
         {
@@ -1553,11 +1610,7 @@ async fn download_parakeet_model(
                 }
                 Err(e) => {
                     let _ = tokio::fs::remove_file(&dest_path).await;
-                    tracing::warn!(
-                        "[parakeet-dl] removed invalid existing {}: {}",
-                        filename,
-                        e
-                    );
+                    tracing::warn!("[parakeet-dl] removed invalid existing {}: {}", filename, e);
                 }
             }
         }

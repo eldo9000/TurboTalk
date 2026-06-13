@@ -105,12 +105,17 @@ const RESAMPLER_CHUNK_IN: usize = 1024;
 const CHANNEL_DEPTH: usize = 512;
 /// Minimum 16 kHz samples that must have accumulated in the current segment
 /// before a silence boundary triggers a cut. Prevents hairline segments on
-/// brief inter-word pauses.  12 s × 16 000 = 192 000 samples.
-const MIN_SEGMENT_SAMPLES: usize = 12 * TARGET_SAMPLE_RATE as usize;
-/// Hard ceiling: force a cut even without a detected silence boundary so
-/// no single whisper-server request approaches the HTTP timeout.
-/// 25 s × 16 000 = 400 000 samples.
-const MAX_SEGMENT_SAMPLES: usize = 25 * TARGET_SAMPLE_RATE as usize;
+/// brief inter-word pauses, but kept short so the live transcript preview
+/// updates at a natural sentence cadence: speak a phrase, pause past the VAD
+/// hangover (~480 ms), and the segment cuts + transcribes instead of waiting.
+/// 3 s × 16 000 = 48 000 samples. (Was 12 s, tuned for background-only
+/// chunking before the live preview existed.)
+const MIN_SEGMENT_SAMPLES: usize = 3 * TARGET_SAMPLE_RATE as usize;
+/// Hard ceiling: force a cut even without a detected silence boundary so a
+/// pause-free monologue still updates periodically (and no single
+/// whisper-server request approaches the HTTP timeout).
+/// 15 s × 16 000 = 240 000 samples.
+const MAX_SEGMENT_SAMPLES: usize = 15 * TARGET_SAMPLE_RATE as usize;
 
 /// A segment of audio cut during recording and emitted by the worker on
 /// the segment channel. `index` is a monotonically increasing counter
@@ -357,7 +362,13 @@ impl StreamingFinalizer {
             .spawn(move || run_worker(rx, src_rate, src_channels, normalize_peak, seg_tx))
             .expect("spawn streaming finalizer worker");
 
-        (Self { sender: tx, worker: Some(worker) }, seg_rx)
+        (
+            Self {
+                sender: tx,
+                worker: Some(worker),
+            },
+            seg_rx,
+        )
     }
 
     /// Hand a chunk of native-rate samples to the worker. Non-blocking
@@ -1121,7 +1132,10 @@ mod tests {
         // in_speech stays true (no silence boundary)
         maybe_emit_segment(&buf, true, true, &mut start, &mut idx, 0.89, &tx);
         assert_eq!(idx, 1, "MAX cap must force a cut");
-        assert_eq!(start, MAX_SEGMENT_SAMPLES, "seg_start advances by exactly MAX");
+        assert_eq!(
+            start, MAX_SEGMENT_SAMPLES,
+            "seg_start advances by exactly MAX"
+        );
         let seg = rx.try_recv().expect("segment on channel");
         assert_eq!(seg.samples.len(), MAX_SEGMENT_SAMPLES);
     }
@@ -1149,7 +1163,10 @@ mod tests {
         assert_eq!(s0.index, 0);
         assert_eq!(s1.index, 1);
         // seg 1 starts from where seg 0 ended — must be shorter than the full buf
-        assert!(s1.samples.len() < buf2.len(), "second segment is a slice, not the whole buf");
+        assert!(
+            s1.samples.len() < buf2.len(),
+            "second segment is a slice, not the whole buf"
+        );
     }
 
     /// Segment of exactly MIN_SEGMENT_SAMPLES on a silence boundary → fires.

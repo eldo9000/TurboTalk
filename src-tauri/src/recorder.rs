@@ -97,6 +97,14 @@ impl Recorder {
         self.capture.level()
     }
 
+    /// True once the mic stream has delivered its first post-press audio
+    /// buffer. The hotkey path polls this between `start()` and emitting
+    /// `ptt-down` so the overlay only flashes red when capture is genuinely
+    /// live — see `AudioCapture::audio_live`.
+    pub fn audio_live(&self) -> bool {
+        self.capture.audio_live()
+    }
+
     /// Take the segment receiver installed by `start()` so the caller can
     /// hand it to `SegmentTranscriber::start()`. Returns `None` if already
     /// taken or if recording hasn't started yet.

@@ -89,18 +89,24 @@ impl RejectReason {
     /// Human-readable explanation suitable for a UI toast.
     pub fn description(&self) -> &'static str {
         match self {
-            RejectReason::HighCompression =>
-                "Repetition loop detected — Whisper echoed the same phrase repeatedly on silence.",
-            RejectReason::TrigramRepetition =>
-                "Repetition loop detected — the same phrase appeared too many times.",
-            RejectReason::BigramRepetition =>
-                "Repetition loop detected — the same word was repeated too many times.",
-            RejectReason::PrefixFragmentRepetition =>
-                "Repetition loop detected — a partial syllable was repeated before the full word.",
-            RejectReason::NonLetterJunk =>
-                "Junk characters detected — Whisper produced garbage output on silence.",
-            RejectReason::LowEntropy =>
-                "Repetition loop detected — words lack the variety of natural speech.",
+            RejectReason::HighCompression => {
+                "Repetition loop detected — Whisper echoed the same phrase repeatedly on silence."
+            }
+            RejectReason::TrigramRepetition => {
+                "Repetition loop detected — the same phrase appeared too many times."
+            }
+            RejectReason::BigramRepetition => {
+                "Repetition loop detected — the same word was repeated too many times."
+            }
+            RejectReason::PrefixFragmentRepetition => {
+                "Repetition loop detected — a partial syllable was repeated before the full word."
+            }
+            RejectReason::NonLetterJunk => {
+                "Junk characters detected — Whisper produced garbage output on silence."
+            }
+            RejectReason::LowEntropy => {
+                "Repetition loop detected — words lack the variety of natural speech."
+            }
         }
     }
 }
@@ -131,8 +137,8 @@ pub fn detect_garbage(text: &str) -> Option<RejectReason> {
     // Highly repetitive text compresses extremely well. Threshold defined at
     // the top of the module.
     {
+        use flate2::{write::GzEncoder, Compression};
         use std::io::Write;
-        use flate2::{Compression, write::GzEncoder};
         let mut enc = GzEncoder::new(Vec::new(), Compression::default());
         let _ = enc.write_all(text.as_bytes());
         if let Ok(compressed) = enc.finish() {
@@ -184,11 +190,7 @@ pub fn detect_garbage(text: &str) -> Option<RejectReason> {
                 let count = counts.entry(key).or_insert(0);
                 *count += 1;
                 if *count > GARBAGE_BIGRAM_MAX_REPEATS {
-                    tracing::debug!(
-                        "[detect_garbage] bigram {:?} appeared {} times",
-                        key,
-                        count
-                    );
+                    tracing::debug!("[detect_garbage] bigram {:?} appeared {} times", key, count);
                     return Some(RejectReason::BigramRepetition);
                 }
             }
@@ -214,9 +216,7 @@ pub fn detect_garbage(text: &str) -> Option<RejectReason> {
                 }
                 let frag_lower = fragment.to_lowercase();
                 let mut run_end = i + 1;
-                while run_end < words.len()
-                    && words[run_end].to_lowercase() == frag_lower
-                {
+                while run_end < words.len() && words[run_end].to_lowercase() == frag_lower {
                     run_end += 1;
                 }
                 let run_len = run_end - i;
@@ -249,8 +249,7 @@ pub fn detect_garbage(text: &str) -> Option<RejectReason> {
         let words: Vec<&str> = text.split_whitespace().collect();
         if words.len() >= 4 {
             let total = words.len() as f64;
-            let mut freq: std::collections::HashMap<&str, usize> =
-                std::collections::HashMap::new();
+            let mut freq: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
             for w in &words {
                 *freq.entry(w).or_insert(0) += 1;
             }
@@ -582,7 +581,9 @@ pub trait TranscriptionBackend: Send + Sync {
 ///   their own silence handling. The post-hoc hallucination filter runs on all
 ///   backends (no harm, family-agnostic). The Chaperone cleanup (cleanup.rs) runs
 ///   on the output of all backends — also family-agnostic.
-fn build_backend(cfg: &crate::settings::Config) -> anyhow::Result<std::sync::Arc<dyn TranscriptionBackend>> {
+fn build_backend(
+    cfg: &crate::settings::Config,
+) -> anyhow::Result<std::sync::Arc<dyn TranscriptionBackend>> {
     use crate::settings::BackendFamily;
 
     match cfg.backend {
@@ -590,7 +591,8 @@ fn build_backend(cfg: &crate::settings::Config) -> anyhow::Result<std::sync::Arc
             #[cfg(feature = "moonshine")]
             {
                 tracing::info!("[transcribe] backend=moonshine — building MoonshineBackend");
-                let backend = crate::transcribe_backends::moonshine::MoonshineBackend::from_config(cfg)?;
+                let backend =
+                    crate::transcribe_backends::moonshine::MoonshineBackend::from_config(cfg)?;
                 return Ok(std::sync::Arc::new(backend));
             }
             #[cfg(not(feature = "moonshine"))]
@@ -606,7 +608,8 @@ fn build_backend(cfg: &crate::settings::Config) -> anyhow::Result<std::sync::Arc
             #[cfg(feature = "parakeet")]
             {
                 tracing::info!("[transcribe] backend=parakeet — building ParakeetBackend");
-                let backend = crate::transcribe_backends::parakeet::ParakeetBackend::from_config(cfg)?;
+                let backend =
+                    crate::transcribe_backends::parakeet::ParakeetBackend::from_config(cfg)?;
                 return Ok(std::sync::Arc::new(backend));
             }
             #[cfg(not(feature = "parakeet"))]
@@ -754,7 +757,9 @@ impl WhisperBackend {
         } else {
             tracing::info!("[transcribe] VAD disabled by settings");
         }
-        for var in &["HOME", "PATH", "TMPDIR", "USER", "LOGNAME", "TEMP", "USERNAME"] {
+        for var in &[
+            "HOME", "PATH", "TMPDIR", "USER", "LOGNAME", "TEMP", "USERNAME",
+        ] {
             if let Ok(val) = std::env::var(var) {
                 cmd.env(var, val);
             }
@@ -794,11 +799,8 @@ impl WhisperBackend {
             }
             // Quick TCP health check — if the server is already accepting
             // connections, skip the remaining sleep iterations.
-            if std::net::TcpStream::connect_timeout(
-                &addr,
-                std::time::Duration::from_millis(50),
-            )
-            .is_ok()
+            if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50))
+                .is_ok()
             {
                 server_started_early = true;
                 break;
@@ -950,7 +952,10 @@ impl WhisperBackend {
         tracing::info!("[transcribe] whisper took {} ms", whisper_ms);
         // Never log transcript content to the session log — it can contain anything
         // the user dictated and that log is bundled into uploaded bug reports.
-        tracing::info!("[transcribe] transcript ready ({} chars)", text.chars().count());
+        tracing::info!(
+            "[transcribe] transcript ready ({} chars)",
+            text.chars().count()
+        );
 
         // TASK-55: post-hoc hallucination detection on the cleaned text.
         let rejection = detect_garbage(&text);
@@ -996,10 +1001,7 @@ impl TranscriptionBackend for WhisperBackend {
     }
 
     fn model_identity(&self) -> String {
-        self.model
-            .to_str()
-            .unwrap_or("")
-            .to_string()
+        self.model.to_str().unwrap_or("").to_string()
     }
 }
 
@@ -1189,7 +1191,10 @@ pub fn kill_orphans() {
             .output();
         match result {
             Ok(out) if out.status.success() => {
-                tracing::info!("[transcribe] kill_orphans: terminated leftover whisper-server (pattern: {})", pattern);
+                tracing::info!(
+                    "[transcribe] kill_orphans: terminated leftover whisper-server (pattern: {})",
+                    pattern
+                );
             }
             Ok(_) => {} // exit 1 = no matching process, normal case
             Err(e) => tracing::warn!("[transcribe] kill_orphans: pkill failed: {}", e),
@@ -1328,10 +1333,7 @@ pub fn run_raw(wav: &Path) -> anyhow::Result<TranscriptOutcome> {
 
 /// Write a slice of 16 kHz mono f32 samples to a temporary WAV file using the
 /// same 16-bit PCM contract as the tail WAV (`audio::write_transcription_wav`).
-fn write_segment_wav(
-    samples: &[f32],
-    seg_index: usize,
-) -> anyhow::Result<std::path::PathBuf> {
+fn write_segment_wav(samples: &[f32], seg_index: usize) -> anyhow::Result<std::path::PathBuf> {
     let path = std::env::temp_dir().join(format!("turbotalk-seg-{}.wav", seg_index));
     crate::audio::write_transcription_wav(&path, samples)?;
     Ok(path)
@@ -1396,9 +1398,19 @@ fn transcribe_one_segment(seg: &crate::audio_finalizer::SegmentEmit) -> String {
     }
 }
 
+/// Payload for the live `seg-preview` event: a single mid-recording segment's
+/// transcribed text, keyed by its segment index so the overlay can render the
+/// growing draft in order even though segments finish concurrently.
+#[derive(Clone, serde::Serialize)]
+struct SegPreview {
+    index: usize,
+    text: String,
+}
+
 fn seg_transcriber_worker(
     seg_rx: crossbeam_channel::Receiver<crate::audio_finalizer::SegmentEmit>,
     results: std::sync::Arc<Mutex<std::collections::BTreeMap<usize, String>>>,
+    app: Option<tauri::AppHandle>,
 ) {
     while let Ok(seg) = seg_rx.recv() {
         tracing::info!(
@@ -1407,11 +1419,28 @@ fn seg_transcriber_worker(
             seg.samples.len(),
             seg.samples.len() as f32 / 16_000.0,
         );
+        let index = seg.index;
         let text = transcribe_one_segment(&seg);
+        // Live draft preview (prototype): surface each segment's text to the
+        // overlay the moment it lands, before assembly + Chaperone cleanup.
+        // Goes only to the overlay webview — same trust boundary as paste.
+        // Empty / rejected segments are skipped so the draft doesn't flicker.
+        if let Some(app) = app.as_ref() {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                let _ = app.emit(
+                    "seg-preview",
+                    SegPreview {
+                        index,
+                        text: trimmed.to_string(),
+                    },
+                );
+            }
+        }
         results
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(seg.index, text);
+            .insert(index, text);
     }
     tracing::info!("[seg-transcriber] channel closed — all mid-recording segments done");
 }
@@ -1432,12 +1461,13 @@ impl SegmentTranscriber {
     /// `AudioCapture::take_segment_receiver()` immediately after `start()`.
     pub fn start(
         seg_rx: crossbeam_channel::Receiver<crate::audio_finalizer::SegmentEmit>,
+        app: Option<tauri::AppHandle>,
     ) -> Self {
         let results = std::sync::Arc::new(Mutex::new(std::collections::BTreeMap::new()));
         let results_clone = results.clone();
         let worker = std::thread::Builder::new()
             .name("turbotalk-seg-transcriber".into())
-            .spawn(move || seg_transcriber_worker(seg_rx, results_clone))
+            .spawn(move || seg_transcriber_worker(seg_rx, results_clone, app))
             .expect("spawn segment transcriber worker");
         Self {
             worker: Some(worker),
@@ -1464,7 +1494,6 @@ impl SegmentTranscriber {
             .join(" ")
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1742,7 +1771,8 @@ mod tests {
     /// correctly detected as a trigram loop and must remain blocked upstream.
     #[test]
     fn detect_garbage_feel_loop_flagged() {
-        let text = "I feel feel feel feel feel feel feel feel feel feel like this should never paste.";
+        let text =
+            "I feel feel feel feel feel feel feel feel feel feel like this should never paste.";
         let result = detect_garbage(text);
         assert_eq!(
             result,
@@ -1755,8 +1785,13 @@ mod tests {
     /// Realistic short dictation — must pass all three filters.
     #[test]
     fn detect_garbage_realistic_dictation_passes() {
-        let text = "Please add a new function that validates the user input and returns a boolean value.";
-        assert_eq!(detect_garbage(text), None, "realistic dictation should not be filtered");
+        let text =
+            "Please add a new function that validates the user input and returns a boolean value.";
+        assert_eq!(
+            detect_garbage(text),
+            None,
+            "realistic dictation should not be filtered"
+        );
     }
 
     /// Single-word stutter ("war war war war war warm-up cache") that the gzip

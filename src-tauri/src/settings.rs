@@ -41,18 +41,14 @@ pub struct Config {
     /// When false, the overlay window is hidden — the tray icon still reflects state.
     #[serde(default = "default_true")]
     pub show_overlay: bool,
+    /// Visual density for the floating overlay: "small", "medium" (default),
+    /// or "large". Existing configs with `show_overlay = true` behave as medium.
+    #[serde(default = "default_overlay_size")]
+    pub overlay_size: String,
     /// Where on the screen the overlay pill anchors: "bottom" (default) or "top".
     /// Anything else is treated as "bottom" by the positioning code.
     #[serde(default = "default_overlay_position")]
     pub overlay_position: String,
-    /// Whether the recording overlay shows a length counter to the right of the
-    /// pill — a VAD-derived estimate of how much has been said. Defaults off.
-    #[serde(default)]
-    pub transcript_size_indicator: bool,
-    /// Unit for the length counter: "lines" (default, ~11 words/line) or
-    /// "paragraphs" (~80 words/paragraph).
-    #[serde(default = "default_length_indicator_unit")]
-    pub length_indicator_unit: String,
     /// Whether to show a small red dot near the cursor during recording.
     /// The dot follows the mouse pointer and appears bottom-right of the hotspot.
     /// Defaults off.
@@ -94,10 +90,9 @@ fn default_history_auto_delete() -> String {
 fn default_overlay_position() -> String {
     "bottom".into()
 }
-fn default_length_indicator_unit() -> String {
-    "lines".into()
+fn default_overlay_size() -> String {
+    "medium".into()
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct WhisperConfig {
     pub bin: String,
@@ -306,9 +301,7 @@ pub fn migrate_platform_defaults(cfg: &mut Config) -> bool {
             changed = true;
         }
         if cfg.hotkey.key == "right_option" {
-            tracing::info!(
-                "[settings] Windows: migrating hotkey right_option → right_control"
-            );
+            tracing::info!("[settings] Windows: migrating hotkey right_option → right_control");
             cfg.hotkey.key = "right_control".into();
             changed = true;
         }
@@ -341,9 +334,8 @@ impl Default for Config {
             history_auto_delete: default_history_auto_delete(),
             save_history: true,
             show_overlay: true,
+            overlay_size: default_overlay_size(),
             overlay_position: default_overlay_position(),
-            transcript_size_indicator: false,
-            length_indicator_unit: default_length_indicator_unit(),
             cursor_dot_indicator: false,
             sound_on_start: true,
             sound_on_finish: false,
@@ -1239,8 +1231,13 @@ mod tests {
         // Write directly through the private helper to simulate what save()
         // does — we can't call save() itself because it always writes to the
         // real config_path().
-        write_private_file(&path, toml::to_string_pretty(&Config::default()).unwrap().as_bytes())
-            .expect("write config");
+        write_private_file(
+            &path,
+            toml::to_string_pretty(&Config::default())
+                .unwrap()
+                .as_bytes(),
+        )
+        .expect("write config");
 
         #[cfg(unix)]
         {

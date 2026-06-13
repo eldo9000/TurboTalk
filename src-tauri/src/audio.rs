@@ -95,6 +95,12 @@ pub struct AudioCapture {
     samples: Arc<Mutex<Vec<f32>>>,
     level: Arc<AtomicU32>, // current RMS as f32 bits
     is_recording: Arc<AtomicBool>,
+    /// Set true by the cpal callback the first time it appends samples after
+    /// `is_recording` flips on. Lets the hotkey path hold the overlay on the
+    /// yellow "connecting" tile until CoreAudio actually delivers audio, then
+    /// flash red — so the user never starts talking into a cold (silent)
+    /// stream. Cleared at the top of every `start()`. Read via `audio_live()`.
+    first_sample: Arc<AtomicBool>,
     /// Set by the cpal error callback when CoreAudio reports the device went
     /// away mid-recording (e.g. AirPods disconnected). Read edge-triggered by
     /// `device_lost()` — swap-to-false on read so a single device-loss event
@@ -183,7 +189,10 @@ pub enum DiscardReason {
 /// Result of a `stop()` call. The `Wav` variant carries a `TempPath` whose
 /// `Drop` removes the on-disk WAV — callers don't need to clean up.
 pub enum StopOutcome {
-    Wav { path: TempPath, speech_detected: bool },
+    Wav {
+        path: TempPath,
+        speech_detected: bool,
+    },
     Discard(DiscardReason),
 }
 
@@ -382,6 +391,7 @@ impl AudioCapture {
             samples: Arc::new(Mutex::new(Vec::new())),
             level: Arc::new(AtomicU32::new(0)),
             is_recording: Arc::new(AtomicBool::new(false)),
+            first_sample: Arc::new(AtomicBool::new(false)),
             device_lost: Arc::new(AtomicBool::new(false)),
             warm_stream: Arc::new(Mutex::new(None)),
             warm_device_name: Arc::new(Mutex::new(None)),
@@ -506,6 +516,7 @@ impl AudioCapture {
         let rec = self.is_recording.clone();
         let smp = self.samples.clone();
         let lvl = self.level.clone();
+        let first = self.first_sample.clone();
 
         // TASK-37: size and prepare the pre-roll ring for this stream's
         // native rate / channels. Cleared (not just resized) because a
@@ -589,6 +600,7 @@ impl AudioCapture {
                         push_preroll(&pre, cap, data);
                         if rec.load(Ordering::Relaxed) {
                             smp.lock().extend_from_slice(data);
+                            first.store(true, Ordering::Relaxed);
                             lvl.store(rms(data).to_bits(), Ordering::Relaxed);
                         } else {
                             lvl.store(0_f32.to_bits(), Ordering::Relaxed);
@@ -610,6 +622,7 @@ impl AudioCapture {
                         push_preroll(&pre, cap, &floats);
                         if rec.load(Ordering::Relaxed) {
                             smp.lock().extend_from_slice(&floats);
+                            first.store(true, Ordering::Relaxed);
                             lvl.store(rms(&floats).to_bits(), Ordering::Relaxed);
                         } else {
                             lvl.store(0_f32.to_bits(), Ordering::Relaxed);
@@ -631,6 +644,7 @@ impl AudioCapture {
                         push_preroll(&pre, cap, &floats);
                         if rec.load(Ordering::Relaxed) {
                             smp.lock().extend_from_slice(&floats);
+                            first.store(true, Ordering::Relaxed);
                             lvl.store(rms(&floats).to_bits(), Ordering::Relaxed);
                         } else {
                             lvl.store(0_f32.to_bits(), Ordering::Relaxed);
@@ -655,6 +669,16 @@ impl AudioCapture {
         f32::from_bits(self.level.load(Ordering::Relaxed))
     }
 
+    /// True once the cpal callback has appended at least one buffer of
+    /// post-press audio since the last `start()`. On a cold start this lags
+    /// `start()` by the CoreAudio cold-start latency (~200 ms, more with a
+    /// route switch); on a warm stream it flips within one callback (~10 ms).
+    /// The hotkey path polls this to gate the red "recording" indicator on
+    /// real capture instead of `stream.play()` returning.
+    pub fn audio_live(&self) -> bool {
+        self.first_sample.load(Ordering::Relaxed)
+    }
+
     /// Edge-triggered read: returns true once when the cpal error callback
     /// flagged the device as gone, then resets so the next caller sees false.
     pub fn device_lost(&self) -> bool {
@@ -673,6 +697,11 @@ impl AudioCapture {
     pub fn start(&self) -> anyhow::Result<()> {
         self.samples.lock().clear();
         self.level.store(0_f32.to_bits(), Ordering::Relaxed);
+        // Re-arm the first-sample gate. The cpal callback sets it true once it
+        // appends post-press audio; the hotkey path polls `audio_live()` to
+        // know when CoreAudio is genuinely delivering before flipping the
+        // overlay from yellow "connecting" to red "recording".
+        self.first_sample.store(false, Ordering::SeqCst);
         // If the previous session ended with device-lost, the warm
         // stream is broken — drop it so we re-open below.
         let device_was_lost = self.device_lost.swap(false, Ordering::SeqCst);
@@ -1118,7 +1147,10 @@ impl AudioCapture {
             "[audio] stage timings (ms): capture_clone={:.2} downmix={:.2} resample={:.2} vad={:.2} normalize={:.2} wav_write={:.2} total={:.2} (batch_fallback)",
             capture_clone_ms, downmix_ms, resample_ms, vad_ms, normalize_ms, wav_write_ms, total_ms
         );
-        Ok(StopOutcome::Wav { path: temp_path, speech_detected: true })
+        Ok(StopOutcome::Wav {
+            path: temp_path,
+            speech_detected: true,
+        })
     }
 
     /// Write the streaming finalizer's already-trimmed, already-
@@ -1188,7 +1220,10 @@ impl AudioCapture {
             result.vad_frames,
             result.resampled_total,
         );
-        Ok(StopOutcome::Wav { path: temp_path, speech_detected: result.speech_detected })
+        Ok(StopOutcome::Wav {
+            path: temp_path,
+            speech_detected: result.speech_detected,
+        })
     }
 
     /// Common WAV-write helper for both the streaming and batch paths.

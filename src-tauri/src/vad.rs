@@ -118,28 +118,24 @@ impl Vad {
         // Build input tensors using the (shape, &[T]) tuple form — no ndarray.
         // Silero input: "input" => [1, N] f32
         let input_shape = [1usize, frame.len()];
-        let t_input =
-            TensorRef::from_array_view((&input_shape[..], frame))
-                .map_err(|e| anyhow::anyhow!("build 'input' tensor failed: {e}"))?;
+        let t_input = TensorRef::from_array_view((&input_shape[..], frame))
+            .map_err(|e| anyhow::anyhow!("build 'input' tensor failed: {e}"))?;
 
         // "sr" => [1] i64 (scalar sample-rate)
         let sr_val = [16_000i64];
         let sr_shape = [1usize];
-        let t_sr =
-            TensorRef::from_array_view((&sr_shape[..], &sr_val[..]))
-                .map_err(|e| anyhow::anyhow!("build 'sr' tensor failed: {e}"))?;
+        let t_sr = TensorRef::from_array_view((&sr_shape[..], &sr_val[..]))
+            .map_err(|e| anyhow::anyhow!("build 'sr' tensor failed: {e}"))?;
 
         // "h" => [2, 1, 64] f32
         let h_shape = [2usize, 1, 64];
-        let t_h =
-            TensorRef::from_array_view((&h_shape[..], &self.h_state[..]))
-                .map_err(|e| anyhow::anyhow!("build 'h' tensor failed: {e}"))?;
+        let t_h = TensorRef::from_array_view((&h_shape[..], &self.h_state[..]))
+            .map_err(|e| anyhow::anyhow!("build 'h' tensor failed: {e}"))?;
 
         // "c" => [2, 1, 64] f32
         let c_shape = [2usize, 1, 64];
-        let t_c =
-            TensorRef::from_array_view((&c_shape[..], &self.c_state[..]))
-                .map_err(|e| anyhow::anyhow!("build 'c' tensor failed: {e}"))?;
+        let t_c = TensorRef::from_array_view((&c_shape[..], &self.c_state[..]))
+            .map_err(|e| anyhow::anyhow!("build 'c' tensor failed: {e}"))?;
 
         let outputs = self
             .session

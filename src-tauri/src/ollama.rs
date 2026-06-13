@@ -235,14 +235,10 @@ fn pull_ollama_model_blocking(app: tauri::AppHandle, model_name: String) -> Resu
         "stream": true,
     });
 
-    let resp = client
-        .post(endpoint)
-        .json(&body)
-        .send()
-        .map_err(|e| {
-            tracing::error!("[ollama-pull] request failed: {e}");
-            format!("pull request failed: {e}")
-        })?;
+    let resp = client.post(endpoint).json(&body).send().map_err(|e| {
+        tracing::error!("[ollama-pull] request failed: {e}");
+        format!("pull request failed: {e}")
+    })?;
 
     let http_status = resp.status();
     tracing::info!("[ollama-pull] HTTP {http_status}");
@@ -344,7 +340,7 @@ pub async fn prewarm_ollama() {
         return;
     }
     let model = cfg.cleanup.classifier_model.clone();
-    let url   = cfg.cleanup.ollama_url.clone();
+    let url = cfg.cleanup.ollama_url.clone();
 
     // Spawn on the blocking thread pool and immediately drop the handle —
     // caller returns before the generate completes.
@@ -372,7 +368,7 @@ pub async fn prewarm_ollama() {
             "options": { "num_predict": 1 },
         });
         match client.post(endpoint).json(&body).send() {
-            Ok(_)  => tracing::info!("[ollama-prewarm] model loaded"),
+            Ok(_) => tracing::info!("[ollama-prewarm] model loaded"),
             Err(e) => tracing::debug!("[ollama-prewarm] skipped: {e}"),
         }
     }));
