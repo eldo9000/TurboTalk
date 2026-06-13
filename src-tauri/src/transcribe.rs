@@ -8,7 +8,7 @@
 // model changes or after an abort.
 //
 // TASK-55: post-hoc hallucination detection. After strip_trailing_filler, the
-// transcript is passed through detect_garbage(). If it trips any of the three
+// transcript is passed through detect_garbage(). If it trips any of the
 // detection signals below, the caller receives a TranscriptOutcome with a
 // rejection variant, displays the text as "⚠ filtered", and skips paste.
 //
@@ -23,7 +23,7 @@ const GARBAGE_COMPRESS_RATIO: f64 = 0.35;
 
 /// Maximum number of times the same three-word sequence (trigram) may appear
 /// before the transcript is considered a repetition loop.
-const GARBAGE_TRIGRAM_MAX_REPEATS: usize = 3;
+const GARBAGE_TRIGRAM_MAX_REPEATS: usize = 2;
 
 /// Maximum number of times the same two-word sequence (bigram) may appear
 /// before the transcript is considered a repetition loop. Catches single-word
@@ -36,6 +36,15 @@ const GARBAGE_BIGRAM_MAX_REPEATS: usize = 3;
 /// common punctuation (.,!?'-). Above this → junk characters / all-zeros
 /// hallucination. 0.30 = up to 30% non-letter-ish chars is tolerated.
 const GARBAGE_NON_LETTER_RATIO: f64 = 0.30;
+
+/// Minimum normalized Shannon entropy (word-level). Values below this
+/// indicate unnaturally low word variety — a safety net for repetition
+/// patterns that don't align to n-gram boundaries (e.g. 4-cycle halved:
+/// "a b c d a b c d"). Computed as H(word_freq) / log2(word_count),
+/// ranging from 0 (all same word) to ~1 (all unique). Threshold 0.55
+/// catches repetitive loops while passing natural filler-word repetition
+/// ("the meeting is at 3 and the meeting is at 4" ≈ 0.86).
+const GARBAGE_ENTROPY_RATIO: f64 = 0.55;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -70,6 +79,10 @@ pub enum RejectReason {
     /// More than `GARBAGE_NON_LETTER_RATIO` of characters are not letters,
     /// digits, spaces, or common punctuation — likely all-zeros or junk.
     NonLetterJunk,
+    /// Normalized word-level Shannon entropy below `GARBAGE_ENTROPY_RATIO` —
+    /// the text has unnaturally low word variety (a repetition loop that
+    /// didn't align to n-gram boundaries).
+    LowEntropy,
 }
 
 impl RejectReason {
@@ -86,6 +99,8 @@ impl RejectReason {
                 "Repetition loop detected — a partial syllable was repeated before the full word.",
             RejectReason::NonLetterJunk =>
                 "Junk characters detected — Whisper produced garbage output on silence.",
+            RejectReason::LowEntropy =>
+                "Repetition loop detected — words lack the variety of natural speech.",
         }
     }
 }
@@ -101,7 +116,7 @@ pub struct TranscriptOutcome {
     pub rejection: Option<RejectReason>,
 }
 
-/// Run the three hallucination-detection signals on `text`. Returns the first
+/// Run the hallucination-detection signals on `text`. Returns the first
 /// failing signal, or `None` if all pass (clean transcript).
 ///
 /// Called after `strip_trailing_filler` so trailing-filler removal has already
@@ -220,6 +235,38 @@ pub fn detect_garbage(text: &str) -> Option<RejectReason> {
                     }
                 }
                 i = if run_end > i + 1 { run_end } else { i + 1 };
+            }
+        }
+    }
+
+    // ── Signal 2d: Shannon entropy (word-level) ──────────────────────────────
+    // Safety net for repetition patterns that don't align to n-gram boundaries
+    // (e.g. 4-cycle "a b c d a b c d" produces only 2 copies of any trigram,
+    // below the trigram threshold). Computed as H / log2(N), where H is
+    // Shannon entropy of the word-frequency distribution. A ratio < 0.55
+    // means the text has unnaturally low variety for its length.
+    {
+        let words: Vec<&str> = text.split_whitespace().collect();
+        if words.len() >= 4 {
+            let total = words.len() as f64;
+            let mut freq: std::collections::HashMap<&str, usize> =
+                std::collections::HashMap::new();
+            for w in &words {
+                *freq.entry(w).or_insert(0) += 1;
+            }
+            // H = -sum(p_i * log2(p_i))
+            let entropy: f64 = freq
+                .values()
+                .map(|&c| {
+                    let p = c as f64 / total;
+                    -p * p.log2()
+                })
+                .sum();
+            let max_entropy = total.log2();
+            let ratio = entropy / max_entropy;
+            tracing::debug!("[detect_garbage] entropy ratio = {:.3}", ratio);
+            if ratio < GARBAGE_ENTROPY_RATIO {
+                return Some(RejectReason::LowEntropy);
             }
         }
     }
