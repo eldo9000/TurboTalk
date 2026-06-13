@@ -155,7 +155,7 @@ impl PollContext {
             tracing::info!(
                 "[hotkey] win32 poll key down vk=0x{vk:02X} config={config_key}"
             );
-            if cancel_on_hold {
+            if cancel_on_hold && common::should_arm_hold_cancel(&self.recorder) {
                 common::arm_hold_cancel(&self.recorder, &self.tray_icon, &self.app, toggle_mode);
             }
             if toggle_mode {

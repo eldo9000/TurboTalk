@@ -106,6 +106,9 @@
   function defaultHotkeyKey() {
     return platform === 'windows' ? 'right_control' : 'right_option';
   }
+  function defaultHotkeyMode() {
+    return platform === 'windows' ? 'toggle' : 'hold';
+  }
 
   async function recheckReadiness() {
     const r = await commands.checkReadiness();
@@ -900,7 +903,7 @@ Reply with only the single word, lowercase, no punctuation.
     ]);
     cfgDevice            = cfg.audio?.device                   ?? 'default';
     cfgHotkeyKey         = cfg.hotkey?.key                     ?? defaultHotkeyKey();
-    cfgHotkeyMode        = cfg.hotkey?.mode                    ?? 'hold';
+    cfgHotkeyMode        = cfg.hotkey?.mode                    ?? defaultHotkeyMode();
     cfgCancelOnEsc       = cfg.hotkey?.cancel_on_esc            ?? true;
     cfgCancelOnHold      = cfg.hotkey?.cancel_on_hold           ?? true;
     const parsed         = parseHotkeyKey(cfgHotkeyKey);
@@ -929,7 +932,7 @@ Reply with only the single word, lowercase, no punctuation.
     const cfg = await commands.getConfig();
     if (!cfg.whisper) cfg.whisper = { bin: 'auto', model: '', models: [] };
     if (!cfg.audio)   cfg.audio   = { device: 'default', idle_timeout_secs: 0 };
-    if (!cfg.hotkey)  cfg.hotkey  = { key: defaultHotkeyKey(), mode: 'hold', cancel_on_esc: true, cancel_on_hold: true };
+    if (!cfg.hotkey)  cfg.hotkey  = { key: defaultHotkeyKey(), mode: defaultHotkeyMode(), cancel_on_esc: true, cancel_on_hold: true };
     cfg.whisper.bin                   = cfgBin;
     cfg.audio.device                  = cfgDevice;
     cfg.theme                         = cfgTheme;
@@ -998,7 +1001,7 @@ Reply with only the single word, lowercase, no punctuation.
       if (disposed) return;
       cfgTheme      = initialCfg.theme        ?? 'auto';
       cfgHotkeyKey  = initialCfg.hotkey?.key  ?? defaultHotkeyKey();
-      cfgHotkeyMode = initialCfg.hotkey?.mode ?? 'hold';
+      cfgHotkeyMode = initialCfg.hotkey?.mode ?? defaultHotkeyMode();
       if (savedHistory.length) history = savedHistory;
 
       // Detect Logitech mouse — fast ioreg call, fire-and-forget
@@ -1077,12 +1080,19 @@ Reply with only the single word, lowercase, no punctuation.
       // TASK-55: hallucination rejection. Show the text in the main window with
       // a "⚠ filtered" badge; emit a toast with the reason. Paste is skipped
       // by the backend — we only observe the result here.
+      // The text is also added to history so the user can click-to-copy it
+      // instead of having to manually highlight/right-click the banner.
       listenTracked('transcription-rejected', (e) => {
         recording = false;
         transcribing = false;
         const p = e.payload || {};
         logUi('transcription-rejected', p.reason || 'filtered');
         filteredEntry = { text: p.text || '', reason: p.reason || 'Hallucination detected' };
+        const text = p.text;
+        if (text) {
+          history = [{ text, ts: Date.now() }, ...history];
+          commands.saveHistory(history);
+        }
         const id = ++uiErrorId;
         uiErrors = [...uiErrors, {
           id,
@@ -1099,13 +1109,6 @@ Reply with only the single word, lowercase, no punctuation.
         transcribing = false;
         transcriptError = e.payload || 'Transcription failed.';
         setTimeout(() => { transcriptError = ''; }, 5000);
-      });
-      listenTracked('paste-miss', (e) => {
-        logUi('paste-miss', String(e.payload ?? ''));
-        recording = false;
-        transcribing = false;
-        transcriptError = e.payload || 'Paste missed — text is in your clipboard.';
-        setTimeout(() => { transcriptError = ''; }, 4000);
       });
       listenTracked('paste-error', (e) => {
         recording = false;
@@ -1333,15 +1336,12 @@ Reply with only the single word, lowercase, no punctuation.
           <button onclick={() => { transcriptError = ''; }} class="tt-banner-close">×</button>
         </div>
       {/if}
-      <!-- TASK-55: hallucination-rejected transcript. Displayed with a warning
-           badge inline so the user can see what was filtered and why. Not added
-           to history (it was never pasted). Dismiss clears the entry. -->
+      <!-- TASK-55: hallucination-rejected transcript. Single-line warning only —
+           the full text was added to history by the event handler so the user
+           can click-to-copy it from the list below. -->
       {#if filteredEntry}
         <div class="tt-banner-error" style="border-color: var(--warning, #c97d00); background: var(--warning-bg, #fff8e0);">
-          <div style="flex: 1; min-width: 0;">
-            <span style="font-size: 0.68rem; font-weight: 600; color: var(--warning, #c97d00); margin-right: 4px;">⚠ filtered</span>
-            <span class="tt-banner-error-msg" style="font-size: 0.78rem; opacity: 0.8;">{filteredEntry.text}</span>
-          </div>
+          <span style="font-size: 0.72rem; font-weight: 600; color: var(--warning, #c97d00);">⚠ Filtered: {filteredEntry.reason}</span>
           <button onclick={() => { filteredEntry = null; }} class="tt-banner-close">×</button>
         </div>
       {/if}

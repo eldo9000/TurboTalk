@@ -83,3 +83,5 @@
 - **Falsif-result:** deferred — CI is the only validator
 - **Strike count:** 1 of 8
 - **Next:** CI run #27322438132 from `main`
+
+## Fail arc closed — 2026-06-10 — 1 entry — green CI 27322438132

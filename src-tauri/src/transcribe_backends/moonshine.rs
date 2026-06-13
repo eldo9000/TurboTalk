@@ -213,16 +213,14 @@ fn prepare_moonshine_samples(wav: &Path) -> anyhow::Result<Vec<f32>> {
 /// # Abort
 ///
 /// Moonshine runs entirely in-process (no subprocess), so `abort()` cannot
-/// interrupt an in-flight ONNX session. The `abort_flag` is set and checked
-/// at the transcription entry point — a cancel takes effect between recordings
-/// but not mid-inference. In-flight inference completes naturally (<1 s for Tiny/Base).
+/// interrupt an in-flight ONNX session. Recorder cancellation moves the job
+/// back to Ready; the old transcription finishes naturally and is discarded by
+/// the hotkey lifecycle because the recorder state no longer permits Cleaning.
 pub struct MoonshineBackend {
     /// Canonicalized model directory, used as the `model_identity()` string.
     model_dir: PathBuf,
     /// Variant this backend was loaded with.
     variant: MoonshineVariant,
-    /// Set by `abort()` — checked at transcription entry.
-    abort_flag: std::sync::atomic::AtomicBool,
     /// Loaded Moonshine model wrapped in a Mutex for Sync.
     model: Mutex<MoonshineModel>,
 }
@@ -269,7 +267,6 @@ impl MoonshineBackend {
         Ok(Self {
             model_dir: canon_dir,
             variant,
-            abort_flag: std::sync::atomic::AtomicBool::new(false),
             model: Mutex::new(model),
         })
     }
@@ -288,15 +285,6 @@ impl MoonshineBackend {
 
 impl TranscriptionBackend for MoonshineBackend {
     fn transcribe(&self, wav: &Path) -> anyhow::Result<TranscriptOutcome> {
-        use std::sync::atomic::Ordering;
-
-        if self.abort_flag.load(Ordering::Acquire) {
-            return Ok(TranscriptOutcome {
-                text: String::new(),
-                rejection: None,
-            });
-        }
-
         let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
 
         let samples = prepare_moonshine_samples(wav)?;
@@ -326,9 +314,11 @@ impl TranscriptionBackend for MoonshineBackend {
     }
 
     fn abort(&self) {
-        use std::sync::atomic::Ordering;
-        self.abort_flag.store(true, Ordering::Release);
-        tracing::info!("[moonshine] abort requested");
+        tracing::info!("[moonshine] abort requested — in-process inference will finish naturally");
+    }
+
+    fn invalidate_after_abort(&self) -> bool {
+        false
     }
 
     fn model_identity(&self) -> String {

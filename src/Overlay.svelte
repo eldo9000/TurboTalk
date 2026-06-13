@@ -185,6 +185,10 @@
     await refreshHoverZone();
 
     const cursorTimer = setInterval(async () => {
+      if (mode !== 'recording') {
+        cursorInZone = false;
+        return;
+      }
       try {
         const cur = await cursorPosition();
         const nsX = cur.x / primarySf;
@@ -274,11 +278,6 @@
     listen('paste-error', () => {
       stopTranscribing('error');
       setTimeout(() => { mode = 'idle'; }, 2500);
-    }).then(u => uns.push(u));
-
-    listen('paste-miss', () => {
-      // transcript usually clears us first; this covers any ordering edge case.
-      if (mode === 'transcribing') stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     // Belt-and-suspenders: backend always emits stage=ready when a job ends.

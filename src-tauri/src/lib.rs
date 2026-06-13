@@ -1979,7 +1979,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    librewin_common::logging::init(env!("CARGO_PKG_NAME"));
+    let data_dir = crate::settings::data_dir();
+    librewin_common::logging::init(env!("CARGO_PKG_NAME"), &data_dir);
     let _ = diagnostic_log::ensure_log_dir();
     let log_dir = diagnostic_log::log_dir();
 

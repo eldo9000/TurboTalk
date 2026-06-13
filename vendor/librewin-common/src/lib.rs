@@ -1,4 +1,5 @@
 pub mod config;
+pub mod logging;
 pub mod media;
 pub mod os;
 pub mod window;

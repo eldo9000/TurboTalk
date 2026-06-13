@@ -100,7 +100,7 @@
     "externalBin": ["binaries/whisper-cli", "binaries/whisper-server"],
     "macOS": {
       "signingIdentity": "-",
-      "hardenedRuntime": true,
+      "hardenedRuntime": false,
       "entitlements": "entitlements.plist",
       "infoPlist": "Info.plist"
     },
