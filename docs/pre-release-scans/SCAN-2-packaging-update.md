@@ -13,7 +13,7 @@ tagging is user-initiated only.
 
 ## Primary files
 
-- `src-tauri/tauri.conf.json` — version `0.9.0`, identifier `io.librewin.turbotalk`,
+       `src-tauri/tauri.conf.json` — version `0.9.0`, identifier `com.turbotalk.dictation`,
   updater block (pubkey + endpoint), bundle/macOS signing block.
 - `src-tauri/tauri.macos.conf.json` — extra bundled resources (dylibs, vad model,
   onnxruntime).

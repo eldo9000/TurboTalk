@@ -87,6 +87,47 @@ pub(crate) mod common {
         JOB_ID.fetch_add(1, Ordering::Relaxed) + 1
     }
 
+    /// Incremented on every accepted cancel action. The ptt-up worker captures
+    /// this after it owns the stopped job, then checks it before emitting or
+    /// pasting text. This covers the post-key-up window where `CURRENT_JOB_ID`
+    /// has already moved into a local variable and cancel otherwise has no
+    /// shared job handle left to invalidate.
+    static CANCEL_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+    fn cancel_epoch() -> u64 {
+        CANCEL_EPOCH.load(Ordering::Acquire)
+    }
+
+    fn job_cancelled_since(epoch: u64) -> bool {
+        CANCEL_EPOCH.load(Ordering::Acquire) != epoch
+    }
+
+    fn wait_for_hold_cancel_window(epoch: u64, job_id_opt: Option<u64>) -> bool {
+        if job_cancelled_since(epoch) {
+            return true;
+        }
+        if !HOLD_CANCEL_KEY_DOWN.load(Ordering::Acquire) {
+            return false;
+        }
+
+        let deadline = std::time::Instant::now() + HOLD_CANCEL_DURATION;
+        tracing::debug!(
+            "[hotkey job_id={:?}] paste waiting for active hold-cancel window",
+            job_id_opt
+        );
+        while HOLD_CANCEL_KEY_DOWN.load(Ordering::Acquire) {
+            if job_cancelled_since(epoch) {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        job_cancelled_since(epoch)
+    }
+
     /// Payload for the additive `dictation-stage` event introduced in TASK-15.
     /// Frontend listeners may ignore this entirely; existing events
     /// (`ptt-down`, `ptt-up`, `transcript`, `recording-discarded`, …) are
@@ -159,11 +200,10 @@ pub(crate) mod common {
     > = parking_lot::Mutex::new(None);
 
     /// Hold-to-cancel: how long the trigger key must be held during a busy
-    /// recorder (Recording or Transcribing) before the gesture fires. Longer
-    /// than typical tap-to-toggle latency so a normal toggle stop never trips
-    /// the cancel.
+    /// recorder before the gesture fires. Longer than typical tap-to-toggle
+    /// latency so a normal toggle stop never trips the cancel.
     pub(super) const HOLD_CANCEL_DURATION: std::time::Duration =
-        std::time::Duration::from_millis(1000);
+        std::time::Duration::from_millis(500);
 
     /// Generation counter for hold-to-cancel candidate presses. Each qualifying
     /// trigger-key down stroke increments this; the timer thread captures its
@@ -181,15 +221,12 @@ pub(crate) mod common {
     /// key while a toggle recording is warming up/starting should not
     /// accidentally cancel the recording they just began.
     pub(super) fn should_arm_hold_cancel(recorder: &Arc<Recorder>) -> bool {
-        matches!(
-            recorder.state(),
-            crate::recorder::State::Recording | crate::recorder::State::Transcribing
-        )
+        recorder.state().is_busy()
     }
 
     /// Arm a hold-to-cancel timer. When the deadline elapses, if the same
-    /// press is still held and the recorder is Recording or Transcribing,
-    /// fire `trigger_cancel`.
+    /// press is still held and the recorder is still busy, fire
+    /// `trigger_cancel`.
     ///
     /// `toggle_mode` controls whether `SUPPRESS_PTT_UP_COUNT` is armed: in
     /// hold mode a key-up `ptt_up` is always coming and needs the suppression
@@ -214,10 +251,7 @@ pub(crate) mod common {
             if !HOLD_CANCEL_KEY_DOWN.load(Ordering::Acquire) {
                 return;
             }
-            if !matches!(
-                rec.state(),
-                crate::recorder::State::Recording | crate::recorder::State::Transcribing
-            ) {
+            if !rec.state().is_busy() {
                 return;
             }
             // In hold mode a key-up ptt_up is always on its way and needs
@@ -250,6 +284,7 @@ pub(crate) mod common {
         if matches!(recorder.state(), crate::recorder::State::Ready) {
             return;
         }
+        CANCEL_EPOCH.fetch_add(1, Ordering::AcqRel);
         play_chime(ChimeEvent::Cancel);
         let rec = recorder.clone();
         let tray = tray_icon.clone();
@@ -645,6 +680,7 @@ pub(crate) mod common {
                     // Wav arm to assemble concurrent segment results with the tail.
                     // Dropped automatically (joining its worker) in Discard / Err arms.
                     let seg_transcriber_opt = CURRENT_SEG_TRANSCRIBER.lock().take();
+                    let cancel_epoch_at_stop = cancel_epoch();
 
                     // We are now in `FinalizingAudio` per recorder contract.
                     let _ = tray.set_icon(Some(tray::make_icon(TrayState::Transcribing)));
@@ -856,6 +892,18 @@ pub(crate) mod common {
                                     play_chime(ChimeEvent::Finish);
                                     return;
                                 }
+                                if wait_for_hold_cancel_window(cancel_epoch_at_stop, job_id_opt) {
+                                    tracing::info!(
+                                        "[hotkey job_id={:?}] cancel observed after cleanup/hold window — suppressing transcript/paste",
+                                        job_id_opt
+                                    );
+                                    rec.finish_guarded();
+                                    let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                                    if let Some(job_id) = job_id_opt {
+                                        emit_stage(&app, job_id, "ready");
+                                    }
+                                    return;
+                                }
                                 emit_critical(&app, "transcript", final_text.clone());
 
                                 // Cleaning → Pasting
@@ -869,6 +917,18 @@ pub(crate) mod common {
                                 }
                                 if let Some(job_id) = job_id_opt {
                                     emit_stage(&app, job_id, "pasting");
+                                }
+                                if job_cancelled_since(cancel_epoch_at_stop) {
+                                    tracing::info!(
+                                        "[hotkey job_id={:?}] cancel observed before paste — suppressing paste",
+                                        job_id_opt
+                                    );
+                                    rec.finish_guarded();
+                                    let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                                    if let Some(job_id) = job_id_opt {
+                                        emit_stage(&app, job_id, "ready");
+                                    }
+                                    return;
                                 }
 
                                 let focus_at_paste = crate::paste::frontmost_app();
@@ -969,6 +1029,18 @@ pub(crate) mod common {
                                 play_chime(ChimeEvent::Finish);
                                 return;
                             }
+                            if wait_for_hold_cancel_window(cancel_epoch_at_stop, job_id_opt) {
+                                tracing::info!(
+                                    "[hotkey job_id={:?}] cancel observed after cleanup/hold window — suppressing transcript/paste",
+                                    job_id_opt
+                                );
+                                rec.finish_guarded();
+                                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                                if let Some(job_id) = job_id_opt {
+                                    emit_stage(&app, job_id, "ready");
+                                }
+                                return;
+                            }
                             emit_critical(&app, "transcript", final_text.clone());
 
                             // Cleaning → Pasting
@@ -982,6 +1054,18 @@ pub(crate) mod common {
                             }
                             if let Some(job_id) = job_id_opt {
                                 emit_stage(&app, job_id, "pasting");
+                            }
+                            if job_cancelled_since(cancel_epoch_at_stop) {
+                                tracing::info!(
+                                    "[hotkey job_id={:?}] cancel observed before paste — suppressing paste",
+                                    job_id_opt
+                                );
+                                rec.finish_guarded();
+                                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                                if let Some(job_id) = job_id_opt {
+                                    emit_stage(&app, job_id, "ready");
+                                }
+                                return;
                             }
 
                             // Stage 3: paste into the focused app.
@@ -1058,6 +1142,7 @@ pub(crate) mod common {
                     let job_id_opt = CURRENT_JOB_ID.lock().take();
                     let focus_at_start: Option<String> = FOCUS_AT_START.lock().take().flatten();
                     let seg_transcriber_opt = CURRENT_SEG_TRANSCRIBER.lock().take();
+                    let cancel_epoch_at_stop = cancel_epoch();
 
                     // Tail-empty recovery: when a silence-boundary segment cut
                     // takes all the audio just before stop(), the tail has 0
@@ -1116,6 +1201,17 @@ pub(crate) mod common {
                                     emit_critical(&app, "recording-discarded", "empty-final-text");
                                     play_chime(ChimeEvent::Finish);
                                 } else {
+                                    if wait_for_hold_cancel_window(cancel_epoch_at_stop, job_id_opt) {
+                                        tracing::info!(
+                                            "[hotkey job_id={:?}] seg-recovery: cancel observed after cleanup/hold window — suppressing paste",
+                                            job_id_opt
+                                        );
+                                        let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                                        if let Some(job_id) = job_id_opt {
+                                            emit_stage(&app, job_id, "ready");
+                                        }
+                                        return;
+                                    }
                                     // Segment recovery fires only when the tail
                                     // after the last silence-boundary cut is under
                                     // MIN_RECORDING_MS — i.e. trailing sub-threshold
@@ -1129,6 +1225,17 @@ pub(crate) mod common {
                                     emit_critical(&app, "recording-recovered", final_text.clone());
                                     if let Some(job_id) = job_id_opt {
                                         emit_stage(&app, job_id, "pasting");
+                                    }
+                                    if job_cancelled_since(cancel_epoch_at_stop) {
+                                        tracing::info!(
+                                            "[hotkey job_id={:?}] seg-recovery: cancel observed before paste — suppressing paste",
+                                            job_id_opt
+                                        );
+                                        let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                                        if let Some(job_id) = job_id_opt {
+                                            emit_stage(&app, job_id, "ready");
+                                        }
+                                        return;
                                     }
                                     let focus_at_paste = crate::paste::frontmost_app();
                                     tracing::info!(
@@ -1585,17 +1692,13 @@ mod imp {
                             )
                         };
 
-                        // Escape → cancel any in-flight recording. Read-only on
-                        // events outside Recording/Transcribing so it never
-                        // swallows Escape from the focused app while idle.
+                        // Escape → cancel any in-flight recording. Read-only
+                        // while idle so it never swallows Escape from the
+                        // focused app outside dictation.
                         if let CGEventType::KeyDown = etype {
                             if cancel_on_esc && keycode == ESCAPE_KEYCODE {
                                 let s = recorder_cb.state();
-                                if matches!(
-                                    s,
-                                    crate::recorder::State::Recording
-                                        | crate::recorder::State::Transcribing
-                                ) {
+                                if s.is_busy() {
                                     // If the user is still holding the record key
                                     // (hold mode + Recording), the matching key-up
                                     // will fire ptt_up; arm one slot so it no-ops
@@ -1979,11 +2082,7 @@ mod imp {
                 if let rdev::EventType::KeyPress(rdev::Key::Escape) = event.event_type {
                     if cancel_on_esc {
                         let s = recorder.state();
-                        if matches!(
-                            s,
-                            crate::recorder::State::Recording
-                                | crate::recorder::State::Transcribing
-                        ) {
+                        if s.is_busy() {
                             if !toggle_mode && matches!(s, crate::recorder::State::Recording) {
                                 common::arm_ptt_up_suppression();
                             }
@@ -2002,7 +2101,7 @@ mod imp {
                         if was_down {
                             return;
                         }
-                        // Hold-to-cancel: arm a 1 s timer if the recorder
+                        // Hold-to-cancel: arm a 500 ms timer if the recorder
                         // is busy. Held past the deadline → cancel; released
                         // early → no-op and normal PTT semantics apply.
                         if cancel_on_hold && common::should_arm_hold_cancel(&recorder) {

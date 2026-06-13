@@ -15,7 +15,7 @@
 // ── Model storage ────────────────────────────────────────────────────────────
 //
 // Model files (ONNX bundle) are stored under:
-//   ~/.config/librewin/turbotalk/models/parakeet/<variant>/
+//   ~/.config/turbotalk/models/parakeet/<variant>/
 //
 // Required files per variant (Parakeet TDT, as expected by transcribe-rs):
 //   encoder-model.onnx     (the CTC/TDT encoder)
@@ -96,18 +96,18 @@ pub fn parse_variant(s: &str) -> Option<ParakeetVariant> {
 // ── Model path helpers ────────────────────────────────────────────────────────
 
 /// Base directory for Parakeet model bundles.
-/// Returns `~/.config/librewin/turbotalk/models/parakeet/`.
+/// Returns `~/.config/turbotalk/models/parakeet/`.
 ///
 /// Does NOT require the directory to exist — callers that need it to exist
 /// (e.g. the download command) create it themselves.
 pub fn parakeet_models_dir() -> Option<PathBuf> {
     let mut p = dirs::home_dir()?;
-    p.push(".config/librewin/turbotalk/models/parakeet");
+    p.push(".config/turbotalk/models/parakeet");
     Some(p)
 }
 
 /// Path to the ONNX bundle directory for a specific variant.
-/// Returns `~/.config/librewin/turbotalk/models/parakeet/<variant>/`.
+/// Returns `~/.config/turbotalk/models/parakeet/<variant>/`.
 pub fn variant_dir(variant_name_str: &str) -> Option<PathBuf> {
     let mut p = parakeet_models_dir()?;
     p.push(variant_name_str);

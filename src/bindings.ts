@@ -43,7 +43,7 @@ export const commands = {
 	 *  Download a Moonshine ONNX model bundle from HuggingFace (TASK-58).
 	 * 
 	 *  `variant` must be "tiny" or "base". Files are stored under:
-	 *    `~/.config/librewin/turbotalk/models/moonshine/<variant>/`
+	 *    `~/.config/turbotalk/models/moonshine/<variant>/`
 	 * 
 	 *  Progress events match the Whisper `download-progress` pattern:
 	 *    `{ "name": "moonshine-<variant>", "pct": 0..100 }`
@@ -99,11 +99,11 @@ export const commands = {
 	saveHistory: (entries: HistoryEntry[]) => typedError<null, string>(__TAURI_INVOKE("save_history", { entries })),
 	copyHistoryItem: (text: string) => typedError<null, string>(__TAURI_INVOKE("copy_history_item", { text })),
 	/**
-	 *  Cancel an in-flight recording (Recording or Transcribing state) from the
-	 *  frontend. The hotkey thread calls `recorder.cancel()` directly and does not
-	 *  go through this command — this command exists for future UI use (e.g. an
-	 *  X button on the overlay). Registered in the invoke_handler and specta
-	 *  builder so it appears in `bindings.ts` (TASK-23).
+	 *  Cancel an in-flight dictation job from the frontend. The hotkey thread
+	 *  calls `recorder.cancel()` directly and does not go through this command —
+	 *  this command exists for future UI use (e.g. an X button on the overlay).
+	 *  Registered in the invoke_handler and specta builder so it appears in
+	 *  `bindings.ts` (TASK-23).
 	 */
 	cancelRecording: () => typedError<null, string>(__TAURI_INVOKE("cancel_recording")),
 	startRecording: () => __TAURI_INVOKE<void>("start_recording"),

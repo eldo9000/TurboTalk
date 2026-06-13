@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
-  import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { currentMonitor, getCurrentWindow } from '@tauri-apps/api/window';
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { open as openFilePicker } from '@tauri-apps/plugin-dialog';
   import { initTheme } from '@libre/ui/src/theme.js';
@@ -412,7 +412,7 @@ Reply with only the single word, lowercase, no punctuation.
   }
 
   // Compact segmented-button class composer — used by Settings panel rows
-  // (Hotkey side, Recording mode, Theme). Mirrors the Libre-Apps gallery mock.
+  // (Hotkey side, Recording mode, Theme). Mirrors shared panel conventions.
   function seg(active, i, total) {
     const base  = 'tt-seg-btn';
     const first = i === 0           ? ' tt-seg-first' : '';
@@ -517,37 +517,49 @@ Reply with only the single word, lowercase, no punctuation.
   const ZOOM_LEVELS = [100, 125, 150, 175, 200];
   let zoomIdx = $state(parseInt(localStorage.getItem('tt-zoom') ?? '0'));
 
-  // Main window: 550px wide (fixed), height user-resizable with 560px floor.
-  const WINDOW_W = 550;
+  // Main window: preferred utility size with compact-screen escape hatches.
+  const WINDOW_W_DEFAULT = 550;
   const WINDOW_H_DEFAULT = 560;
+  const WINDOW_W_MIN = 420;
+  const WINDOW_H_MIN = 420;
   const WINDOW_HEIGHT_KEY = 'tt-window-height';
   let suppressWindowResizeTrack = false;
 
   function savedLogicalHeight() {
     const raw = parseInt(localStorage.getItem(WINDOW_HEIGHT_KEY) ?? String(WINDOW_H_DEFAULT), 10);
-    return Number.isFinite(raw) ? Math.max(WINDOW_H_DEFAULT, raw) : WINDOW_H_DEFAULT;
+    return Number.isFinite(raw) ? Math.max(WINDOW_H_MIN, raw) : WINDOW_H_DEFAULT;
   }
 
   function persistLogicalHeight(logicalH) {
     localStorage.setItem(
       WINDOW_HEIGHT_KEY,
-      String(Math.max(WINDOW_H_DEFAULT, Math.round(logicalH))),
+      String(Math.max(WINDOW_H_MIN, Math.round(logicalH))),
     );
   }
 
   async function applyWindowSizeLimits() {
     const win = getCurrentWindow();
+    const monitor = await currentMonitor().catch(() => null);
+    const scale = monitor?.scaleFactor ?? await win.scaleFactor().catch(() => 1);
+    const workW = monitor?.workArea?.size?.width ? monitor.workArea.size.width / scale : 1100;
+    const workH = monitor?.workArea?.size?.height ? monitor.workArea.size.height / scale : 8192;
     await win.setResizable(true);
     await win.setMaximizable(false);
-    await win.setMinSize(new LogicalSize(WINDOW_W, WINDOW_H_DEFAULT));
-    await win.setMaxSize(new LogicalSize(WINDOW_W, 8192));
+    await win.setMinSize(new LogicalSize(WINDOW_W_MIN, WINDOW_H_MIN));
+    await win.setMaxSize(new LogicalSize(Math.max(WINDOW_W_MIN, workW), Math.max(WINDOW_H_MIN, workH)));
   }
 
   async function applyWindowSizeFromPrefs() {
-    const h = savedLogicalHeight();
+    const win = getCurrentWindow();
+    const monitor = await currentMonitor().catch(() => null);
+    const scale = monitor?.scaleFactor ?? await win.scaleFactor().catch(() => 1);
+    const maxW = monitor?.workArea?.size?.width ? monitor.workArea.size.width / scale : WINDOW_W_DEFAULT;
+    const maxH = monitor?.workArea?.size?.height ? monitor.workArea.size.height / scale : savedLogicalHeight();
+    const w = Math.min(WINDOW_W_DEFAULT, Math.max(WINDOW_W_MIN, maxW));
+    const h = Math.min(savedLogicalHeight(), Math.max(WINDOW_H_MIN, maxH));
     suppressWindowResizeTrack = true;
     try {
-      await getCurrentWindow().setSize(new LogicalSize(WINDOW_W, h));
+      await win.setSize(new LogicalSize(w, h));
     } finally {
       suppressWindowResizeTrack = false;
     }
@@ -566,15 +578,14 @@ Reply with only the single word, lowercase, no punctuation.
     const logicalW = size.width / factor;
     const logicalH = size.height / factor;
 
-    if (logicalH < WINDOW_H_DEFAULT - 1) {
+    if (logicalH < WINDOW_H_MIN - 1) {
       suppressWindowResizeTrack = true;
       try {
-        // Preserve current width — only raise height to the spawn minimum.
-        await win.setSize(new LogicalSize(logicalW, WINDOW_H_DEFAULT));
+        await win.setSize(new LogicalSize(Math.max(WINDOW_W_MIN, logicalW), WINDOW_H_MIN));
       } finally {
         suppressWindowResizeTrack = false;
       }
-      persistLogicalHeight(WINDOW_H_DEFAULT);
+      persistLogicalHeight(WINDOW_H_MIN);
     } else {
       persistLogicalHeight(logicalH);
     }
@@ -1627,7 +1638,7 @@ Reply with only the single word, lowercase, no punctuation.
           </div>
         {/if}
         <div class="tt-row tt-row-col">
-          <p class="tt-desc">Models are stored in <code>~/.config/librewin/turbotalk/models/{cfgBackend}/</code>.</p>
+          <p class="tt-desc">Models are stored in <code>~/.config/turbotalk/models/{cfgBackend}/</code>.</p>
         </div>
       </div>
     {/if}
@@ -2373,7 +2384,7 @@ Reply with only the single word, lowercase, no punctuation.
   }
   .adv-panel-in { animation: adv-panel-in 0.2s cubic-bezier(0.16,1,0.3,1) forwards; }
 
-  /* ── Settings panel — ported from Libre-Apps gallery TurboTalkPanel ───
+  /* ── Settings panel — conventions ───
      Compact ruled sections with custom segmented and multi-toggle controls.
      Shared classes (.subsection-hd, .cb-native) live in @libre/ui tokens. */
   .tt-set {

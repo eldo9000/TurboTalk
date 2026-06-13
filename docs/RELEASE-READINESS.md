@@ -155,14 +155,14 @@ These matter for a public release. They do **not** matter for sharing v0.X with 
 
 ### Brand resolution
 
-- TurboTalk is currently logged in `Business-OS/CLAUDE.md` as a personal utility, Tier 1, *not* a Libre product unless promoted.
-- Public release implies promotion. Decision needed: does it ship under the Libre brand (and pick up the Libre HIG, certified-badge story, and release-page template), or as an Eldo personal utility that happens to be open source?
+- TurboTalk is currently logged in `Business-OS/CLAUDE.md` as a personal utility, Tier 1, *not* a public product unless promoted.
+- Public release implies promotion. Decision needed: does it ship under the brand (and pick up the HIG, certified-badge story, and release-page template), or as an Eldo personal utility that happens to be open source?
 - Both are valid; they imply different release pages, different press posture, and different ongoing maintenance commitments.
 
-### LibreWin Certified badge
+### Certified badge
 
-- Only relevant if TurboTalk releases under the Libre brand.
-- Certification criteria are in `Business-OS/standards/LIBRE-SOFTWARE-STANDARDS.md`.
+- Only relevant if TurboTalk releases under an app brand.
+- Certification criteria are in `Business-OS/standards/SOFTWARE-STANDARDS.md`.
 - Reference apps (Shelf, Stack, Prism, Fade) carry more weight than the written HIG; TurboTalk would join that tier if certified.
 
 ### Public-facing surface

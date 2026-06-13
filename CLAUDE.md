@@ -4,7 +4,7 @@
 
 - **Engineering standards:** `~/Downloads/Github/Business-OS/standards/ENGINEERING.md` — session protocol, investigation logs, commit conventions. Read before any implementation session.
 - **Operating model:** `~/Downloads/Github/Business-OS/bin/SOFTWARE-DEVELOPMENT-OPERATING-MODEL.md` — the portfolio's evidence/ledger discipline. **TurboTalk operates at Tier 1** (see §15): small app, obvious behavior, personal-use scope. Required artifacts are limited to `SESSION-STATUS.md` (status ledger) and `TRUTH.md` (truth ledger). Do **not** add: heavy red-build ladders, observer loops, structured commit notes, milestone gates for every task, or full closure ceremony for every commit. Add weight only if a concrete failure mode appears.
-- **Design language & shared patterns:** `~/Downloads/Github/Libre-Apps/CLAUDE.md` — design tokens, Tauri 2 patterns, Svelte 5 patterns, cross-app conventions. Read before any UI work.
+- **Design language & shared patterns:** local conventions described in this repo — Svelte 5 patterns, Tauri 2 patterns, design tokens.
 
 ## Tier 1 Habits (enforce these)
 
@@ -18,9 +18,9 @@
 
 TurboTalk is a personal-use voice dictation utility for macOS. Push-to-talk hotkey → record mic → local Whisper transcription → optional LLM cleanup → paste into the focused app.
 
-It is **not currently a Libre product.** Personal-use scope. If it earns its place, it gets promoted. Until then: private repo, GPL-3.0 license, no public release.
+It is **not a public product.** Personal-use scope. If it earns its place, it gets promoted. Until then: private repo, GPL-3.0 license, no public release.
 
-It consumes the Libre-Apps shared foundation (`librewin-common`, `@libre/ui`) but is otherwise standalone.
+It is a standalone app with no dependencies on other product ecosystems.
 
 ## Repo State
 
@@ -46,7 +46,7 @@ See `docs/ARCHITECTURE.md` for the full module plan. Key modules in `src-tauri/s
 - `hotkey.rs` — global push-to-talk via CGEventTap (macOS); stub on other platforms
 - `cleanup.rs` — LLM postprocessor (Chaperone Layer); emits `chaperone-fallback` ui-error toast on failure
 - `ollama.rs` — Ollama HTTP helpers: `ping_ollama`, `check_ollama_model`, `open_url`, `pull_ollama_model`
-- `settings.rs` — persistence under `~/.config/librewin/turbotalk/`; process-wide RwLock cache
+- `settings.rs` — persistence under `~/.config/turbotalk/`; process-wide RwLock cache
 - `diagnostics.rs` — health check command (Settings tab, dev-only surface)
 - `whisper_models.rs` — model catalog, download command, progress events
 
@@ -58,4 +58,4 @@ This repo participates in the Business-OS portfolio status system. Update `SESSI
 
 - macOS personal-use tool. No CI gates for now (add when Windows/Linux stubs are unblocked).
 - The Chaperone Layer (classifier-router LLM via Ollama) is the differentiator. Reference `Business-OS/memory/project_chaperone_layer.md` for the pattern.
-- Promote to Libre product trigger: "I use this every day for 2 weeks."
+- Promote to public product trigger: "I use this every day for 2 weeks."

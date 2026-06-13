@@ -1,18 +1,18 @@
-# TurboTalk Beta Smoke Test
+# TurboTalk Smoke Test
 
-**Purpose:** Manual verification that the 7 core dictation flows work before sharing with beta users.
+**Purpose:** Manual verification that the core dictation flows work before publishing a release.
 
 This document has three labeled sections — one per supported platform:
 
-- [macOS beta smoke test](#macos-beta-smoke-test) — the published path
-- [Windows beta smoke test](#windows-beta-smoke-test) — in development; packaging exists, but runtime is blocked by hotkey/paste stubs
-- [Linux beta smoke test (X11)](#linux-beta-smoke-test-x11) — in development, runnable once Linux sidecar binary lands
+- [macOS smoke test](#macos-smoke-test) — supported for 1.0
+- [Windows smoke test](#windows-smoke-test) — supported for 1.0
+- [Linux smoke test (X11)](#linux-smoke-test-x11) — 2.0 Linux track
 
-Each section has the same 7-step shape (clean launch → mic permission → push-to-talk → missing model → chaperone fallback → app switch → quit/relaunch). The macOS section additionally has the 11-step **Installed-artifact smoke test** that gates publishing a release.
+Each section has the same 7-step shape (clean launch → mic permission → push-to-talk → missing model → chaperone fallback → app switch → quit/relaunch). The macOS and Windows sections also include installed-artifact checks that gate publishing a 1.0 release.
 
 ---
 
-## macOS beta smoke test
+## macOS smoke test
 
 **Target platform:** macOS (Apple Silicon). All steps assume the app is installed from a DMG.
 
@@ -33,7 +33,7 @@ Each section has the same 7-step shape (clean launch → mic permission → push
 Completely remove any previous TurboTalk configuration so the app starts fresh. In Terminal, run:
 
 ```
-rm -rf ~/.config/librewin/turbotalk
+rm -rf ~/.config/turbotalk
 ```
 
 Then launch TurboTalk from /Applications.
@@ -214,7 +214,7 @@ If nothing is pasted anywhere, check that the destination window is a text-edita
 
 - The model path and any other settings you configured are still present after relaunch — nothing is reset to defaults.
 - The history view shows the dictation(s) performed before quitting.
-- `~/.config/librewin/turbotalk/history.json` exists and contains a plain JSON array capped at the newest 50 entries.
+- `~/.config/turbotalk/history.json` exists and contains a plain JSON array capped at the newest 50 entries.
 - The app is in idle/ready state and is ready to dictate again without any re-setup.
 
 **If it fails:**
@@ -222,7 +222,7 @@ If nothing is pasted anywhere, check that the destination window is a text-edita
 In Terminal, run:
 
 ```
-ls ~/.config/librewin/turbotalk/
+ls ~/.config/turbotalk/
 ```
 
 If the directory is empty or missing, settings were not written to disk on quit. The expected settings file is `config.toml`; the expected history file is `history.json` when Save history is enabled. If the directory has files but settings appear blank after relaunch, there may be a read error on startup. Note what you see and include it in your report.
@@ -242,9 +242,9 @@ When you hit a step that does not match the Expected behavior:
 
 ### Installed-artifact smoke test (macOS)
 
-Run this section after every release build (unsigned/ad-hoc DMG for this beta) and **before publishing** the release. The 7 dev-build tests above catch code regressions; this section catches packaging-layer regressions that only appear once the app is installed from a real DMG. It covers the macOS permission prompt flow when launched from `/Applications`, one end-to-end dictation, and the documented uninstall + data cleanup path. Skipping this section is how broken DMGs reach users.
+Run this section after every release build (unsigned/ad-hoc DMG for 1.0) and **before publishing** the release. The 7 dev-build tests above catch code regressions; this section catches packaging-layer regressions that only appear once the app is installed from a real DMG. It covers the macOS permission prompt flow when launched from `/Applications`, one end-to-end dictation, and the documented uninstall + data cleanup path. Skipping this section is how broken DMGs reach users.
 
-> **Signing status determines first-run behavior.** This is a beta of TurboTalk. The smoke test steps below describe the **unsigned/ad-hoc** case (the default when `APPLE_SIGNING_IDENTITY` is not configured). If signing secrets were configured in CI, the artifact is Developer-ID-signed and notarized: skip the right-click → Open trick in step 4 (double-click works), and step 2 shows `accepted` with `source=Notarized Developer ID` instead of `rejected`. See `RELEASING.md` → [Signing secrets reference](../RELEASING.md#signing-secrets-reference) for how to configure CI signing.
+> **Signing status determines first-run behavior.** The 1.0 steps below describe the **unsigned/ad-hoc** case (the default when `APPLE_SIGNING_IDENTITY` is not configured). If signing secrets were configured in CI, the artifact is Developer-ID-signed and notarized: skip the right-click → Open trick in step 4 (double-click works), and step 2 shows `accepted` with `source=Notarized Developer ID` instead of `rejected`. See `RELEASING.md` → [Signing secrets reference](../RELEASING.md#signing-secrets-reference) for how to configure CI signing.
 
 #### Prerequisites
 
@@ -253,7 +253,7 @@ Run this section after every release build (unsigned/ad-hoc DMG for this beta) a
   - (a) A fresh macOS VM, or
   - (b) A new local user account on the maintainer's Mac (System Settings → Users & Groups → Add Account), then log into that account before starting.
 
-> **Do not run this on the maintainer's daily-driver account.** That account already has Microphone and Accessibility grants for TurboTalk cached, and may have stale data under `~/.config/librewin/turbotalk/` or `~/Library/Application Support/`. Running the test there silently passes the failures it is designed to catch.
+> **Do not run this on the maintainer's daily-driver account.** That account already has Microphone and Accessibility grants for TurboTalk cached, and may have stale data under `~/.config/turbotalk/` or `~/Library/Application Support/`. Running the test there silently passes the failures it is designed to catch.
 
 #### Steps
 
@@ -275,7 +275,7 @@ Run this section after every release build (unsigned/ad-hoc DMG for this beta) a
    spctl -a -t open --context context:primary-signature -v TurboTalk-<version>-macos-arm64.dmg
    ```
 
-   **Expected (unsigned beta):** `rejected` with `source=no usable signature` or similar — correct for an unsigned/ad-hoc DMG. The right-click → Open trick in step 4 is how users get past it.
+   **Expected (unsigned 1.0):** `rejected` with `source=no usable signature` or similar. The right-click → Open trick in step 4 is how users get past it.
 
    **Expected (signed release):** `accepted` with `source=Notarized Developer ID`. The DMG is Developer-ID-signed and Apple-notarized; double-click launch in step 4 works without the Gatekeeper dialog.
 
@@ -289,7 +289,7 @@ Run this section after every release build (unsigned/ad-hoc DMG for this beta) a
 
    **Action:** Open `/Applications`, **right-click** (or Control-click) `Turbo Talk.app`, and choose **Open**. macOS will show a Gatekeeper warning ("Apple cannot verify…"). Click **Open** in that dialog. If macOS shows only a refusal dialog, open System Settings → Privacy & Security and click **Open Anyway** for Turbo Talk, then try again.
 
-   **Expected:** The app window appears after you click Open in the Gatekeeper dialog. A normal double-click on first launch will refuse — that is expected for the ad-hoc beta. After the right-click → Open trick has been used once, future double-clicks work normally.
+   **Expected:** The app window appears after you click Open in the Gatekeeper dialog. A normal double-click on first launch will refuse; that is expected for the ad-hoc 1.0 release. After the right-click → Open trick has been used once, future double-clicks work normally.
 
 5. **Microphone permission prompt.**
 
@@ -314,7 +314,7 @@ Run this section after every release build (unsigned/ad-hoc DMG for this beta) a
    **Action:** In Terminal, run:
 
    ```
-   ls ~/.config/librewin/turbotalk/
+   ls ~/.config/turbotalk/
    ```
 
    **Expected:** The directory exists and contains the expected config file (`config.toml`) and, with the default Save history setting enabled, `history.json` — matching the paths documented in `PRIVACY.md` → "How to delete everything." If Save history was disabled during testing, `history.json` may be absent or unchanged. If the directory is missing entirely after a successful dictation, settings persistence is broken when launched from `/Applications`.
@@ -335,16 +335,16 @@ Run this section after every release build (unsigned/ad-hoc DMG for this beta) a
 
     **Action:** Follow `PRIVACY.md` → "How to delete everything." Specifically:
 
-    - If you enabled autostart at any point, run `launchctl unload ~/Library/LaunchAgents/io.librewin.turbotalk.plist` and then delete that plist file.
-    - Delete `~/.config/librewin/turbotalk/config.toml`.
-    - Delete `~/.config/librewin/turbotalk/history.json`.
-    - Delete `~/.config/librewin/turbotalk/models/` (entire directory, or whichever model path you configured).
+    - If you enabled autostart at any point, run `launchctl unload ~/Library/LaunchAgents/com.turbotalk.dictation.plist` and then delete that plist file.
+    - Delete `~/.config/turbotalk/config.toml`.
+    - Delete `~/.config/turbotalk/history.json`.
+    - Delete `~/.config/turbotalk/models/` (entire directory, or whichever model path you configured).
 
     Then verify nothing remains:
 
     ```
-    ls ~/.config/librewin/turbotalk/ 2>/dev/null
-    ls ~/Library/LaunchAgents/io.librewin.turbotalk.plist 2>/dev/null
+    ls ~/.config/turbotalk/ 2>/dev/null
+    ls ~/Library/LaunchAgents/com.turbotalk.dictation.plist 2>/dev/null
     ```
 
     **Expected:** Both commands report no such file or directory. Every path PRIVACY.md lists is gone after running its documented commands. If any path remains that PRIVACY.md does not mention, that is a documentation gap — note it for follow-up.
@@ -355,9 +355,9 @@ Record the outcome of this run in `SESSION-STATUS.md` under the release entry. O
 
 ---
 
-## Windows beta smoke test
+## Windows smoke test
 
-> **Status:** Packaging can produce a Windows installer with the bundled Whisper sidecar, but the smoke test is not expected to pass yet. Windows hotkey + paste are still unsupported stubs (TASK-25/26), so Test 3 onward cannot prove the dictation loop until those land.
+> **Status:** Windows is a 1.0 supported target. The installer is unsigned, so SmartScreen is expected on first run.
 
 **Target platform:** Windows 10 (1809+) or Windows 11, x64. All steps assume the app is installed from the NSIS `.exe` installer.
 
@@ -379,7 +379,7 @@ Record the outcome of this run in `SESSION-STATUS.md` under the release entry. O
 Remove any previous TurboTalk configuration. In PowerShell, run:
 
 ```
-Remove-Item -Recurse -Force "$env:APPDATA\librewin\turbotalk" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "$env:APPDATA\turbotalk" -ErrorAction SilentlyContinue
 ```
 
 Then run the installer: double-click `TurboTalk-<version>-windows-x64-setup.exe`. Windows SmartScreen will show **"Windows protected your PC"**. Click **More info → Run anyway**. Complete the installer. Launch TurboTalk from the Start menu.
@@ -562,7 +562,7 @@ If nothing is pasted, confirm the destination is a text-editable field. If the a
 In PowerShell:
 
 ```
-ls "$env:APPDATA\librewin\turbotalk\"
+ls "$env:APPDATA\turbotalk\"
 ```
 
 If empty or missing, settings were not written on quit.
@@ -578,7 +578,76 @@ If empty or missing, settings were not written on quit.
 
 ---
 
-## Linux beta smoke test (X11)
+### Installed-artifact smoke test (Windows)
+
+Run this section after every Windows release build and **before publishing** the release. It covers installer launch behavior, one end-to-end dictation from the installed app, quit/relaunch persistence, and uninstall.
+
+#### Prerequisites
+
+- An unsigned Windows installer in `dist-artifacts/` or downloaded from the GitHub release workflow, along with its matching `.sha256` file.
+- A clean Windows 10/11 x64 user profile or VM with no prior TurboTalk install.
+
+#### Steps
+
+1. **Verify checksum before installing.**
+
+   **Action:** In PowerShell, run:
+
+   ```powershell
+   Get-FileHash .\TurboTalk-<version>-windows-x64-setup.exe -Algorithm SHA256
+   ```
+
+   Compare the hash to `TurboTalk-<version>-windows-x64-setup.exe.sha256`.
+
+   **Expected:** The hashes match. Anything else means the installer is corrupt or mismatched; stop here.
+
+2. **Install from the real artifact.**
+
+   **Action:** Double-click the installer. If SmartScreen appears, choose **More info → Run anyway**. Complete the installer and launch TurboTalk from the Start menu.
+
+   **Expected:** The app launches without crashing and reaches the first-run/onboarding flow.
+
+3. **Complete onboarding.**
+
+   **Action:** Grant microphone access if prompted, choose/download a model, and finish onboarding.
+
+   **Expected:** The main app reaches idle/ready state and does not re-open onboarding after completion.
+
+4. **End-to-end dictation.**
+
+   **Action:** Open Notepad, click into a new document, hold Right Alt, say "hello world", and release.
+
+   **Expected:** "hello world" or close appears at the cursor in Notepad, and TurboTalk returns to idle.
+
+5. **Quit and relaunch.**
+
+   **Action:** Quit from the tray menu, wait a few seconds, then relaunch from the Start menu.
+
+   **Expected:** Settings and onboarding completion persist. History shows the prior dictation when history is enabled.
+
+6. **Verify local data path.**
+
+   **Action:** In PowerShell, run:
+
+   ```powershell
+   ls "$env:APPDATA\turbotalk\"
+   ```
+
+   **Expected:** The directory exists and contains the expected config file and, with history enabled, `history.json`.
+
+7. **Uninstall.**
+
+   **Action:** Uninstall TurboTalk from Windows Settings → Apps, then confirm the Start menu entry is gone.
+
+   **Expected:** The app is removed cleanly. User data may remain under `%APPDATA%\turbotalk` until the documented cleanup path is followed.
+
+#### Pass/fail recording
+
+Record the outcome in `SESSION-STATUS.md` under the release entry. On pass, note Windows version and whether the artifact came from local packaging or CI. On fail, note which numbered step failed and what you observed.
+
+---
+
+## Linux smoke test (X11)
 
 > **Status:** Smoke test will be runnable once Linux sidecar, hotkey, and paste paths are bundled and validated on real X11 hardware. Until then, Test 3 onward cannot prove the dictation loop.
 
@@ -604,7 +673,7 @@ If empty or missing, settings were not written on quit.
 Remove any previous TurboTalk configuration:
 
 ```
-rm -rf ~/.config/librewin/turbotalk
+rm -rf ~/.config/turbotalk
 ```
 
 Make the AppImage executable and run it:
@@ -787,7 +856,7 @@ If nothing is pasted, the X11 paste injection (xdotool/xtest path) is failing �
 **If it fails:**
 
 ```
-ls ~/.config/librewin/turbotalk/
+ls ~/.config/turbotalk/
 ```
 
 Empty or missing means settings were not written on quit.

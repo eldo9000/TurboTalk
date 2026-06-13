@@ -1,4 +1,4 @@
-use librewin_common::{get_accent as lw_get_accent, get_theme as lw_get_theme};
+use shared::{get_accent as lw_get_accent, get_theme as lw_get_theme};
 use tauri::command;
 
 #[command]

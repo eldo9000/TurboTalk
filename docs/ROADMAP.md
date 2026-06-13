@@ -1,92 +1,197 @@
 # TurboTalk Roadmap
 
-Personal-use scope. Milestones are checkpoints, not deadlines.
+Personal-use scope. Milestones are checkpoints, not deadlines. This file should
+show the current shape of the project, not preserve every old task as if it were
+still open.
 
-## M0 — Block-out ✅
+## Current Strategy
 
-- [x] Repo structure decided
-- [x] Architecture documented
-- [x] Tauri 2 + Svelte 5 scaffold landed
-- [x] `librewin-common` + `@libre/ui` wired
-- [x] First `npm run tauri dev` succeeds
+- **1.0:** macOS + Windows confidence release.
+- **2.0:** Linux-ready release.
+- **Not a public product yet:** promotion still depends on daily use,
+  at least one non-Eldo proof, and the Chaperone Layer proving worth shipping.
 
-## M1 — End-to-end happy path ✅
+## Validation Legend
 
-The bar: press hotkey, speak, release, see text appear in the focused app.
+- **Proven:** recorded end-to-end or release/CI proof exists in `TRUTH.md`,
+  `SESSION-STATUS.md`, or a referenced smoke/release doc.
+- **Implemented / needs runtime proof:** source is in tree and compile/typecheck
+  proof exists, but the exact user-visible path still needs a manual runtime pass.
+- **Open:** not implemented, not packaged, or deliberately deferred.
 
-- [x] Global hotkey capture — Right Alt via CGEventTap (rdev dropped: macOS 26 TSM thread crash)
-- [x] Mic stream → WAV buffer — cpal native-rate F32 capture, FFT-resampled + downmixed to 16kHz mono int16 before WAV write
-- [x] Whisper transcription — whisper-cli (Homebrew), ggml-base.en, ~130ms on M4 via Metal
-- [x] Clipboard paste into active app — arboard + osascript Cmd+V, clipboard restored after
-- [x] Recording overlay — dot: gray (idle) / red pulse (recording) / yellow pulse (transcribing)
+## Completed / Proven History
 
-Proved 2026-05-01. Spoken text lands in focused app in under 3 seconds.
+### M0-M5 — Core Product Built
 
-## M2 — Configurable ✅
+- [x] Tauri 2 + Svelte 5 app scaffold
+- [x] Shared UI/common foundation wired
+- [x] Tray-resident behavior on macOS
+- [x] macOS push-to-talk dictation loop
+- [x] Mic capture, WAV finalization, VAD trim, normalization, and pre-roll path
+- [x] Whisper backend with persistent worker/server path
+- [x] Moonshine backend end-to-end
+- [x] Parakeet backend end-to-end
+- [x] Backend selector and model catalog/download path
+- [x] Chaperone cleanup via local Ollama classifier-router
+- [x] Deterministic cleanup modes and voice commands
+- [x] Settings, history persistence, model selection, custom vocabulary
+- [x] macOS onboarding/readiness flow
+- [x] Baseline recording overlay and tray indicators
+- [x] Launch at login on macOS
+- [x] Hallucination/repetition detection
+- [x] Streaming chunked transcription
+- [x] Segment recovery no longer pollutes history
+- [x] Privacy boundary for diagnostics/bug reports: transcript text excluded
 
-- [x] Tray icon — hide window, live in menu bar
-- [x] Basic cleanup — capitalize first word, strip leading/trailing whitespace
-- [x] Config persistence — `~/.config/librewin/turbotalk/config.toml`
-- [x] Settings window — two-tab UI (History + Settings), whisper bin/model path
-- [x] Whisper model selector / downloader hint — HuggingFace link + brew command
+Proof source: `TRUTH.md`, `SESSION-STATUS.md`, `docs/pre-release-scans/`, and
+historical smoke notes.
 
-Proved 2026-05-01. Config persists across launches. Tray icon hides/shows window.
+### M6A — Packaging + Release Plumbing
 
-## M3 — Chaperone Layer ✅
+- [x] macOS app/DMG packaging
+- [x] Windows NSIS installer packaging
+- [x] Windows sidecar fetch path
+- [x] VAD model fetch/bundle path
+- [x] Icon generation for macOS/Windows
+- [x] Release CI produces v0.9.8 artifacts
+- [x] Release updater artifacts fixed in CI
+- [x] macOS bundle codesign gate added for release CI
+- [x] Manual-update/updater posture documented
 
-- [x] Local LLM postprocessor wired (Ollama integration, blocking reqwest)
-- [x] Mode classifier (prose / code / command / raw) via Ollama
-- [x] Per-mode deterministic handlers
-- [x] Voice commands ("scratch that", "new paragraph")
+## Implemented / Needs Runtime Proof
 
-Proved 2026-05-01. Chaperone routes transcripts through local LLM; falls back to prose on error.
+These are in tree, but should not be treated as fully closed until the named
+manual proof is recorded.
 
-## M4 — Polish ✅
+- [x] **Windows full dictation loop:** hotkey/paste works on real hardware.
+- [x] **Cancel-after-release suppression:** cancel before paste suppresses
+  transcript/paste.
+- [ ] **Device-lost next-press recovery:** source fix is in tree; real
+  unplug/switch-mic repro still pending.
+- [x] **Main-window placement safeguards:** window remains visible/reachable on
+  smaller displays and monitor changes.
+- [x] **Overlay size indicators:** Small / Medium / Large overlay modes are
+  complete.
+- [x] **Bug-report button:** Settings → Developer bug-report flow is complete.
+- [x] **Windows onboarding persistence:** onboarding completion persists on
+  Windows.
+- [ ] **Windows tray/icon/light-mode polish:** older smoke results reported
+  icon/light-mode issues; do not mark fixed without a current smoke note.
 
-- [x] Launch-on-login (tauri-plugin-autostart, LaunchAgent)
-- [x] Mic selector (list_audio_devices command, settings UI)
-- [x] Dynamic tray icon — TT glyph idle / red dot recording / amber dot transcribing
-- [x] Zoom controls — 9 levels (100–180%), keyboard shortcuts (⌘+/⌘-/⌘0), persistent
-- [x] Three-tab UI — History / Models / Modes / Settings with auto-fit window sizing per tab
-- [x] Recording overlay — always-on-top transparent waveform + transcript size indicator (word-pill accumulator)
-- [x] Models tab — active model selector, installed list, HuggingFace download catalog
-- [x] Whisper bundled as Tauri sidecar (mac arm64 committed; Win x64 fetched via `npm run fetch-sidecars`, pinned to whisper.cpp v1.8.4)
-- [x] Custom vocabulary / hotwords (`cleanup.vocabulary` → whisper `--prompt`; surfaced in Modes tab)
-- [x] Audio sound indicators UI — per-event checkboxes (start / transcribe / finish) + volume slider in Settings
-- [x] Cancel on Escape — `cancel_on_esc` config, `recording-cancelled-tap` event, overlay handles gracefully
+## Active 1.0 Closure
 
-Proved 2026-05-05.
+The 1.0 bar is not “add major features.” It is “prove the thing we already
+built, from installed artifacts, on macOS and Windows.”
 
-## M5 — Chaperone Setup + Reliability ✅
+### M6B — Runtime Proofs Remaining
 
-The bar: Chaperone mode is discoverable and self-configuring for a first-time user.
+- [x] **Windows final dictation proof:** from the Windows installer on real
+  hardware, trigger the configured hotkey, dictate into a common text target,
+  and confirm paste lands correctly.
+- [x] **Cancel-after-release proof:** start a dictation, release to begin
+  transcription/cleanup, trigger cancel before paste, and confirm no text is
+  pasted.
+- [x] **Window-placement proof:** with the smaller laptop display attached,
+  drag/resize the main window across monitors and toward edges; confirm it
+  remains visible and reachable at 420×420.
+- [x] **Bug-report button proof:** Settings → Developer → Create Bug Report
+  saves a useful report bundle and excludes transcript text.
+- [ ] **Device-lost proof:** unplug/switch mic mid-recording, release, then
+  start a new recording; confirm the next press is normal and not instantly
+  cancelled.
+- [x] **Windows onboarding/tray smoke:** install on Windows, complete
+  onboarding, quit/relaunch, confirm onboarding stays complete and tray/icon/UI
+  polish are acceptable.
+- [x] **Installed-artifact smoke:** clean install on macOS and Windows, complete
+  onboarding, dictate into a text target, quit/relaunch, verify settings/history.
 
-- [x] Guided Ollama setup in Modes → Advanced — detects Ollama reachability and model pull status, "Install Ollama" browser-open button, "Download classifier model" streaming pull with progress bar, green "Ready" pill when both gates pass (TASK-32–34, 2026-05-05)
-- [x] Chaperone fallback ui-error toast — when Ollama is unreachable during dictation, fires a rate-limited (60s) recoverable toast "Chaperone unreachable — used raw output. Set up Ollama in Modes → Advanced."; click switches to Modes tab (TASK-35, 2026-05-05)
-- [x] Audio-latency improvements — cpal stream warm-keep with 45s idle-close watchdog, 300ms pre-roll ring buffer so leading words aren't clipped, config RwLock cache so PTT-down skips per-press file I/O; PTT capture now ~10ms vs. prior 50–500ms (TASK-36–38, 2026-05-05)
-- [x] Next-beta hardening — scratch-that discards instead of pasting, cancel can abort an in-flight Whisper child, paste failure restores clipboard, device loss drops the warm stream, diagnostics only probes loopback Ollama URLs, onboarding/settings handle unsupported platforms honestly, and Settings window sizing/hotkey labels received final UI polish (v0.8.6 tag, 2026-05-06)
+### M6C — 1.0 Release Decision
 
-Proved 2026-05-06 at code/build level: `cargo test --manifest-path src-tauri/Cargo.toml` passed (80 passed, 1 ignored real-audio VAD test), `npm run typecheck` passed, `npm run build` passed with known Svelte/shared warnings, and local `TurboTalk-0.8.6-macos-arm64.dmg.sha256` verified. Installed-artifact smoke test from the GitHub release build remains the final beta-publication gate.
+- [x] 1.0 ships unsigned/ad-hoc; Developer ID / Authenticode signing is
+  deferred.
+- [x] Update `README.md`, `docs/BUILD.md`, `docs/RELEASING.md`, and
+  `docs/SMOKE-TEST.md` so they match the actual 1.0 platform promise.
+- [ ] Cut the 1.0 release only after the runtime proofs above are recorded in
+  `TRUTH.md`.
 
-## M6 — Ship (1.0)
+## Out of Scope for 1.0
 
-The bar: TurboTalk installs cleanly on macOS / Windows / Linux without Gatekeeper or SmartScreen warnings, and the dictation loop works end-to-end on each.
+- Linux runtime support.
+- Public product promotion.
+- New transcription features that are not required to stabilize the current
+  macOS/Windows loop.
 
-- [x] Publish v0.8.6 beta prerelease — tag `v0.8.6` points at `352a251`; release workflow run 25414134047 is green and the prerelease is live
-- [ ] Run installed-artifact smoke against the published v0.8.6 macOS artifact on a clean macOS account
-- [ ] Developer ID notarized macOS beta — downloaded GitHub DMGs are quarantined by macOS and blocked unless the user right-clicks Open/Open Anyway or clears quarantine; real fix is Developer ID signing + notarization
-- [ ] On-device latency proof — verify v0.8.6 warm-stream + pre-roll fix end-to-end on built-in mic and Bluetooth (AirPods); confirm leading-word capture and ~10ms PTT-to-capture
-- [ ] Cross-platform hotkey + paste — Windows (`enigo`/SendInput) and Linux (xdotool / wl-clipboard); off-mac runtime still returns unsupported for the real dictation loop (TASK-25/26 deferred)
-- [ ] Cross-platform diagnostics + onboarding — Win/Linux readiness gates (mic permission, sidecar present, Accessibility/equivalent), per-OS permission flow (TASK-29 deferred)
-- [ ] Linux release pipeline — re-enable Linux in `.github/workflows/release.yml` matrix once the runtime path (rdev under X11/Wayland, AppImage system deps) has been validated on real hardware
-- [ ] Codesigning + notarization — Apple Developer ID for macOS, Authenticode for Windows; use Libre signing infra
-- [ ] Run-on-real-hardware proof — at least one verified install + dictation loop on each platform from a fresh DMG / MSI / AppImage (no dev environment dependencies)
+## 2.0 Linux Track
 
-## Out of scope for 1.0
+Linux is not an afterthought for the product, but it is intentionally separate
+from 1.0. The Linux problem is mostly global input + paste policy, especially
+under Wayland.
 
-- **Streaming transcription** (partial transcripts while recording) — significant DSP/UX lift and does not change the "press → speak → paste" quality bar. Revisit post-1.0 only if a concrete user need shows up.
-- **Public release / Libre product status** — TurboTalk stays personal-use under GPL-3.0 until the promotion trigger fires.
+### M7 — Linux Feasibility Map
 
-## Open Questions
+- [ ] Write a Linux capability matrix covering GNOME/KDE, X11/Wayland, tray
+  availability, global hotkey support, paste support, clipboard support, audio
+  backend, and packaging target.
+- [ ] Add runtime session detection: OS, desktop environment,
+  `XDG_SESSION_TYPE`, compositor hints, helper availability, and tray support.
+- [ ] Add Linux readiness diagnostics that classify the machine as `full-loop`,
+  `copy-only`, or `unsupported`.
+- [ ] Document the first Linux promise: X11 full loop first; Wayland starts as
+  portal/copy-only unless proven otherwise.
 
-- Promote to Libre product if/when usable. Trigger: "I use this every day for 2 weeks."
+Proof: on one X11 session and one Wayland session, diagnostics reports the
+correct support class and explains missing pieces.
+
+### M8 — Linux Packaging + Local Runtime
+
+- [ ] Choose first packaging format for Linux testing.
+- [ ] Add Linux whisper.cpp sidecar packaging or a documented local-backend path.
+- [ ] Package/validate ONNX runtime libraries for Moonshine/Parakeet if those
+  remain supported on Linux.
+- [ ] Validate `cpal` mic capture on PipeWire/PulseAudio/ALSA-backed systems.
+- [ ] Confirm config/model paths under `~/.config/turbotalk/`.
+- [ ] Add Linux release matrix only after local Linux artifact smoke is real.
+
+Proof: fresh Linux install can record mic audio, transcribe locally, and
+display/copy transcript text inside TurboTalk.
+
+### M9 — Linux X11 Full Loop
+
+- [ ] Implement `hotkey_linux_x11` with a real global push-to-talk binding.
+- [ ] Implement `paste_linux_x11`: clipboard write + synthetic Ctrl+V.
+- [ ] Verify overlay/cursor-dot placement and click-through behavior under X11.
+- [ ] Add X11 smoke proof across a text editor, browser field, and Electron
+  editor.
+
+Proof: from a packaged Linux artifact on X11, hold the configured hotkey, say
+"hello world", release, and `hello world` appears in the focused text field.
+
+### M10 — Wayland Strategy
+
+- [ ] Evaluate GlobalShortcuts portal availability for GNOME/KDE.
+- [ ] Evaluate paste options: clipboard-only, portal-mediated action,
+  user-configured system shortcut, or documented helper bridge.
+- [ ] Implement honest Wayland readiness states:
+  - `full-loop` only when hotkey and paste are both proven
+  - `copy-only` when transcription works but paste must be manual
+  - `unsupported` when recording/transcription prerequisites are missing
+- [ ] Add first-run guidance for copy-only mode.
+- [ ] Avoid privileged background services unless there is a deliberate
+  product decision.
+
+Proof: on GNOME Wayland and KDE Wayland, TurboTalk either completes the full
+loop through approved mechanisms or clearly lands in copy-only mode.
+
+### M11 — Linux 2.0 Release Candidate
+
+- [ ] Smoke matrix: macOS, Windows, Linux X11, and Linux Wayland fallback/full
+  loop as applicable.
+- [ ] Release artifacts built for all supported targets.
+- [ ] Diagnostics and bug reports include Linux session type, desktop
+  environment, backend validity, clipboard/paste mode, and hotkey mode.
+- [ ] Documentation names exactly which Linux desktops are supported and which
+  fallback mode each one gets.
+- [ ] No regressions to the macOS/Windows 1.0 proof path.
+
+Proof: one clean install per supported Linux mode produces the documented
+behavior from a release artifact.

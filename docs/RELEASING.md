@@ -1,16 +1,16 @@
 # Releasing TurboTalk
 
-> **Current beta: unsigned/not notarized.** GitHub-downloaded macOS artifacts carry Apple's download quarantine flag, so users will see Gatekeeper warnings and may need right-click → Open or System Settings → Privacy & Security → Open Anyway. The Windows `.exe` has no Authenticode signature and will trigger SmartScreen.
+> **1.0 release: unsigned/not notarized.** GitHub-downloaded macOS artifacts carry Apple's download quarantine flag, so users will see Gatekeeper warnings and may need right-click → Open or System Settings → Privacy & Security → Open Anyway. The Windows `.exe` has no Authenticode signature and will trigger SmartScreen.
 >
-> **Skipping to signed?** The CI workflow conditionally uses Developer ID signing + notarization when the `APPLE_SIGNING_IDENTITY` secret is configured — see the [Signing secrets reference](#signing-secrets-reference) below. Follow the beta procedure here; CI will detect the credentials and produce signed artifacts automatically.
+> **Skipping to signed?** The CI workflow conditionally uses Developer ID signing + notarization when the `APPLE_SIGNING_IDENTITY` secret is configured — see the [Signing secrets reference](#signing-secrets-reference) below. Follow the release procedure here; CI will detect the credentials and produce signed artifacts automatically.
 
 ## Scope
 
-This is the procedure for cutting a TurboTalk beta release.
+This is the procedure for cutting a TurboTalk 1.0 release.
 
-- **macOS arm64** (Apple Silicon) — the primary, currently-shipping target.
-- **Windows x64** — packaging can be produced in CI, including the Whisper sidecar, but the runtime dictation loop is not release-ready because Windows hotkey + paste are still unsupported stubs (TASK-25/26).
-- **Linux x64 (X11)** — excluded from the release matrix until Linux sidecar, hotkey, and paste are validated on real hardware.
+- **macOS arm64** (Apple Silicon) — supported for 1.0.
+- **Windows x64** — supported for 1.0.
+- **Linux x64 (X11)** — excluded from 1.0; this is the 2.0 Linux track until Linux sidecar, hotkey, and paste are validated on real hardware.
 
 This document is the *release procedure* (versioning, tagging, publishing, release notes); `BUILD.md` is the *build procedure* (compiling, packaging). Follow the pre-flight, then the per-platform build sections, then tag/publish.
 
@@ -29,8 +29,8 @@ Before doing anything else, confirm:
   against pinned hashes before extracting.
 - Runtime Whisper `.bin`, Moonshine ONNX, and Parakeet ONNX model downloads
   are verified against pinned SHA-256 hashes before being persisted to disk.
-- The beta release scan pack in `RELEASE-READINESS.md` has no undocumented blockers:
-  version consistency, updater/manual-update consistency, local-only/privacy network surface, Tauri IPC/capability surface, Rust risk scan, bundle asset scan, unsigned-beta packaging state, installed-artifact smoke, orphan-process check, and docs-reality check.
+- The release scan pack in `RELEASE-READINESS.md` has no undocumented blockers:
+  version consistency, updater/manual-update consistency, local-only/privacy network surface, Tauri IPC/capability surface, Rust risk scan, bundle asset scan, unsigned packaging state, installed-artifact smoke, orphan-process check, and docs-reality check.
 
 - `cargo build` (or `npm run package`) confirms that `TURBOTALK_BUGREPORT_TG_TOKEN`
   and `TURBOTALK_BUGREPORT_TG_CHAT` are **not** embedded in the binary.
@@ -68,7 +68,7 @@ npm install
 npm run package
 ```
 
-For this beta, do **not** set the `APPLE_*` environment variables described in `BUILD.md`. With those env vars unset, `tauri build` produces an unsigned/ad-hoc local artifact (no notarization step, no upload). The build typically completes in 1–3 minutes.
+For 1.0, do **not** set the `APPLE_*` environment variables described in `BUILD.md`. With those env vars unset, `tauri build` produces an unsigned/ad-hoc local artifact (no notarization step, no upload). The build typically completes in 1–3 minutes.
 
 When it finishes, confirm both files exist:
 
@@ -83,13 +83,11 @@ Verify the DMG is not Developer ID signed/notarized with:
 codesign -dv dist-artifacts/TurboTalk-<new-version>-macos-arm64.dmg
 ```
 
-The `Authority` line may be absent, or the command may report that the code object is not signed at all. That is acceptable for this unsigned beta. A `Notarized Developer ID` source means somebody set the `APPLE_*` env vars — back out and rebuild without them.
+The `Authority` line may be absent, or the command may report that the code object is not signed at all. That is acceptable for this unsigned 1.0 release. A `Notarized Developer ID` source means somebody set the `APPLE_*` env vars; back out and rebuild without them.
 
 ### Build procedure — Windows
 
 Build host: Windows 10 (1809+) or Windows 11, x64.
-
-> **Runtime gap (current):** `npm run fetch-sidecars` now downloads the bundled Whisper sidecar for Windows, so packaging can complete. The installer is still not a usable dictation beta until Windows hotkey + paste implementations replace the unsupported stubs.
 
 Required toolchain (one-time setup on the build host):
 
@@ -112,7 +110,7 @@ dist-artifacts/TurboTalk-<new-version>-windows-x64-setup.exe
 dist-artifacts/TurboTalk-<new-version>-windows-x64-setup.exe.sha256
 ```
 
-The `.exe` is an NSIS installer. **It is unsigned.** End users will see SmartScreen "Windows protected your PC" on first run — that is documented in `README.md`. Do **not** sign the installer for this beta. Do not publish it as a working dictation artifact until Windows hotkey + paste are implemented and smoke-tested.
+The `.exe` is an NSIS installer. **It is unsigned.** End users will see SmartScreen "Windows protected your PC" on first run; that is documented in `README.md`. Do **not** sign the installer for 1.0. Do not publish it until the Windows installed-artifact smoke test passes.
 
 ### Build procedure — Linux (X11)
 
@@ -153,15 +151,15 @@ dist-artifacts/TurboTalk-<new-version>-linux-x64.AppImage
 dist-artifacts/TurboTalk-<new-version>-linux-x64.AppImage.sha256
 ```
 
-The AppImage is **unsigned**. Users `chmod +x` and run it directly. There is no `.deb` or `.rpm` for this beta — one AppImage covers all distros that have FUSE installed.
+The AppImage is **unsigned**. Users `chmod +x` and run it directly. There is no `.deb` or `.rpm` for this future Linux release; one AppImage covers all distros that have FUSE installed.
 
 ## Step 3 — Verify artifacts
 
 For each artifact you intend to publish, verify the matching `.sha256` and run the **per-platform installed-artifact smoke test**:
 
-- macOS: `SMOKE-TEST.md` → "macOS beta smoke test" + the 11-step "Installed-artifact smoke test (macOS)" subsection.
-- Windows: `SMOKE-TEST.md` → "Windows beta smoke test" (the 7 W-tests).
-- Linux: `SMOKE-TEST.md` → "Linux beta smoke test (X11)" (the 7 L-tests).
+- macOS: `SMOKE-TEST.md` → "macOS smoke test" + the installed-artifact subsection.
+- Windows: `SMOKE-TEST.md` → "Windows smoke test" + the installed-artifact subsection.
+- Linux: only for 2.0 work, `SMOKE-TEST.md` → "Linux smoke test (X11)".
 
 Every numbered step in the smoke test for each platform you are publishing must pass before tagging.
 
@@ -176,21 +174,19 @@ On tag pushes, `.github/workflows/release.yml` builds the matrix artifacts and c
 
 For manual local publishing, write the release notes for this version into `RELEASE_NOTES.md` at the repo root using the template at the bottom of this file, then publish.
 
-The exact `gh release create` invocation depends on which platforms you are publishing this version. For a multi-platform release, attach all six files (3 artifacts × {artifact, .sha256}):
+For a 1.0 release, attach the macOS and Windows artifacts plus their checksums:
 
 ```bash
 gh release create v<new-version> \
-  --title "TurboTalk <new-version> beta" \
+  --title "TurboTalk <new-version>" \
   --notes-file RELEASE_NOTES.md \
   dist-artifacts/TurboTalk-<new-version>-macos-arm64.dmg \
   dist-artifacts/TurboTalk-<new-version>-macos-arm64.dmg.sha256 \
   dist-artifacts/TurboTalk-<new-version>-windows-x64-setup.exe \
-  dist-artifacts/TurboTalk-<new-version>-windows-x64-setup.exe.sha256 \
-  dist-artifacts/TurboTalk-<new-version>-linux-x64.AppImage \
-  dist-artifacts/TurboTalk-<new-version>-linux-x64.AppImage.sha256
+  dist-artifacts/TurboTalk-<new-version>-windows-x64-setup.exe.sha256
 ```
 
-For a macOS-only usable release (the current runtime state), attach only the two macOS files. Drop the rest of the lines.
+Linux artifacts are not part of the 1.0 release. Add them only after the 2.0 Linux smoke path is proven.
 
 `RELEASE_NOTES.md` is a scratch file per release — do not commit it.
 
@@ -198,13 +194,13 @@ For a macOS-only usable release (the current runtime state), attach only the two
 
 Add a single line under "Where We Are":
 
-> Released v<new-version> beta on <YYYY-MM-DD>.
+> Released v<new-version> on <YYYY-MM-DD>.
 
 Commit as `chore(status): record v<new-version> release`.
 
 ## Signing secrets reference
 
-The CI pipeline (`release.yml`) checks for the following secrets at workflow start and adjusts signing behavior accordingly. None of these are required for unsigned beta builds; all are optional until you configure them.
+The CI pipeline (`release.yml`) checks for the following secrets at workflow start and adjusts signing behavior accordingly. None of these are required for unsigned 1.0 builds; all are optional until you configure them.
 
 | Secret | Platform | Purpose | Required for signed release? |
 |--------|----------|---------|------------------------------|
@@ -223,7 +219,7 @@ The `APPLE_SIGNING_IDENTITY` secret is the gate. When present:
 3. The `Ad-hoc codesign` step is skipped — re-signing with ad-hoc would strip the Developer ID signature.
 4. An additional `Verify Developer ID signing and notarization` step runs `codesign -dv` and `spctl --assess` on the `.app` and DMG.
 
-When `APPLE_SIGNING_IDENTITY` is absent, the pipeline falls back to ad-hoc signing (the current beta behavior). All steps remain green — just without notarization.
+When `APPLE_SIGNING_IDENTITY` is absent, the pipeline falls back to ad-hoc signing (the 1.0 behavior). All steps remain green — just without notarization.
 
 ### Windows: how CI detects signing
 
@@ -266,7 +262,7 @@ Expected: `SignerCertificate` chain resolves to the code-signing CA and `Status`
 
 TurboTalk ships a **manual check-for-updates** button in the Settings tab. The Tauri updater plugin is wired and will check `https://github.com/eldo9000/TurboTalk/releases/latest/download/latest.json` when the user clicks "Check for updates." It does **not** check automatically on launch and does not run in the background — the check is strictly user-initiated and throttled to once per week via localStorage.
 
-This is not a full auto-updater. Users who never click the button will not receive update prompts. Communicating new releases via direct message / release notes is still the primary distribution path for this beta.
+This is not a full auto-updater. Users who never click the button will not receive update prompts. Communicating new releases via direct message / release notes is still the primary distribution path for 1.0.
 
 Before enabling background auto-update we need: (1) a long-lived updater signing key with a documented secure-custody plan, (2) a stable artifact-hosting URL that we control, (3) a written key-rotation/loss procedure. Until those three exist, do not change the updater from its current manual-check-only mode.
 
@@ -303,7 +299,7 @@ signtool sign /fd SHA256 /a /f <path-to.pfx> /p <password> dist-artifacts/TurboT
 
 ### Linux
 
-Linux AppImage signing is not set up. Future work: GPG-signed `.zsync` + detached `.sig`. The current unsigned AppImage is acceptable for the beta audience (users `chmod +x` and run directly).
+Linux AppImage signing is not set up. Future work: GPG-signed `.zsync` + detached `.sig`. Linux artifacts are deferred to the 2.0 Linux track.
 
 ### `tauri.conf.json` — why `signingIdentity` stays `"-"`
 
@@ -317,35 +313,34 @@ The committed config keeps `signingIdentity: "-"` (ad-hoc). This is deliberate:
 Copy this into `RELEASE_NOTES.md` and fill in the `<placeholders>`. For a single-platform release, drop the rows for platforms you are not publishing.
 
 ```markdown
-## TurboTalk <version> beta
+## TurboTalk <version>
 
 **Platforms in this release:**
 - macOS 12+ on Apple Silicon (arm64).
 - Windows 10 (1809+) / 11 on x64.
-- Linux x64 on X11 sessions only.
+- Linux is not included in the 1.0 release.
 
-**Install — macOS:** Download `TurboTalk-<version>-macos-arm64.dmg`, drag `Turbo Talk.app` into `/Applications`, **right-click → Open** on first launch (the GitHub-downloaded beta is unsigned/not notarized and quarantined by macOS), and grant Microphone and Accessibility permissions when prompted. If macOS still blocks it, use System Settings → Privacy & Security → Open Anyway.
+**Install — macOS:** Download `TurboTalk-<version>-macos-arm64.dmg`, drag `Turbo Talk.app` into `/Applications`, **right-click → Open** on first launch (the GitHub-downloaded release is unsigned/not notarized and quarantined by macOS), and grant Microphone and Accessibility permissions when prompted. If macOS still blocks it, use System Settings → Privacy & Security → Open Anyway.
 
 **Install — Windows:** Download `TurboTalk-<version>-windows-x64-setup.exe`. SmartScreen will warn that the installer is unsigned — click **More info → Run anyway**. Run the installer and launch from the Start menu. WebView2 runtime is required (preinstalled on Windows 11; Windows 10 users may need <https://developer.microsoft.com/microsoft-edge/webview2/>).
 
-**Install — Linux:** Download `TurboTalk-<version>-linux-x64.AppImage`, `chmod +x`, and run. Requires FUSE (`libfuse2` on Debian/Ubuntu) and an X11 session — Wayland is not supported.
+**Install — Linux:** Linux support is deferred to the 2.0 track.
 
 **What's in this release**
 - <one bullet per user-visible change>
 
 **Known limitations**
-- macOS: Apple Silicon only; unsigned/not notarized beta (Gatekeeper warning on first launch from downloaded artifacts).
-- Windows: packaging only; hotkey + paste still unsupported; unsigned installer (SmartScreen warning on first run).
-- Linux: X11 only; AppImage requires FUSE.
+- macOS: Apple Silicon only; unsigned/not notarized (Gatekeeper warning on first launch from downloaded artifacts).
+- Windows: x64 only; unsigned installer (SmartScreen warning on first run).
+- Linux: not included in 1.0.
 - <other known issues>
 
 **Privacy and data** — see `PRIVACY.md`. To delete all local TurboTalk data, follow `PRIVACY.md` → "How to delete everything".
 
 **Verify the download**
 
-    # macOS / Linux:
+    # macOS:
     shasum -a 256 -c TurboTalk-<version>-macos-arm64.dmg.sha256
-    shasum -a 256 -c TurboTalk-<version>-linux-x64.AppImage.sha256
 
     # Windows (PowerShell):
     Get-FileHash -Algorithm SHA256 TurboTalk-<version>-windows-x64-setup.exe
@@ -357,7 +352,7 @@ Compare the Windows hash output against the contents of `TurboTalk-<version>-win
 
 ## Hotfix path
 
-Beta hotfixes follow the same procedure: bump the patch version, rebuild on the relevant host(s), re-verify, re-publish. There is no separate fast-path.
+Hotfixes follow the same procedure: bump the patch version, rebuild on the relevant host(s), re-verify, re-publish. There is no separate fast-path.
 
 ## Rollback
 

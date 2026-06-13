@@ -1,4 +1,4 @@
-// Config persistence — ~/.config/librewin/turbotalk/config.toml
+// Config persistence — ~/.config/turbotalk/config.toml
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -375,21 +375,21 @@ pub(crate) fn config_path() -> PathBuf {
 }
 
 /// Platform-aware data directory:
-/// - macOS/Linux: `~/.config/librewin/turbotalk/`
-/// - Windows: `%APPDATA%/librewin/turbotalk/`
+/// - macOS/Linux: `~/.config/turbotalk/`
+/// - Windows: `%APPDATA%/turbotalk/`
 pub fn data_dir() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default())
-        .join("librewin/turbotalk")
+        .join("turbotalk")
 }
 
 pub(crate) fn history_path() -> PathBuf {
     data_dir().join("history.json")
 }
 
-/// Legacy data directory used in v0.9 and earlier (hardcoded `~/.config/`).
-/// On macOS/Linux this is the same as `data_dir()` since `dirs::config_dir()`
-/// returns `~/.config/`. On Windows it exists only for migration purposes.
+/// Legacy data directory used in v0.9 and earlier (hardcoded `~/.config/` under the
+/// old `librewin/turbotalk` path). On macOS/Linux this was identical to the old
+/// `data_dir()`. This exists only to migrate config from old installs.
 fn legacy_data_dir() -> PathBuf {
     let mut p = dirs::home_dir().unwrap_or_default();
     p.push(".config/librewin/turbotalk");
@@ -587,7 +587,7 @@ pub struct LoadConfigResult {
     pub parse_error: Option<String>,
 }
 
-/// One-time migration from legacy `~/.config/librewin/turbotalk/` to `data_dir()`.
+/// One-time migration from legacy `~/.config/librewin/turbotalk/` to the new `turbotalk/` config dir.
 /// On macOS/Linux both paths are identical (both resolve to `~/.config/`), so this
 /// is a no-op. On Windows the legacy path doesn't exist, so this is also a no-op
 /// for fresh installs.
@@ -721,8 +721,8 @@ pub fn load_detailed() -> LoadConfigResult {
     }
 }
 
-/// Canonical models directory under `data_dir()` (e.g. `~/.config/librewin/turbotalk/models/`
-/// on macOS/Linux, `%APPDATA%/librewin/turbotalk/models/` on Windows).
+/// Canonical models directory under `data_dir()` (e.g. `~/.config/turbotalk/models/`
+/// on macOS/Linux, `%APPDATA%/turbotalk/models/` on Windows).
 /// Returns `None` if the directory does not exist or cannot be canonicalized.
 pub(crate) fn canonical_models_dir() -> Option<PathBuf> {
     let dir = data_dir().join("models");
@@ -832,7 +832,7 @@ mod tests {
     //
     // `scan_models_dir_in` is the testable inner helper extracted from
     // `scan_models_dir`. We drive it against a tempdir so the test does not
-    // depend on `~/.config/librewin/turbotalk/models` existing or being safe
+    // depend on `~/.config/turbotalk/models` existing or being safe
     // to mutate, and so the symlink-escape case is fully self-contained.
 
     #[test]
@@ -918,7 +918,7 @@ mod tests {
     //
     // These exercise `save_history_at` / `load_history_detailed_at` (the
     // path-parameterized variants of `save_history` / `load_history_detailed`)
-    // so the on-disk path under `~/.config/librewin/turbotalk/` is never
+    // so the on-disk path under `~/.config/turbotalk/` is never
     // touched. The public wrappers delegate through these helpers, so the
     // observable behavior is identical.
 

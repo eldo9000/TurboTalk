@@ -1,14 +1,14 @@
 # TurboTalk Build
 
-How to produce TurboTalk beta artifacts. Today the only usable runtime beta is
-**macOS arm64**. CI can also package a Windows installer with the bundled
-Whisper sidecar, but Windows hotkey + paste are still unsupported stubs, so it
-is not a working dictation release yet. Linux builds remain deferred.
+How to produce TurboTalk 1.0 artifacts. The supported 1.0 targets are
+**macOS arm64** and **Windows x64**. Both artifacts are intentionally
+unsigned/ad-hoc for 1.0. Linux builds remain deferred to the 2.0
+track.
 
 > For the full release procedure (versioning, tagging, publishing, release
 > notes), see `RELEASING.md`.
 
-## Build a macOS arm64 beta DMG
+## Build a macOS arm64 DMG
 
 Prerequisites (install once):
 
@@ -68,7 +68,7 @@ The version is read from `package.json` at rename time, so bumping the version
 in both `package.json` and `src-tauri/tauri.conf.json` is the only change needed
 to retag artifacts.
 
-## Smoke test the artifact
+## Smoke test the macOS artifact
 
 After `npm run package` finishes, verify the DMG actually works. This is
 the installed-artifact proof gate from `SMOKE-TEST.md` — until you have done
@@ -76,7 +76,7 @@ this, the build is not proven.
 
 - Open `dist-artifacts/TurboTalk-<version>-macos-arm64.dmg`.
 - Drag `Turbo Talk.app` to `/Applications`.
-- GitHub-downloaded beta builds are unsigned/not notarized and quarantined by
+- GitHub-downloaded 1.0 builds are unsigned/not notarized and quarantined by
   macOS, so launch with right-click → Open the first time and accept the
   Gatekeeper warning. If macOS still blocks it, use System Settings → Privacy &
   Security → Open Anyway.
@@ -88,10 +88,10 @@ this, the build is not proven.
 - Verify the phrase pastes into the focused app.
 - Quit the app cleanly via the tray menu.
 
-If any step fails, the build is not beta-ready — file the failure in
+If any step fails, the build is not release-ready. File the failure in
 `SESSION-STATUS.md` before retrying.
 
-## Build a Windows x64 beta on a Windows host
+## Build a Windows x64 installer on a Windows host
 
 Prerequisites:
 
@@ -122,18 +122,18 @@ Microsoft.ML.OnnxRuntime NuGet package, verifies its SHA-256 against
 a pinned digest in the script, and extracts `onnxruntime.dll`.
 
 The fetch step downloads sidecars only on Windows hosts; it is a no-op on
-non-Windows hosts. Packaging can complete, but the resulting app is still not a
-working Windows dictation beta until hotkey + paste implementations land.
+non-Windows hosts. After packaging, run the Windows installed-artifact smoke
+test in `SMOKE-TEST.md` before publishing the installer.
 
-Linux beta artifacts are still blocked — Linux is excluded from
+Linux artifacts are still blocked for 1.0. Linux is excluded from
 `.github/workflows/release.yml` until the rdev hotkey + paste paths are
 validated on real X11 hardware.
 
-## Cross-platform — what's still missing
+## Cross-platform: what's still missing
 
-- **Real `hotkey` and `paste` implementations** for non-mac platforms.
-  Today `src-tauri/src/hotkey.rs` and `src-tauri/src/paste.rs` ship
-  unsupported stubs off-mac. Win/Linux impls are TASK-25 / TASK-26.
+- **Linux `hotkey` and `paste` validation.** Windows hotkey + paste are part of
+  the 1.0 path. Linux remains the 2.0 track and still needs real
+  hardware validation on X11 before it can be called supported.
 - **Linux Whisper sidecar**: upstream whisper.cpp does not publish a
   pre-built Linux binary. Either build from source in CI or ship a
   static binary in a separate prebuilds repo before re-enabling Linux
@@ -142,11 +142,11 @@ validated on real X11 hardware.
   and Windows today. Linux (`-linux-x64.AppImage`) can be added once the source
   paths produced by `tauri build` on that target are known.
 
-## Release build (signed + notarized)
+## Release build (unsigned 1.0, signed future path)
 
-The default `npm run package` build is unsigned/ad-hoc
-(`signingIdentity: "-"` in `src-tauri/tauri.conf.json`) and is fine for
-the developer's own machine. Downloaded artifacts from GitHub carry Apple's
+The 1.0 release intentionally ships unsigned/ad-hoc on macOS and Windows. The
+default `npm run package` build is unsigned/ad-hoc (`signingIdentity: "-"` in
+`src-tauri/tauri.conf.json`). Downloaded artifacts from GitHub carry Apple's
 quarantine flag; any Mac that has not run TurboTalk before may refuse to launch
 it:
 
@@ -161,11 +161,10 @@ and produces a Developer-ID-signed, notarized DMG without any local changes.
 the Developer ID Application certificate in your login keychain and the four
 `APPLE_*` env vars set in your shell.
 
-For external distribution (beta testers, friends, anyone who is not you),
-the DMG must be signed with a real **Developer ID Application**
-certificate **and** notarized by Apple. This section walks through both
-paths end-to-end. Read it once front to back before starting — every command
-and env var you need is here.
+For a future signed public release, the DMG should be signed with a real
+**Developer ID Application** certificate **and** notarized by Apple. This
+section walks through both paths end-to-end. Read it once front to back before
+starting: every command and env var you need is here.
 
 ### One-time setup
 
@@ -305,8 +304,8 @@ trust the binary for the wrong reason. The real proof:
   launch will still prompt for Microphone and Accessibility / Input
   Monitoring permissions — that is expected and unrelated to signing.
 
-If the second-machine launch shows the Gatekeeper warning, the build
-is not beta-ready. File the failure in `SESSION-STATUS.md`.
+If the second-machine launch shows the Gatekeeper warning, the signed build is
+not release-ready. File the failure in `SESSION-STATUS.md`.
 
 ### Entitlements
 

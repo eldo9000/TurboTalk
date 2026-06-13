@@ -24,7 +24,7 @@ Transcript history is saved by default so the History tab survives relaunches.
 You can turn this off in Settings with the **Save history** toggle.
 
 - **History enabled (default):** Transcript history is stored in
-  `~/.config/librewin/turbotalk/history.json`. It is a plain JSON array capped
+  `~/.config/turbotalk/history.json`. It is a plain JSON array capped
   at the newest 50 entries. On macOS and Linux, the history file is created
   with **owner-only permissions** (`0o600`) — other local users cannot read it.
 - **History disabled:** New transcripts are injected into the focused app and
@@ -54,7 +54,7 @@ When Advanced cleanup is enabled, TurboTalk sends the transcript text string to 
 ## Local file permissions
 
 On macOS and Linux (Unix), all directories and files TurboTalk creates under
-`~/.config/librewin/turbotalk/` use restricted permissions:
+`~/.config/turbotalk/` use restricted permissions:
 - **Directories** (`config.toml` parent, `logs/`, `models/`) are created with
   **owner-only** permissions (`0o700`) — other local users cannot list or
   traverse them.
@@ -80,7 +80,7 @@ Application logs do not contain the body of any transcript. Transcript content i
 ## Bug reports
 
 When you submit a bug report from the Diagnostics tab, TurboTalk saves a
-diagnostic report file locally to `~/.config/librewin/turbotalk/logs/`. This
+diagnostic report file locally to `~/.config/turbotalk/logs/`. This
 report includes sanitized configuration, UI events, and recent session logs
 — no transcript text, no audio, no personally identifying content.
 
@@ -99,13 +99,13 @@ To remove all data TurboTalk stores on your machine:
 
 | What | Path |
 |------|------|
-| Settings | `~/.config/librewin/turbotalk/config.toml` |
-| History | `~/.config/librewin/turbotalk/history.json` |
-| Model files | `~/.config/librewin/turbotalk/models/` (entire directory, or whichever path you configured) |
+| Settings | `~/.config/turbotalk/config.toml` |
+| History | `~/.config/turbotalk/history.json` |
+| Model files | `~/.config/turbotalk/models/` (entire directory, or whichever path you configured) |
 | App bundle | Move TurboTalk.app from `/Applications` to Trash |
-| Launch Agent (if autostart was enabled) | `~/Library/LaunchAgents/io.librewin.turbotalk.plist` |
+| Launch Agent (if autostart was enabled) | `~/Library/LaunchAgents/com.turbotalk.dictation.plist` |
 
-After removing the Launch Agent plist, run `launchctl unload ~/Library/LaunchAgents/io.librewin.turbotalk.plist` (before deleting it) to stop the agent from being loaded in the current session.
+After removing the Launch Agent plist, run `launchctl unload ~/Library/LaunchAgents/com.turbotalk.dictation.plist` (before deleting it) to stop the agent from being loaded in the current session.
 
 Temp audio files are deleted automatically after each recording. If a recording was interrupted abnormally, any leftover `.wav` file in your system temp directory can be deleted safely.
 

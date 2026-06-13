@@ -54,7 +54,7 @@
 | `transcribe.rs` | Spawn whisper.cpp sidecar, feed WAV, parse stdout | `tokio`, sidecar |
 | `cleanup.rs` | Pipe transcript through local LLM with system prompt; classify output type; apply formatting | `reqwest` (Ollama) |
 | `paste.rs` | Inject text into focused app via macOS clipboard + Cmd+V (or enigo on Win/Linux) | `arboard`, `enigo` |
-| `settings.rs` | Read/write `~/.config/librewin/turbotalk/config.toml` | `serde`, `toml` |
+| `settings.rs` | Read/write `~/.config/turbotalk/config.toml` | `serde`, `toml` |
 
 ## Audio Pipeline Contract
 
@@ -174,7 +174,7 @@ Closed action space, open input space. Reference: `Business-OS/memory/project_ch
 
 ## Settings Storage
 
-Following Libre convention: `~/.config/librewin/turbotalk/config.toml`. Includes:
+Following app convention: `~/.config/turbotalk/config.toml`. Includes:
 - Hotkey binding (default: `F1` hold)
 - Whisper model path / size
 - Cleanup mode (off / regex-only / chaperone)
@@ -182,7 +182,7 @@ Following Libre convention: `~/.config/librewin/turbotalk/config.toml`. Includes
 
 ## Build & Distribution
 
-- Single binary, codesigned with the Libre signing infrastructure (see `Libre-Apps/docs/specs/SIGNING.md` when ready).
+- Single binary, optionally codesigned (see signing docs when ready).
 - Whisper.cpp + ggml model shipped as sidecar.
 - No installer for personal use; just `cargo build --release` and run.
 

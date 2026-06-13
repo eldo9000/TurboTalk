@@ -9,7 +9,7 @@
 // ── Model storage ────────────────────────────────────────────────────────────
 //
 // Model files (ONNX bundle + tokenizer) are stored under:
-//   ~/.config/librewin/turbotalk/models/moonshine/<variant>/
+//   ~/.config/turbotalk/models/moonshine/<variant>/
 //
 // Required files per variant:
 //   encoder_model.onnx
@@ -98,18 +98,18 @@ pub fn parse_variant(s: &str) -> Option<MoonshineVariant> {
 // ── Model path helpers ────────────────────────────────────────────────────────
 
 /// Base directory for Moonshine model bundles.
-/// Returns `~/.config/librewin/turbotalk/models/moonshine/`.
+/// Returns `~/.config/turbotalk/models/moonshine/`.
 ///
 /// Does NOT require the directory to exist — callers that need it to exist
 /// (e.g. the download command) create it themselves.
 pub fn moonshine_models_dir() -> Option<PathBuf> {
     let mut p = dirs::home_dir()?;
-    p.push(".config/librewin/turbotalk/models/moonshine");
+    p.push(".config/turbotalk/models/moonshine");
     Some(p)
 }
 
 /// Path to the ONNX bundle directory for a specific variant.
-/// Returns `~/.config/librewin/turbotalk/models/moonshine/<variant>/`.
+/// Returns `~/.config/turbotalk/models/moonshine/<variant>/`.
 pub fn variant_dir(variant_name_str: &str) -> Option<PathBuf> {
     let mut p = moonshine_models_dir()?;
     p.push(variant_name_str);

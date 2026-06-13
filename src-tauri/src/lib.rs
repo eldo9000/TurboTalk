@@ -29,6 +29,11 @@ pub mod vad;
 
 pub use theme::{get_accent, get_theme};
 
+const MAIN_WINDOW_MIN_W: f64 = 420.0;
+const MAIN_WINDOW_MIN_H: f64 = 420.0;
+const MAIN_WINDOW_DEFAULT_W: f64 = 550.0;
+const MAIN_WINDOW_DEFAULT_H: f64 = 560.0;
+
 /// Unified error channel for the frontend. Any backend error path that the
 /// user should see (failed save, malformed config, dropped history entry, etc.)
 /// goes through here so the frontend has a single listener and uniform UX.
@@ -429,7 +434,7 @@ fn position_main_window_on_cursor_monitor(app: &tauri::AppHandle) {
         .outer_size()
         .ok()
         .map(|s| (s.width as f64 / scale, s.height as f64 / scale))
-        .unwrap_or((550.0, 560.0));
+        .unwrap_or((MAIN_WINDOW_DEFAULT_W, MAIN_WINDOW_DEFAULT_H));
     let x = mp.x as f64 + (mon_w_logical - size.0) / 2.0;
     let y = mp.y as f64 + (mon_h_logical - size.1) / 2.0;
 
@@ -442,6 +447,7 @@ fn position_main_window_on_cursor_monitor(app: &tauri::AppHandle) {
         scale
     );
     let _ = win.set_position(LogicalPosition::new(x, y));
+    ensure_main_webview_window_visible(&win);
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -482,12 +488,13 @@ fn position_main_window_on_cursor_monitor(app: &tauri::AppHandle) {
         .outer_size()
         .ok()
         .map(|s| (s.width as f64 / scale, s.height as f64 / scale))
-        .unwrap_or((550.0, 560.0));
+        .unwrap_or((MAIN_WINDOW_DEFAULT_W, MAIN_WINDOW_DEFAULT_H));
     // All math in logical coordinates. monitor.position() returns physical
     // pixels on non-macOS; / scale converts to logical.
     let x = mp.x as f64 / scale + (ms.width as f64 / scale - size.0) / 2.0;
     let y = mp.y as f64 / scale + (ms.height as f64 / scale - size.1) / 2.0;
     let _ = win.set_position(LogicalPosition::new(x, y));
+    ensure_main_webview_window_visible(&win);
 }
 
 fn show_main_window(app: &tauri::AppHandle, first_manual_show: &std::sync::atomic::AtomicBool) {
@@ -497,9 +504,197 @@ fn show_main_window(app: &tauri::AppHandle, first_manual_show: &std::sync::atomi
         if !visible && !first_manual_show.swap(true, Ordering::AcqRel) {
             position_main_window_on_cursor_monitor(app);
         }
+        ensure_main_webview_window_visible(&win);
         let _ = win.show();
         let _ = win.set_focus();
     }
+}
+
+fn ensure_main_webview_window_visible(win: &tauri::WebviewWindow) {
+    use tauri::{PhysicalPosition, PhysicalSize};
+
+    if win.label() != "main" {
+        return;
+    }
+
+    let Ok(pos) = win.outer_position() else {
+        return;
+    };
+    let Ok(size) = win.outer_size() else {
+        return;
+    };
+    let Ok(monitors) = win.available_monitors() else {
+        return;
+    };
+    if monitors.is_empty() {
+        return;
+    }
+
+    let current = win.current_monitor().ok().flatten();
+    let primary = win.primary_monitor().ok().flatten();
+    let Some((target_w, target_h, x, y, work_x, work_y, work_w, work_h)) =
+        main_window_visible_geometry(pos, size, &monitors, current, primary)
+    else {
+        return;
+    };
+
+    if target_w != size.width || target_h != size.height {
+        let _ = win.set_size(PhysicalSize::new(target_w, target_h));
+    }
+
+    if x != pos.x || y != pos.y {
+        tracing::info!(
+            "[main-window] clamping position from ({},{}) to ({},{}) work_area=({},{} {}x{})",
+            pos.x,
+            pos.y,
+            x,
+            y,
+            work_x,
+            work_y,
+            work_w,
+            work_h
+        );
+        let _ = win.set_position(PhysicalPosition::new(x, y));
+    }
+}
+
+fn ensure_main_native_window_visible(win: &tauri::Window) {
+    use tauri::{PhysicalPosition, PhysicalSize};
+
+    if win.label() != "main" {
+        return;
+    }
+
+    let Ok(pos) = win.outer_position() else {
+        return;
+    };
+    let Ok(size) = win.outer_size() else {
+        return;
+    };
+    let Ok(monitors) = win.available_monitors() else {
+        return;
+    };
+    if monitors.is_empty() {
+        return;
+    }
+
+    let current = win.current_monitor().ok().flatten();
+    let primary = win.primary_monitor().ok().flatten();
+    let Some((target_w, target_h, x, y, work_x, work_y, work_w, work_h)) =
+        main_window_visible_geometry(pos, size, &monitors, current, primary)
+    else {
+        return;
+    };
+
+    if target_w != size.width || target_h != size.height {
+        let _ = win.set_size(PhysicalSize::new(target_w, target_h));
+    }
+
+    if x != pos.x || y != pos.y {
+        tracing::info!(
+            "[main-window] clamping position from ({},{}) to ({},{}) work_area=({},{} {}x{})",
+            pos.x,
+            pos.y,
+            x,
+            y,
+            work_x,
+            work_y,
+            work_w,
+            work_h
+        );
+        let _ = win.set_position(PhysicalPosition::new(x, y));
+    }
+}
+
+fn main_window_visible_geometry(
+    pos: tauri::PhysicalPosition<i32>,
+    size: tauri::PhysicalSize<u32>,
+    monitors: &[tauri::Monitor],
+    current: Option<tauri::Monitor>,
+    primary: Option<tauri::Monitor>,
+) -> Option<(u32, u32, i32, i32, i32, i32, u32, u32)> {
+    let monitor = monitors
+        .iter()
+        .max_by_key(|m| {
+            let work = m.work_area();
+            intersection_area(
+                pos.x,
+                pos.y,
+                size.width as i32,
+                size.height as i32,
+                work.position.x,
+                work.position.y,
+                work.size.width as i32,
+                work.size.height as i32,
+            )
+        })
+        .cloned()
+        .or(current)
+        .or(primary)?;
+
+    let work = monitor.work_area();
+    let scale = monitor.scale_factor();
+    let min_w = (MAIN_WINDOW_MIN_W * scale).round().max(1.0) as u32;
+    let min_h = (MAIN_WINDOW_MIN_H * scale).round().max(1.0) as u32;
+    let max_w = work.size.width.max(min_w);
+    let max_h = work.size.height.max(min_h);
+    let target_w = size.width.clamp(min_w, max_w);
+    let target_h = size.height.clamp(min_h, max_h);
+    let (x, y) = clamp_window_position_to_work_area(
+        pos.x,
+        pos.y,
+        target_w as i32,
+        target_h as i32,
+        work.position.x,
+        work.position.y,
+        work.size.width as i32,
+        work.size.height as i32,
+    );
+
+    Some((
+        target_w,
+        target_h,
+        x,
+        y,
+        work.position.x,
+        work.position.y,
+        work.size.width,
+        work.size.height,
+    ))
+}
+
+fn intersection_area(
+    ax: i32,
+    ay: i32,
+    aw: i32,
+    ah: i32,
+    bx: i32,
+    by: i32,
+    bw: i32,
+    bh: i32,
+) -> i64 {
+    let left = ax.max(bx);
+    let top = ay.max(by);
+    let right = (ax + aw).min(bx + bw);
+    let bottom = (ay + ah).min(by + bh);
+    let w = (right - left).max(0) as i64;
+    let h = (bottom - top).max(0) as i64;
+    w * h
+}
+
+fn clamp_window_position_to_work_area(
+    x: i32,
+    y: i32,
+    window_w: i32,
+    window_h: i32,
+    work_x: i32,
+    work_y: i32,
+    work_w: i32,
+    work_h: i32,
+) -> (i32, i32) {
+    let max_x = work_x + (work_w - window_w).max(0);
+    let max_y = work_y + (work_h - window_h).max(0);
+    (x.clamp(work_x, max_x), y.clamp(work_y, max_y))
 }
 
 /// Windows / Linux variant.
@@ -902,7 +1097,7 @@ async fn download_model(
     // Build the destination path — create the directory if it doesn't exist yet.
     // (canonical_models_dir() requires the dir to already exist, so we build manually.)
     let mut dir = dirs::home_dir().ok_or_else(|| "Could not locate home directory".to_string())?;
-    dir.push(".config/librewin/turbotalk/models");
+    dir.push(".config/turbotalk/models");
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| e.to_string())?;
@@ -1120,7 +1315,7 @@ async fn verify_runtime_model_file(
 /// Download a Moonshine ONNX model bundle from HuggingFace (TASK-58).
 ///
 /// `variant` must be "tiny" or "base". Files are stored under:
-///   `~/.config/librewin/turbotalk/models/moonshine/<variant>/`
+///   `~/.config/turbotalk/models/moonshine/<variant>/`
 ///
 /// Progress events match the Whisper `download-progress` pattern:
 ///   `{ "name": "moonshine-<variant>", "pct": 0..100 }`
@@ -1210,7 +1405,7 @@ async fn download_moonshine_model(
     // Build destination directory.
     let mut dest_dir =
         dirs::home_dir().ok_or_else(|| "Could not locate home directory".to_string())?;
-    dest_dir.push(".config/librewin/turbotalk/models/moonshine");
+    dest_dir.push(".config/turbotalk/models/moonshine");
     dest_dir.push(&variant);
     tokio::fs::create_dir_all(&dest_dir)
         .await
@@ -1228,7 +1423,7 @@ async fn download_moonshine_model(
     {
         let mut expected_base =
             dirs::home_dir().ok_or_else(|| "Could not locate home directory".to_string())?;
-        expected_base.push(".config/librewin/turbotalk/models/moonshine");
+        expected_base.push(".config/turbotalk/models/moonshine");
         if let Ok(canon_base) = expected_base.canonicalize() {
             if !canon_dir.starts_with(&canon_base) {
                 return Err("Download destination is outside the allowed directory".to_string());
@@ -1527,7 +1722,7 @@ async fn download_parakeet_model(
     // Build destination directory.
     let mut dest_dir =
         dirs::home_dir().ok_or_else(|| "Could not locate home directory".to_string())?;
-    dest_dir.push(".config/librewin/turbotalk/models/parakeet");
+    dest_dir.push(".config/turbotalk/models/parakeet");
     dest_dir.push(&variant);
     tokio::fs::create_dir_all(&dest_dir)
         .await
@@ -1545,7 +1740,7 @@ async fn download_parakeet_model(
     {
         let mut expected_base =
             dirs::home_dir().ok_or_else(|| "Could not locate home directory".to_string())?;
-        expected_base.push(".config/librewin/turbotalk/models/parakeet");
+        expected_base.push(".config/turbotalk/models/parakeet");
         if let Ok(canon_base) = expected_base.canonicalize() {
             if !canon_dir.starts_with(&canon_base) {
                 return Err("Download destination is outside the allowed directory".to_string());
@@ -1791,7 +1986,7 @@ fn list_models_for_family(family: String) -> Vec<ModelDescriptor> {
                 description: "english-only · fastest · low silence hallucination".to_string(),
                 size: "110 MB".to_string(),
                 download_url: "https://huggingface.co/onnx-community/moonshine-tiny-ONNX".to_string(),
-                path_hint: ".config/librewin/turbotalk/models/moonshine/tiny/".to_string(),
+                path_hint: ".config/turbotalk/models/moonshine/tiny/".to_string(),
                 installed: moonshine_installed("tiny"),
                 recommended: true,
             },
@@ -1802,7 +1997,7 @@ fn list_models_for_family(family: String) -> Vec<ModelDescriptor> {
                 description: "english-only · more accurate".to_string(),
                 size: "250 MB".to_string(),
                 download_url: "https://huggingface.co/onnx-community/moonshine-base-ONNX".to_string(),
-                path_hint: ".config/librewin/turbotalk/models/moonshine/base/".to_string(),
+                path_hint: ".config/turbotalk/models/moonshine/base/".to_string(),
                 installed: moonshine_installed("base"),
                 recommended: false,
             },
@@ -1815,7 +2010,7 @@ fn list_models_for_family(family: String) -> Vec<ModelDescriptor> {
                 description: "english-only · fastest".to_string(),
                 size: "660 MB".to_string(),
                 download_url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx".to_string(),
-                path_hint: ".config/librewin/turbotalk/models/parakeet/tdt-0.6b-v2/".to_string(),
+                path_hint: ".config/turbotalk/models/parakeet/tdt-0.6b-v2/".to_string(),
                 installed: parakeet_installed("tdt-0.6b-v2"),
                 recommended: true,
             },
@@ -1826,7 +2021,7 @@ fn list_models_for_family(family: String) -> Vec<ModelDescriptor> {
                 description: "multilingual · 25 european languages".to_string(),
                 size: "660 MB".to_string(),
                 download_url: "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx".to_string(),
-                path_hint: ".config/librewin/turbotalk/models/parakeet/tdt-0.6b-v3/".to_string(),
+                path_hint: ".config/turbotalk/models/parakeet/tdt-0.6b-v3/".to_string(),
                 installed: parakeet_installed("tdt-0.6b-v3"),
                 recommended: false,
             },
@@ -1907,11 +2102,11 @@ fn detect_logitech_mouse() -> bool {
     }
 }
 
-/// Cancel an in-flight recording (Recording or Transcribing state) from the
-/// frontend. The hotkey thread calls `recorder.cancel()` directly and does not
-/// go through this command — this command exists for future UI use (e.g. an
-/// X button on the overlay). Registered in the invoke_handler and specta
-/// builder so it appears in `bindings.ts` (TASK-23).
+/// Cancel an in-flight dictation job from the frontend. The hotkey thread
+/// calls `recorder.cancel()` directly and does not go through this command —
+/// this command exists for future UI use (e.g. an X button on the overlay).
+/// Registered in the invoke_handler and specta builder so it appears in
+/// `bindings.ts` (TASK-23).
 #[tauri::command]
 #[specta::specta]
 fn cancel_recording(
@@ -1923,10 +2118,7 @@ fn cancel_recording(
     let rec = recorder_state.inner();
     let tray = tray_icon_state.inner();
     let state = rec.state();
-    if !matches!(
-        state,
-        recorder::State::Recording | recorder::State::Transcribing
-    ) {
+    if !state.is_busy() {
         return Err(format!("nothing to cancel (recorder is {})", state));
     }
     // Hold mode + Recording: a matching key-release will dispatch ptt_up.
@@ -2033,7 +2225,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let data_dir = crate::settings::data_dir();
-    librewin_common::logging::init(env!("CARGO_PKG_NAME"), &data_dir);
+    shared::logging::init(env!("CARGO_PKG_NAME"), &data_dir);
     let _ = diagnostic_log::ensure_log_dir();
     let log_dir = diagnostic_log::log_dir();
 
@@ -2394,16 +2586,25 @@ pub fn run() {
             // ── Main window — hidden until tray click unless onboarding ───
             if let Some(win) = app.get_webview_window("main") {
                 use tauri::LogicalSize;
-                // Spawn height is the floor; width stays at 550 (JS also sets min/max).
-                let _ = win.set_min_size(Some(LogicalSize::new(550.0, 560.0)));
+                // Compact floor keeps resize handles reachable on small displays;
+                // the frontend still restores the preferred 550×560 when it fits.
+                let _ = win.set_min_size(Some(LogicalSize::new(
+                    MAIN_WINDOW_MIN_W,
+                    MAIN_WINDOW_MIN_H,
+                )));
+                ensure_main_webview_window_visible(&win);
                 // First-run / regression gate: if Accessibility, Microphone,
                 // or a model are missing, show the window so the onboarding
                 // wizard can guide the user. Otherwise leave it hidden (tray-
                 // resident agent behaviour).
                 let readiness = crate::permissions::check_readiness();
                 if !readiness.ready {
-                    let _ = win.set_size(tauri::LogicalSize::new(550.0, 420.0));
+                    let _ = win.set_size(tauri::LogicalSize::new(
+                        MAIN_WINDOW_DEFAULT_W,
+                        MAIN_WINDOW_MIN_H,
+                    ));
                     let _ = win.center();
+                    ensure_main_webview_window_visible(&win);
                     let _ = win.show();
                     let _ = win.set_focus();
                 }
@@ -2619,9 +2820,18 @@ pub fn run() {
         })
         // Close button hides to tray instead of quitting
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
-                api.prevent_close();
+            match event {
+                WindowEvent::CloseRequested { api, .. } => {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+                WindowEvent::Moved(_)
+                | WindowEvent::Resized(_)
+                | WindowEvent::ScaleFactorChanged { .. }
+                | WindowEvent::Focused(true) => {
+                    ensure_main_native_window_visible(window);
+                }
+                _ => {}
             }
         })
         .build(tauri::generate_context!())
@@ -2642,7 +2852,33 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::specta_builder;
+    use super::{clamp_window_position_to_work_area, intersection_area, specta_builder};
+
+    #[test]
+    fn clamp_window_position_keeps_window_inside_work_area_when_it_fits() {
+        assert_eq!(
+            clamp_window_position_to_work_area(-200, 40, 420, 420, 0, 25, 1440, 875),
+            (0, 40)
+        );
+        assert_eq!(
+            clamp_window_position_to_work_area(1300, 760, 420, 420, 0, 25, 1440, 875),
+            (1020, 480)
+        );
+    }
+
+    #[test]
+    fn clamp_window_position_anchors_oversized_windows_to_work_area_origin() {
+        assert_eq!(
+            clamp_window_position_to_work_area(200, 200, 1600, 1000, 0, 25, 1440, 875),
+            (0, 25)
+        );
+    }
+
+    #[test]
+    fn intersection_area_returns_zero_for_disjoint_rectangles() {
+        assert_eq!(intersection_area(0, 0, 100, 100, 200, 200, 100, 100), 0);
+        assert_eq!(intersection_area(0, 0, 100, 100, 50, 50, 100, 100), 2500);
+    }
 
     /// Regenerate `src/bindings.ts` on demand. Run with:
     ///   cargo test --manifest-path src-tauri/Cargo.toml export_bindings

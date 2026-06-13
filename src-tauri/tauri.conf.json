@@ -1,7 +1,7 @@
 {
   "productName": "Turbo Talk",
   "version": "0.9.8",
-  "identifier": "io.librewin.turbotalk",
+  "identifier": "com.turbotalk.dictation",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1428",
@@ -16,9 +16,9 @@
         "title": "Turbo Talk",
         "width": 550,
         "height": 560,
-        "minWidth": 550,
+        "minWidth": 420,
         "maxWidth": 1100,
-        "minHeight": 560,
+        "minHeight": 420,
         "maxHeight": 1120,
         "decorations": true,
         "titleBarStyle": "Transparent",

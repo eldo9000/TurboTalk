@@ -11,10 +11,10 @@
   </a>
   &nbsp;
   <a href="https://github.com/eldo9000/TurboTalk/releases/latest/download/TurboTalk-Windows-x64-setup.exe">
-    <img src="https://img.shields.io/badge/Download-Windows%20x64%20Beta-0078d4?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows (x64) — Beta" />
+    <img src="https://img.shields.io/badge/Download-Windows%20x64-0078d4?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows (x64)" />
   </a>
 </p>
-<p align="center"><sub>Windows build is a beta — hotkey and paste work on real hardware; end-to-end testing is ongoing.</sub></p>
+<p align="center"><sub>1.0 supports macOS Apple Silicon and Windows x64. Linux is the 2.0 track.</sub></p>
 
 ---
 
@@ -65,6 +65,7 @@ You can switch engines and swap models in the Models tab. The app downloads what
 
 1. Download and open the installer for your platform.
 2. **macOS:** drag Turbo Talk into `/Applications`. First launch: **right-click → Open** to get past the Gatekeeper warning (expected for unsigned apps).
+   **Windows:** run the installer. If SmartScreen appears, choose **More info → Run anyway** (expected for unsigned apps).
 3. Walk through the three-step onboarding: grant Accessibility, grant Microphone, download a model.
 4. Set your trigger key. Hold it, say something, let go.
 
@@ -82,8 +83,8 @@ You can switch engines and swap models in the Models tab. The app downloads what
 
 - `Cmd+=` / `Cmd+−` zoom the UI. `Cmd+0` resets. Persists across launches.
 - Closing the window hides to tray. The hotkey stays active. Quit from the tray menu to fully exit.
-- Config and history live at `~/.config/librewin/turbotalk/`. Delete that folder to wipe everything.
+- Config and history live at `~/.config/turbotalk/`. Delete that folder to wipe everything.
 
 ---
 
-*Linux builds exist but are not yet ready for use. Windows is in beta — the full dictation loop works on real hardware; if you run into issues, open a GitHub issue.*
+*The 1.0 release is unsigned/ad-hoc on macOS and Windows. Linux builds are deferred until the 2.0 release.*

@@ -35,6 +35,10 @@ reqwest's blocking-client default 30 s timeout. Now set to an explicit 120 s.
 
 **Mouse-back/forward/middle hotkeys — landed 2026-06-09:** IOHIDManager reads raw HID Button usage values at the IOKit level, bypassing CGEventTap entirely for mouse buttons. This works even when Logi Options+ (or similar driver software) intercepts the button — IOKit delivers HID reports to ALL registered IOHIDManager clients, so Logi cannot block TurboTalk from seeing the raw report. F13–F19 function keys added as an alternative PTT path for users who prefer mapping buttons to keystrokes in their mouse software.
 
+**Main window placement safeguards — patched 2026-06-13:** Main window minimum size is now 420×420 instead of 550×560. The frontend restores the preferred 550×560 utility size only when it fits the current monitor work area, and native code clamps the main window back into the visible work area on startup, first tray/menu show, focus, move, resize, and display-scale changes. Verified by `npm run typecheck`, `cargo check --manifest-path src-tauri/Cargo.toml`, and focused geometry unit tests. Runtime proof on the smaller laptop display is still pending.
+
+**1.0 installed-artifact smoke — confirmed 2026-06-13:** User confirmed clean installed-artifact smoke is complete for the 1.0 path: macOS and Windows artifacts install, complete onboarding, dictate into a text target, quit/relaunch, and preserve settings/history.
+
 **Streaming chunked transcription — landed 2026-05-20 (TASK-54):** silence-boundary
 segments emitted during recording are transcribed concurrently via `SegmentTranscriber`
 so that by key-release only the final tail remains. Segments and tail assembled in
@@ -98,7 +102,7 @@ Model lineup: Recommended = `ggml-large-v3-turbo` (1.6 GB) · Small = `ggml-larg
 
 - Tray icon: left-click shows/hides window; right-click menu has Show + Quit
 - Close button hides to tray (does not quit)
-- Config persists at `~/.config/librewin/turbotalk/config.toml` (TOML, written on first run)
+- Config persists at `~/.config/turbotalk/config.toml` (TOML, written on first run)
 - Settings tab: whisper bin + model path editable and saved live
 - History tab: last 50 transcripts shown, most recent first
 - Whisper model hint: HuggingFace link opens in browser; brew command shown
@@ -137,12 +141,9 @@ longer macOS-only assumptions in source:
 
 ## What is explicitly not working
 
-- Windows hotkey — default was Right Option (AltGr), which most US keyboards lack; fixed to Right Control + hold mode with full left/right modifier and numpad mapping. Auto-migrates existing configs. Awaiting real-hardware retest. TASK-25.
-- Windows paste — unreachable without working hotkey; arboard+enigo impl in place, untested. TASK-26.
-- Windows app/tray icons — `icon.ico` was stale Tauri default (solid blue); regen from `gen_icons.py` now runs before every package build. Tray idle icon loads embedded `32x32.png` on Windows.
-- Windows onboarding flag — welcome screen re-triggers on every restart; "onboarding complete" state not persisting correctly on Windows config path.
 - Linux Whisper sidecar — upstream ships no Linux binary; Linux excluded from release matrix.
-- Developer ID codesigning / notarization is intentionally deferred for v0.8.
+- Linux hotkey + paste — not validated on real X11 hardware; Linux is deferred to the 2.0 track.
+- Developer ID codesigning / notarization and Windows Authenticode signing are intentionally deferred for 1.0.
 
 ## Sidecar bundling — confirmed 2026-05-05
 
@@ -155,8 +156,8 @@ longer macOS-only assumptions in source:
   `src-tauri/tauri.windows.conf.json` `bundle.resources`. CI release
   workflow ran green on commit `0e9ad71`
   (https://github.com/eldo9000/TurboTalk-App/actions/runs/25378189425) —
-  preflight passes, `tauri build` produces an NSIS installer. Runtime
-  proof on a real Windows box still pending (hotkey + paste are stubs).
+  preflight passes, `tauri build` produces an NSIS installer. Windows
+  installed-artifact smoke is now complete per user confirmation.
 - Linux: not bundled. Excluded from release matrix until rdev hotkey + paste
   validated on real X11 hardware.
 
@@ -182,7 +183,7 @@ longer macOS-only assumptions in source:
 
 ## Promotion criteria
 
-TurboTalk is a personal-use tool, not a Libre product. Promotion happens only if:
+TurboTalk is a personal-use tool, not a public product. Promotion happens only if:
 - Used daily for two consecutive weeks, AND
 - Demonstrably works for at least one non-Eldo person, AND
 - Chaperone Layer proves out and is worth shipping

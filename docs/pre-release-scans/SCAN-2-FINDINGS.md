@@ -33,7 +33,7 @@ updater artifacts are CI-only.
 | 1 | pass | Signing | Entitlements coherent with hardened runtime; ad-hoc is intentional. |
 | 2 | should-fix | Signing | `verify-macos-bundle.mjs` never checks codesign; not run in the macOS release job at all. |
 | 3 | **blocker** | Updater | `createUpdaterArtifacts:false` contradicts the workflow's Locate step. |
-| 4 | should-fix | Launch-at-login | Uninstall docs reference `com.librewin.turbotalk.plist`; identifier is `io.librewin.turbotalk`. |
+| 4 | should-fix | Launch-at-login | Uninstall docs reference `com.turbotalk.dictation.plist`; identifier is `com.turbotalk.dictation`. |
 | 5 | pass | Version | All three manifests at 0.9.0; bump-version updates them atomically with verify. |
 | 6 | nit | Artifact naming | Local rename pattern ≠ CI release names; productName has a space. |
 
@@ -89,9 +89,9 @@ Feature is fully implemented via `tauri-plugin-autostart` (`MacosLauncher::Launc
 toggled in Settings (`App.svelte:950`), Onboarding (`Onboarding.svelte:185`), and the tray
 "launch" item (`lib.rs:2112`); `reset_turbotalk` disables it (`lib.rs:539`). State of truth is
 the OS LaunchAgent (`app.autolaunch().is_enabled()`), which survives relaunch — correct mechanism.
-**Mismatch:** the bundle identifier is `io.librewin.turbotalk` (`tauri.conf.json:4`), so the
-plugin writes `~/Library/LaunchAgents/io.librewin.turbotalk.plist`, but `PRIVACY.md:69` and
-`SMOKE-TEST.md:336` tell users to unload/delete `com.librewin.turbotalk.plist`. At least one
+**Mismatch:** the bundle identifier is `com.turbotalk.dictation` (`tauri.conf.json:4`), so the
+plugin writes `~/Library/LaunchAgents/com.turbotalk.dictation.plist`, but `PRIVACY.md:69` and
+`SMOKE-TEST.md:336` tell users to unload/delete `com.turbotalk.dictation.plist`. At least one
 prefix is wrong; following the docs would leave a real login item orphaned after "uninstall."
 *Fix:* correct the docs to the actual identifier (verify the exact plist name on a real install).
 Path-stability across update is the standard autostart caveat (plist embeds the app path; fine
