@@ -20,6 +20,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// Signals the frontend to show the welcome screen even when fully ready.
 static FORCE_ONBOARDING: AtomicBool = AtomicBool::new(false);
 
+/// True while the welcome screen (splash + onboarding) is active.
+/// Starts true; cleared when setup completes (all gates green).
+/// The hotkey reads this to silently suppress dictation during setup.
+static ONBOARDING_ACTIVE: AtomicBool = AtomicBool::new(true);
+
+/// Check whether the onboarding/splash screen is still active.
+/// Called by the hotkey listener to suppress dictation during setup.
+pub fn onboarding_active() -> bool {
+    ONBOARDING_ACTIVE.load(Ordering::Acquire)
+}
+
+/// Clear the onboarding-active flag. Called when:
+///   - Startup readiness is immediately green (no onboarding needed), or
+///   - The user completes the onboarding wizard.
+pub fn clear_onboarding_active() {
+    ONBOARDING_ACTIVE.store(false, Ordering::Release);
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionStatus {
@@ -289,18 +307,32 @@ pub fn check_readiness() -> Readiness {
 }
 
 /// Debug command: set the in-memory force-onboarding flag so the frontend
-/// shows the welcome screen immediately. No restart, no data deleted.
+/// shows the welcome screen immediately. Also re-enables hotkey suppression
+/// while onboarding is active.
 #[tauri::command]
 #[specta::specta]
 pub fn reset_onboarding() {
     FORCE_ONBOARDING.store(true, Ordering::SeqCst);
+    ONBOARDING_ACTIVE.store(true, Ordering::Release);
 }
 
-/// Called by the frontend when onboarding completes, to clear the force flag.
+/// Called by the frontend when onboarding completes, to clear the force flag
+/// and enable the hotkey for dictation.
 #[tauri::command]
 #[specta::specta]
 pub fn clear_force_onboarding() {
     FORCE_ONBOARDING.store(false, Ordering::SeqCst);
+    clear_onboarding_active();
+}
+
+/// Called by the frontend when all setup gates are green (or onboarding
+/// completes). Clears both the debug force flag and the onboarding-active
+/// state so the hotkey can arm.
+#[tauri::command]
+#[specta::specta]
+pub fn set_setup_complete() {
+    FORCE_ONBOARDING.store(false, Ordering::SeqCst);
+    clear_onboarding_active();
 }
 
 /// Open a specific pane in macOS System Settings. `pane` is one of:

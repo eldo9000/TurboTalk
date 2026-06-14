@@ -389,6 +389,12 @@ pub(crate) mod common {
     // therefore spawn a worker thread and return immediately.
 
     pub(super) fn ptt_down(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
+        // Suppress all hotkey activity while the welcome/onboarding screen is
+        // visible — no model, no permissions, no reason to arm.
+        if crate::permissions::onboarding_active() {
+            return;
+        }
+
         // Clear any stale CANCEL_PENDING / CANCEL_ARMING flags set by a
         // previous orphaned key-up or cancelled arming (TASK-2). Without
         // this the next legitimate press can instantly cancel itself.

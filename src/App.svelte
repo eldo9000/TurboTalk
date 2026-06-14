@@ -1291,6 +1291,7 @@ Reply with only the single word, lowercase, no punctuation.
     <Onboarding
       onComplete={completeOnboarding}
       onUnsupportedContinue={() => {
+        commands.clearForceOnboarding();
         unsupportedPlatformDismissed = true;
         showOnboarding = false;
         restoreMainWindowSize();

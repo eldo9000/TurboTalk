@@ -39,6 +39,10 @@ reqwest's blocking-client default 30 s timeout. Now set to an explicit 120 s.
 
 **1.0 installed-artifact smoke — confirmed 2026-06-13:** User confirmed clean installed-artifact smoke is complete for the 1.0 path: macOS and Windows artifacts install, complete onboarding, dictate into a text target, quit/relaunch, and preserve settings/history.
 
+**Parakeet vocab.txt SHA-256 fixed — patched 2026-06-13:** The `vocab.txt` hash was stale (HuggingFace updated the file); download failed SHA-256 verification during onboarding. Hash updated for both tdt-0.6b-v2 (`ec182b...`) and tdt-0.6b-v3 (`d58544...`). Compiled and verified against live HF content.
+
+**Hotkey suppressed during onboarding — patched 2026-06-13:** PTT hotkey is now silently disabled while the welcome/onboarding screen is visible. Previously the hotkey fired during onboarding and produced error toasts ("start ignored — whisper prewarm failed earlier"). `ONBOARDING_ACTIVE` atomic flag gates `ptt_down`; cleared when readiness is immediately green at startup or by `clear_force_onboarding` when the user completes onboarding.
+
 **Streaming chunked transcription — landed 2026-05-20 (TASK-54):** silence-boundary
 segments emitted during recording are transcribed concurrently via `SegmentTranscriber`
 so that by key-release only the final tail remains. Segments and tail assembled in

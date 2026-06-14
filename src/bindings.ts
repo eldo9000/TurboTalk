@@ -223,11 +223,21 @@ export const commands = {
 	promptForAccessibility: () => __TAURI_INVOKE<PermissionStatus>("prompt_for_accessibility"),
 	/**
 	 *  Debug command: set the in-memory force-onboarding flag so the frontend
-	 *  shows the welcome screen immediately. No restart, no data deleted.
+	 *  shows the welcome screen immediately. Also re-enables hotkey suppression
+	 *  while onboarding is active.
 	 */
 	resetOnboarding: () => __TAURI_INVOKE<void>("reset_onboarding"),
-	// Called by the frontend when onboarding completes, to clear the force flag.
+	/**
+	 *  Called by the frontend when onboarding completes, to clear the force flag
+	 *  and enable the hotkey for dictation.
+	 */
 	clearForceOnboarding: () => __TAURI_INVOKE<void>("clear_force_onboarding"),
+	/**
+	 *  Called by the frontend when all setup gates are green (or onboarding
+	 *  completes). Clears both the debug force flag and the onboarding-active
+	 *  state so the hotkey can arm.
+	 */
+	setSetupComplete: () => __TAURI_INVOKE<void>("set_setup_complete"),
 	/**
 	 *  Reset the TCC permission entry for Turbo Talk so the onboarding wizard
 	 *  can clear stale entries left by a previous install. After this call the

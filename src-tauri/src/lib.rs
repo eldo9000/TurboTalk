@@ -1687,7 +1687,7 @@ async fn download_parakeet_model(
                 remote_path: "vocab.txt",
                 local_name: "vocab.txt",
                 max_bytes: 64 * KIB,
-                sha256: Some("20eefde5cae181c8c19481f6d6f8b2abdc44b3243c946bd1967f98281bbe5739"),
+                sha256: Some("ec182b70dd42113aff6c5372c75cac58c952443eb22322f57bbd7f53977d497d"),
             },
         ],
         "tdt-0.6b-v3" => &[
@@ -1713,7 +1713,7 @@ async fn download_parakeet_model(
                 remote_path: "vocab.txt",
                 local_name: "vocab.txt",
                 max_bytes: 256 * KIB,
-                sha256: Some("6c3109e5fb3769941c1ce19580f0008c3c6687a58bd99ac7c097c4cb98f37304"),
+                sha256: Some("d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d"),
             },
         ],
         _ => unreachable!(),
@@ -2218,6 +2218,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         permissions::prompt_for_accessibility,
         permissions::reset_onboarding,
         permissions::clear_force_onboarding,
+        permissions::set_setup_complete,
         permissions::reset_tcc_entry,
     ])
 }
@@ -2381,6 +2382,7 @@ pub fn run() {
             permissions::prompt_for_accessibility,
             permissions::reset_onboarding,
             permissions::clear_force_onboarding,
+            permissions::set_setup_complete,
             permissions::reset_tcc_entry,
         ])
         .setup(|app| {
@@ -2812,6 +2814,8 @@ pub fn run() {
             // shows the yellow arming tile while it loads.
             if crate::permissions::check_readiness().ready {
                 tracing::info!("[transcribe] startup prewarm deferred until first dictation");
+                // All gates green at startup — hotkey can arm immediately.
+                crate::permissions::clear_onboarding_active();
             } else {
                 tracing::info!("[transcribe] startup prewarm skipped until onboarding is complete");
             }
