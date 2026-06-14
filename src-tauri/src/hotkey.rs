@@ -88,18 +88,18 @@ pub(crate) mod common {
     }
 
     /// Incremented on every accepted cancel action. The ptt-up worker captures
-    /// this after it owns the stopped job, then checks it before emitting or
-    /// pasting text. This covers the post-key-up window where `CURRENT_JOB_ID`
-    /// has already moved into a local variable and cancel otherwise has no
-    /// shared job handle left to invalidate.
+    /// this before `rec.stop()` (see `cancel_epoch_at_stop`), then checks it
+    /// before emitting or pasting text.  SeqCst is used so the increment from
+    /// the CGEventTap callback is globally visible to the ptt_up worker thread
+    /// without relying on inter-thread cache-coherence timing.
     static CANCEL_EPOCH: AtomicU64 = AtomicU64::new(0);
 
     fn cancel_epoch() -> u64 {
-        CANCEL_EPOCH.load(Ordering::Acquire)
+        CANCEL_EPOCH.load(Ordering::SeqCst)
     }
 
     fn job_cancelled_since(epoch: u64) -> bool {
-        CANCEL_EPOCH.load(Ordering::Acquire) != epoch
+        CANCEL_EPOCH.load(Ordering::SeqCst) != epoch
     }
 
     fn wait_for_hold_cancel_window(epoch: u64, job_id_opt: Option<u64>) -> bool {
@@ -284,7 +284,7 @@ pub(crate) mod common {
         if matches!(recorder.state(), crate::recorder::State::Ready) {
             return;
         }
-        CANCEL_EPOCH.fetch_add(1, Ordering::AcqRel);
+        CANCEL_EPOCH.fetch_add(1, Ordering::SeqCst);
         play_chime(ChimeEvent::Cancel);
         let rec = recorder.clone();
         let tray = tray_icon.clone();
@@ -966,6 +966,21 @@ pub(crate) mod common {
                                         );
                                     }
                                 }
+                                // Defense-in-depth: verify the recorder is still
+                                // in Pasting state before pasting (salvaged path).
+                                if !matches!(rec.state(), crate::recorder::State::Pasting) {
+                                    tracing::info!(
+                                        "[hotkey job_id={:?}] paste suppressed (salvaged) — recorder is {:?}, expected Pasting",
+                                        job_id_opt,
+                                        rec.state()
+                                    );
+                                    rec.finish_guarded();
+                                    let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                                    if let Some(job_id) = job_id_opt {
+                                        emit_stage(&app, job_id, "ready");
+                                    }
+                                    return;
+                                }
                                 let paste_text = format!("{} ", final_text);
                                 match crate::paste::paste(&paste_text) {
                                     Ok(_) => {
@@ -1110,6 +1125,21 @@ pub(crate) mod common {
                                         },
                                     );
                                 }
+                            }
+                            // Defense-in-depth: verify the recorder is still
+                            // in Pasting state before pasting (normal path).
+                            if !matches!(rec.state(), crate::recorder::State::Pasting) {
+                                tracing::info!(
+                                    "[hotkey job_id={:?}] paste suppressed (normal) — recorder is {:?}, expected Pasting",
+                                    job_id_opt,
+                                    rec.state()
+                                );
+                                rec.finish_guarded();
+                                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                                if let Some(job_id) = job_id_opt {
+                                    emit_stage(&app, job_id, "ready");
+                                }
+                                return;
                             }
                             let paste_text = format!("{} ", final_text);
                             match crate::paste::paste(&paste_text) {
@@ -1264,6 +1294,20 @@ pub(crate) mod common {
                                                 },
                                             );
                                         }
+                                    }
+                                    // Defense-in-depth: verify the recorder is still
+                                    // in Pasting state before pasting in seg-recovery.
+                                    if !matches!(rec.state(), crate::recorder::State::Pasting) {
+                                        tracing::info!(
+                                            "[hotkey job_id={:?}] seg-recovery paste suppressed — recorder is {:?}, expected Pasting",
+                                            job_id_opt,
+                                            rec.state()
+                                        );
+                                        let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                                        if let Some(job_id) = job_id_opt {
+                                            emit_stage(&app, job_id, "ready");
+                                        }
+                                        return;
                                     }
                                     let paste_text = format!("{} ", final_text);
                                     match crate::paste::paste(&paste_text) {

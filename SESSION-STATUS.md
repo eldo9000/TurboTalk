@@ -1,13 +1,13 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-06-14  
-**Current state:** Fixed intermittent cancel-paste-through bug in `hotkey.rs` — `cancel_epoch_at_stop` is now captured before `rec.stop()` instead of after three `Mutex::take()` calls, eliminating the race where `CANCEL_EPOCH` could be incremented by the Escape handler before the snapshot was taken.
+**Current state:** Addressing remaining cancel-paste-through edge case where cancel during/after transcription doesn't always suppress paste. Applied two additional defenses in `hotkey.rs`: (1) upgraded `CANCEL_EPOCH` to `SeqCst` ordering for immediate cross-thread visibility, and (2) added state-machine guard (`rec.state() == Pasting`) right before each of the 3 paste call sites.
 
 ## Open backlog
 
 | Item | Status |
 |------|--------|
-| **Cancel key paste-through regression** | **Fixed** — `cancel_epoch_at_stop` moved before `rec.stop()` in both Wav and Discard arms of `ptt_up`. Previously, 3 `Mutex::lock().take()` calls between `stop()` return and the epoch capture created a window where the Escape handler could increment `CANCEL_EPOCH` first, making the snapshot match the post-cancel value and causing all `job_cancelled_since` checks to never fire. Verified by build. |
+| **Cancel key paste-through (post-transcription)** | **Fixed** — Added `SeqCst` ordering on `CANCEL_EPOCH` and state-machine guards before all 3 paste call sites. User confirmed cancel works even after transcription chunks have arrived. |
 | **Manual device-lost repro** | **TODO** — verify `lib.rs:2286` fix: hold key → unplug/switch mic mid-recording → release → next press must start a normal recording (no instant "recording-cancelled"). Fix is verified-by-construction only; runtime not yet observed. |
 | Release CI run | **Complete** — v0.9.8 builds, codesign, updater artifacts all green ([#27322438132](https://github.com/eldo9000/TurboTalk-App/actions/runs/27322438132)) |
 | TASK-25/26 — Windows hotkey + paste | Complete |
