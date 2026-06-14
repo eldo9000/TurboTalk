@@ -8,10 +8,9 @@
 
 name: Dev Build (Windows)
 
+# Manual trigger only — run Windows builds locally on your Windows machine.
+# See docs/local-builds.md for setup instructions.
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 env:
