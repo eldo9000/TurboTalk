@@ -53,16 +53,15 @@ jobs:
             "https://github.com/"
           echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
 
-      - name: Cache cargo registry + target
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: macos-dev-cargo-aarch64-apple-darwin-${{ hashFiles('src-tauri/Cargo.lock') }}
+          key: macos-dev-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
-            macos-dev-cargo-aarch64-apple-darwin-
+            macos-dev-cargo-
 
       - name: Install npm deps
         run: npm ci
@@ -134,13 +133,12 @@ jobs:
             "https://github.com/"
           echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
 
-      - name: Cache cargo registry + target
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
           key: windows-dev-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
             windows-dev-cargo-
