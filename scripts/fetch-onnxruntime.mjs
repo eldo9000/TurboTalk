@@ -55,10 +55,14 @@ try {
 
 mkdirSync(binariesDir, { recursive: true });
 
-// Download NuGet package via Python's built-in urllib (no deps needed).
+// Download NuGet package. Try python3 first, then python (Windows naming).
 const nupkgPath = join(tmpdir(), `onnxruntime-${ORT_VERSION}.nupkg`);
-execFileSync('python3', [
-  '-c', `
+const pythonCmds = process.platform === 'win32' ? ['python', 'python3'] : ['python3'];
+let downloaded = false;
+for (const py of pythonCmds) {
+  try {
+    execFileSync(py, [
+      '-c', `
 import urllib.request, os, sys
 url = ${JSON.stringify(NUGET_URL)}
 dest = ${JSON.stringify(nupkgPath)}
@@ -70,7 +74,26 @@ except Exception as e:
 sz = os.path.getsize(dest)
 print(f'downloaded {sz} bytes')
 `,
-], { stdio: 'inherit' });
+    ], { stdio: 'inherit' });
+    downloaded = true;
+    break;
+  } catch {
+    console.log(`  ${py} not available, trying next...`);
+  }
+}
+
+if (!downloaded) {
+  // Fallback: try curl.exe (built into Windows 10/11)
+  console.log('[fetch-onnxruntime] trying curl.exe fallback...');
+  try {
+    execFileSync('curl.exe', ['-fsSL', '-o', nupkgPath, NUGET_URL], { stdio: 'inherit' });
+    downloaded = true;
+  } catch {
+    console.error('[fetch-onnxruntime] All download methods failed.');
+    console.error('  Install Python 3 or ensure curl.exe is on PATH.');
+    process.exit(1);
+  }
+}
 
 try {
   statSync(nupkgPath);
@@ -94,13 +117,34 @@ console.log(`[fetch-onnxruntime] NuGet package SHA-256 verified (${actualHash})`
 const extractDir = join(tmpdir(), `onnxruntime-${ORT_VERSION}-dll`);
 mkdirSync(extractDir, { recursive: true });
 console.log('[fetch-onnxruntime] extracting via 7z …');
-execFileSync('7z', [
-  'e',                     // extract with directory flattening
-  nupkgPath,
-  `-o${extractDir}`,
-  NUGET_DLL_PATH,
-  '-y',
-], { stdio: 'inherit' });
+
+// Try 7z first, then 7za, then PowerShell Expand-Archive (no deps).
+let extracted = false;
+for (const tool of ['7z', '7za']) {
+  try {
+    execFileSync(tool, [
+      'e',
+      nupkgPath,
+      `-o${extractDir}`,
+      NUGET_DLL_PATH,
+      '-y',
+    ], { stdio: 'inherit' });
+    extracted = true;
+    break;
+  } catch {
+    console.log(`  ${tool} not available, trying next...`);
+  }
+}
+
+if (!extracted) {
+  // PowerShell fallback — Expand-Archive is built into Windows
+  console.log('[fetch-onnxruntime] trying PowerShell Expand-Archive...');
+  execFileSync('powershell', [
+    '-NoProfile',
+    '-Command',
+    `Expand-Archive -Path "${nupkgPath}" -DestinationPath "${extractDir}" -Force`,
+  ], { stdio: 'inherit' });
+}
 
 // Find the DLL in the flat output
 const extractedDll = join(extractDir, 'onnxruntime.dll');
