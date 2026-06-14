@@ -3,7 +3,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
   import { currentMonitor, getCurrentWindow } from '@tauri-apps/api/window';
-  import { LogicalSize } from '@tauri-apps/api/dpi';
+  import { LogicalSize, PhysicalPosition } from '@tauri-apps/api/dpi';
   import { open as openFilePicker } from '@tauri-apps/plugin-dialog';
   import { initTheme } from '@libre/ui/src/theme.js';
   import Select from '@libre/ui/src/components/Select.svelte';
@@ -178,7 +178,6 @@
   let resetClosing = $state(false);
   let resetBusy    = $state(false);
   let resetError   = $state('');
-  let shiftHeld    = $state(false);
   let warmupResetBusy = $state(false);
   let warmupResetMsg  = $state('');
 
@@ -523,6 +522,12 @@ Reply with only the single word, lowercase, no punctuation.
   const WINDOW_W_MIN = 420;
   const WINDOW_H_MIN = 420;
   const WINDOW_HEIGHT_KEY = 'tt-window-height';
+  // Chrome heights (CSS px, unzoomed): titlebar h-10 = 40, bottom bar h-7 = 28.
+  // The settings scroll container adds 2px bottom padding (pb-0.5); the last row
+  // keeps its own 4px, for a 6px gap below the last button.
+  const TITLEBAR_H = 40;
+  const BOTTOMBAR_H = 28;
+  const CONTENT_BOTTOM_GAP = 2;
   let suppressWindowResizeTrack = false;
 
   function savedLogicalHeight() {
@@ -537,26 +542,106 @@ Reply with only the single word, lowercase, no punctuation.
     );
   }
 
+  // Single authority for the main window's size. Min scales with the UI zoom;
+  // width grows to the zoom-scaled comfortable width and is capped at 2× min.
+  // Height is clipped to fit the Settings content exactly (no dead space below
+  // the last button) when that tab is open; otherwise it's capped at 2× min.
+  // All natural-content math is in CSS px and multiplied by zoom to logical px
+  // (verified: windowLogical = contentCss × zoom).
+  async function applyWindowSizing() {
+    const zoomPct = ZOOM_LEVELS[zoomIdx];
+    const zoom = zoomPct / 100;
+    const win = getCurrentWindow();
+    const scale = await win.scaleFactor().catch(() => 1);
+    const monitor = await currentMonitor().catch(() => null);
+    // Large fallback so a failed monitor read never caps sizing.
+    const workW = monitor?.workArea?.size?.width  ? monitor.workArea.size.width  / scale : 100000;
+    const workH = monitor?.workArea?.size?.height ? monitor.workArea.size.height / scale : 100000;
+
+    const minW = Math.round(WINDOW_W_MIN * zoom);
+    const minH = Math.round(WINDOW_H_MIN * zoom);
+    const defW = Math.round(WINDOW_W_DEFAULT * zoom);
+    const maxW = Math.max(minW, Math.min(2 * minW, workW));
+
+    // Height max: fit the Settings content when it's shown; else cap at 2× min.
+    let maxH = Math.max(minH, Math.min(2 * minH, workH));
+    let fitH = null;
+    if (activeTab === 'settings' && settingsContentEl) {
+      await tick();
+      const contentCss = Array.from(settingsContentEl.children).reduce((a, c) => a + c.offsetHeight, 0);
+      if (contentCss) {
+        const totalCss = TITLEBAR_H + contentCss + CONTENT_BOTTOM_GAP + BOTTOMBAR_H;
+        fitH = Math.max(minH, Math.min(Math.round(totalCss * zoom), Math.round(workH)));
+        maxH = fitH;
+      }
+    }
+
+    await win.setMinSize(new LogicalSize(minW, minH));
+    await win.setMaxSize(new LogicalSize(maxW, maxH));
+
+    const size = await win.innerSize().catch(() => null);
+    if (!size) return;
+    const curW = size.width / scale;
+    const curH = size.height / scale;
+    const newW = curW < defW - 1 ? defW : Math.min(curW, maxW);
+    const newH = fitH != null ? fitH : Math.min(curH, maxH);
+    if (Math.abs(newW - curW) > 1 || Math.abs(newH - curH) > 1) {
+      suppressWindowResizeTrack = true;
+      try {
+        await win.setSize(new LogicalSize(newW, newH));
+      } finally {
+        suppressWindowResizeTrack = false;
+      }
+      // Resizing may push the window's right/bottom edge off a small screen.
+      await nudgeWindowOnScreen();
+    }
+  }
+
+  // Standard "don't lose the window" safety: keep the window inside the current
+  // monitor's work area. Only called right after we grow the window on a zoom
+  // change — never on the user's own drags — so it's never disruptive. All math
+  // in physical pixels (outer bounds + work area are both physical).
+  async function nudgeWindowOnScreen() {
+    const win = getCurrentWindow();
+    const [pos, size, monitor] = await Promise.all([
+      win.outerPosition().catch(() => null),
+      win.outerSize().catch(() => null),
+      currentMonitor().catch(() => null),
+    ]);
+    const wa = monitor?.workArea;
+    if (!pos || !size || !wa) return;
+    const workRight  = wa.position.x + wa.size.width;
+    const workBottom = wa.position.y + wa.size.height;
+    // Furthest top-left that still fits; if the window is larger than the work
+    // area, pin to the top-left corner so the title bar stays reachable.
+    const maxX = Math.max(wa.position.x, workRight  - size.width);
+    const maxY = Math.max(wa.position.y, workBottom - size.height);
+    const x = Math.min(Math.max(pos.x, wa.position.x), maxX);
+    const y = Math.min(Math.max(pos.y, wa.position.y), maxY);
+    if (x !== pos.x || y !== pos.y) {
+      await win.setPosition(new PhysicalPosition(x, y)).catch(() => {});
+    }
+  }
+
   async function applyWindowSizeLimits() {
     const win = getCurrentWindow();
-    const monitor = await currentMonitor().catch(() => null);
-    const scale = monitor?.scaleFactor ?? await win.scaleFactor().catch(() => 1);
-    const workW = monitor?.workArea?.size?.width ? monitor.workArea.size.width / scale : 1100;
-    const workH = monitor?.workArea?.size?.height ? monitor.workArea.size.height / scale : 8192;
     await win.setResizable(true);
     await win.setMaximizable(false);
-    await win.setMinSize(new LogicalSize(WINDOW_W_MIN, WINDOW_H_MIN));
-    await win.setMaxSize(new LogicalSize(Math.max(WINDOW_W_MIN, workW), Math.max(WINDOW_H_MIN, workH)));
+    await applyWindowSizing();
   }
 
   async function applyWindowSizeFromPrefs() {
     const win = getCurrentWindow();
     const monitor = await currentMonitor().catch(() => null);
     const scale = monitor?.scaleFactor ?? await win.scaleFactor().catch(() => 1);
-    const maxW = monitor?.workArea?.size?.width ? monitor.workArea.size.width / scale : WINDOW_W_DEFAULT;
+    const zoomPct = ZOOM_LEVELS[zoomIdx];
+    const scaledMinW = Math.round(WINDOW_W_MIN * zoomPct / 100);
+    const scaledMinH = Math.round(WINDOW_H_MIN * zoomPct / 100);
+    const scaledDefaultW = Math.round(WINDOW_W_DEFAULT * zoomPct / 100);
+    const maxW = monitor?.workArea?.size?.width ? monitor.workArea.size.width / scale : scaledDefaultW;
     const maxH = monitor?.workArea?.size?.height ? monitor.workArea.size.height / scale : savedLogicalHeight();
-    const w = Math.min(WINDOW_W_DEFAULT, Math.max(WINDOW_W_MIN, maxW));
-    const h = Math.min(savedLogicalHeight(), Math.max(WINDOW_H_MIN, maxH));
+    const w = Math.min(scaledDefaultW, Math.max(scaledMinW, maxW));
+    const h = Math.min(savedLogicalHeight(), Math.max(scaledMinH, maxH));
     suppressWindowResizeTrack = true;
     try {
       await win.setSize(new LogicalSize(w, h));
@@ -570,25 +655,14 @@ Reply with only the single word, lowercase, no punctuation.
     await applyWindowSizeFromPrefs();
   }
 
-  async function enforceWindowMinHeight() {
+  // Persist the user's chosen height on resize — no clamping or snapping. The
+  // OS already prevents resizing below the min size set in applyWindowSizing.
+  async function trackWindowHeight() {
     if (showOnboarding || suppressWindowResizeTrack) return;
     const win = getCurrentWindow();
-    const size = await win.innerSize();
-    const factor = await win.scaleFactor();
-    const logicalW = size.width / factor;
-    const logicalH = size.height / factor;
-
-    if (logicalH < WINDOW_H_MIN - 1) {
-      suppressWindowResizeTrack = true;
-      try {
-        await win.setSize(new LogicalSize(Math.max(WINDOW_W_MIN, logicalW), WINDOW_H_MIN));
-      } finally {
-        suppressWindowResizeTrack = false;
-      }
-      persistLogicalHeight(WINDOW_H_MIN);
-    } else {
-      persistLogicalHeight(logicalH);
-    }
+    const size = await win.innerSize().catch(() => null);
+    const factor = await win.scaleFactor().catch(() => 1);
+    if (size) persistLogicalHeight(size.height / factor);
   }
 
   $effect(() => {
@@ -597,14 +671,25 @@ Reply with only the single word, lowercase, no punctuation.
   });
 
   $effect(() => {
-    document.documentElement.style.zoom = `${ZOOM_LEVELS[zoomIdx]}%`;
+    const zoomPct = ZOOM_LEVELS[zoomIdx];
+    document.documentElement.style.zoom = `${zoomPct}%`;
     localStorage.setItem('tt-zoom', String(zoomIdx));
+    void applyWindowSizing();
+  });
+
+  // Re-fit the window height whenever the active tab changes (the Settings tab
+  // clips to its content; other tabs fall back to the 2× cap).
+  $effect(() => {
+    activeTab; // track
+    if (showOnboarding) return;
+    void applyWindowSizing();
   });
 
   function zoomIn()  { if (zoomIdx < ZOOM_LEVELS.length - 1) zoomIdx++; }
   function zoomOut() { if (zoomIdx > 0) zoomIdx--; }
 
   let outerEl = $state(null);
+  let settingsContentEl = $state(null);
 
   // ── History ───────────────────────────────────────────────────────────────
 
@@ -1216,24 +1301,14 @@ Reply with only the single word, lowercase, no punctuation.
         logUi('app-ready', platform);
         if (!showOnboarding) {
           await applyWindowSizeLimits();
-          await enforceWindowMinHeight();
           commands.prewarmOllama(); // fire-and-forget — loads LLM before first dictation
         }
       });
       syncAppStateFromBackend();
 
       getCurrentWindow().onResized(() => {
-        enforceWindowMinHeight();
+        trackWindowHeight();
       }).then(addCleanup);
-
-      const onKeydown = (e) => { if (e.key === 'Shift') shiftHeld = true; };
-      const onKeyup   = (e) => { if (e.key === 'Shift') shiftHeld = false; };
-      window.addEventListener('keydown', onKeydown);
-      window.addEventListener('keyup',   onKeyup);
-      addCleanup(() => {
-        window.removeEventListener('keydown', onKeydown);
-        window.removeEventListener('keyup',   onKeyup);
-      });
     };
 
     init();
@@ -1881,10 +1956,10 @@ Reply with only the single word, lowercase, no punctuation.
 
   <!-- Settings tab -->
   {#if activeTab === 'settings'}
-    <div class="flex-1 min-h-0 overflow-y-auto pb-4 bg-[var(--surface)] text-[12px]">
+    <div class="flex-1 min-h-0 overflow-y-auto pb-0.5 bg-[var(--surface)] text-[12px]">
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <!-- svelte-ignore a11y_mouse_events_have_key_events -->
-      <div class="tt-set"
+      <div class="tt-set" bind:this={settingsContentEl}
         onmouseover={_onIndicatorOver}
         onmouseleave={_onIndicatorLeave}>
 
@@ -2086,7 +2161,7 @@ Reply with only the single word, lowercase, no punctuation.
         </div>
 
         <!-- System -->
-        <div class="tt-section">
+        <div class="tt-section tt-section-last">
           <div class="subsection-hd"><span class="subsection-hd-title">System</span></div>
           <div class="tt-row tt-row-field justify-center" data-tip="Start TurboTalk automatically when you log in to macOS">
             <button
@@ -2096,52 +2171,15 @@ Reply with only the single word, lowercase, no punctuation.
           <div class="tt-row tt-row-field" data-tip="Reset settings and history, or check for a newer version">
             <div class="flex gap-2 w-full">
               <button
-                onclick={() => shiftHeld ? (commands.resetOnboarding(), recheckReadiness()) : (resetOpen = true, resetClosing = false, resetError = '')}
-                class="tt-btn flex-1 justify-center"
-                class:tt-btn-danger-hover={!shiftHeld}
-                class:tt-btn-success={shiftHeld}
+                onclick={() => { resetOpen = true; resetClosing = false; resetError = ''; }}
+                class="tt-btn tt-btn-danger-hover flex-1 justify-center"
               >
-                {shiftHeld ? 'Re-run Welcome Screen' : 'Reset TurboTalk'}
+                Reset TurboTalk
               </button>
               <div class="flex-1">
-                <UpdateManager shiftHeld={shiftHeld} onClearWarmup={clearWarmupCache} warmupBusy={warmupResetBusy} />
+                <UpdateManager />
               </div>
             </div>
-            {#if warmupResetMsg}
-              <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug mt-1">{warmupResetMsg}</p>
-            {/if}
-          </div>
-        </div>
-
-        <!-- Developer -->
-        <div class="tt-section tt-section-last">
-          <div class="subsection-hd subsection-hd-dev"><span class="subsection-hd-title">Developer</span></div>
-          <div class="tt-row tt-row-field" data-tip="Developer shortcuts for re-running setup and clearing the warmed transcription backend">
-            <div class="flex gap-2 w-full">
-              <button
-                onclick={() => { commands.resetOnboarding(); recheckReadiness(); }}
-                class="tt-btn tt-btn-success flex-1 justify-center"
-              >Re-run Welcome Screen</button>
-              <button
-                onclick={clearWarmupCache}
-                disabled={warmupResetBusy}
-                class="tt-btn tt-btn-success flex-1 justify-center"
-              >{warmupResetBusy ? 'Clearing…' : 'Clear warmup cache'}</button>
-            </div>
-          </div>
-          <div class="tt-row tt-row-col" data-tip="Create a beta bug report with diagnostics, settings, recent app events, and logs">
-            <label for="bug-note" class="tt-lbl tt-lbl-fixed">Report a bug</label>
-            <textarea
-              id="bug-note"
-              bind:value={bugNote}
-              rows="2"
-              placeholder="Optional — what happened? The report gathers the technical details."
-              class="tt-input"
-            ></textarea>
-            <button onclick={createBugReport} class="tt-btn w-full justify-center">Create Bug Report</button>
-            {#if diagnosticMsg}
-              <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug">{diagnosticMsg}</p>
-            {/if}
           </div>
         </div>
 
@@ -2284,6 +2322,20 @@ Reply with only the single word, lowercase, no punctuation.
             Reset Everything
           </button>
           <button
+            onclick={() => { commands.resetOnboarding(); recheckReadiness(); closeReset(); }}
+            disabled={resetBusy}
+            class="tt-btn w-full justify-center"
+          >
+            Re-run Welcome Screen
+          </button>
+          <button
+            onclick={clearWarmupCache}
+            disabled={resetBusy || warmupResetBusy}
+            class="tt-btn w-full justify-center"
+          >
+            {warmupResetBusy ? 'Clearing…' : 'Clear warmup cache'}
+          </button>
+          <button
             onclick={closeReset}
             disabled={resetBusy}
             class="tt-btn w-full justify-center opacity-70"
@@ -2293,8 +2345,25 @@ Reply with only the single word, lowercase, no punctuation.
           <p class="text-[10px] text-[var(--text-muted)] leading-snug text-center">
             macOS privacy permissions stay in System Settings.
           </p>
+          {#if warmupResetMsg}
+            <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug text-center">{warmupResetMsg}</p>
+          {/if}
           {#if resetError}
             <p class="text-[10px] text-red-400 leading-snug text-center">{resetError}</p>
+          {/if}
+
+          <div class="reset-card-sep"></div>
+          <label for="bug-note" class="tt-lbl tt-lbl-fixed">Report a bug</label>
+          <textarea
+            id="bug-note"
+            bind:value={bugNote}
+            rows="2"
+            placeholder="Optional — what happened? The report gathers the technical details."
+            class="tt-input"
+          ></textarea>
+          <button onclick={createBugReport} class="tt-btn w-full justify-center">Create Bug Report</button>
+          {#if diagnosticMsg}
+            <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug text-center">{diagnosticMsg}</p>
           {/if}
         </div>
       </div>
@@ -2376,6 +2445,14 @@ Reply with only the single word, lowercase, no punctuation.
     box-shadow: 0 24px 48px rgba(0,0,0,0.6), 0 4px 12px rgba(0,0,0,0.4);
   }
   .reset-card { width: 280px; }
+  .reset-card-sep {
+    height: 1px;
+    margin: 6px 0 2px;
+    background: var(--border, color-mix(in srgb, var(--text-primary) 12%, transparent));
+  }
+  /* Bug-note: keep the fixed little box, let text overflow/scroll, never show a scrollbar. */
+  #bug-note { overflow-y: auto; scrollbar-width: none; }
+  #bug-note::-webkit-scrollbar { width: 0; height: 0; display: none; }
   .about-card-in  { animation: about-card-in  0.4s cubic-bezier(0.16,1,0.3,1) forwards; }
   .about-card-out { animation: about-card-out 0.35s ease-in              forwards; }
 
@@ -2401,7 +2478,6 @@ Reply with only the single word, lowercase, no punctuation.
     padding-bottom: 10px;
   }
   .tt-section-last { border-bottom: none; padding-bottom: 0; }
-  .subsection-hd-dev { background: color-mix(in srgb, var(--surface-raised) 30%, #7a0000); }
   .tt-section-last .tt-row:last-child { padding-bottom: 0; }
   .tt-section-last .tt-row-field:last-child { padding-bottom: 4px; }
 

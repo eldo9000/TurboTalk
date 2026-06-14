@@ -510,8 +510,12 @@ fn show_main_window(app: &tauri::AppHandle, first_manual_show: &std::sync::atomi
     }
 }
 
+/// Off-screen rescue for the main window. Nudges the window back onto a visible
+/// monitor's work area if it has drifted off (e.g. a monitor was disconnected).
+/// Position-only — never resizes. Called when the window is shown, not on every
+/// move/resize event.
 fn ensure_main_webview_window_visible(win: &tauri::WebviewWindow) {
-    use tauri::{PhysicalPosition, PhysicalSize};
+    use tauri::PhysicalPosition;
 
     if win.label() != "main" {
         return;
@@ -532,19 +536,15 @@ fn ensure_main_webview_window_visible(win: &tauri::WebviewWindow) {
 
     let current = win.current_monitor().ok().flatten();
     let primary = win.primary_monitor().ok().flatten();
-    let Some((target_w, target_h, x, y, work_x, work_y, work_w, work_h)) =
+    let Some((x, y, work_x, work_y, work_w, work_h)) =
         main_window_visible_geometry(pos, size, &monitors, current, primary)
     else {
         return;
     };
 
-    if target_w != size.width || target_h != size.height {
-        let _ = win.set_size(PhysicalSize::new(target_w, target_h));
-    }
-
     if x != pos.x || y != pos.y {
         tracing::info!(
-            "[main-window] clamping position from ({},{}) to ({},{}) work_area=({},{} {}x{})",
+            "[main-window] nudging on-screen from ({},{}) to ({},{}) work_area=({},{} {}x{})",
             pos.x,
             pos.y,
             x,
@@ -558,61 +558,18 @@ fn ensure_main_webview_window_visible(win: &tauri::WebviewWindow) {
     }
 }
 
-fn ensure_main_native_window_visible(win: &tauri::Window) {
-    use tauri::{PhysicalPosition, PhysicalSize};
-
-    if win.label() != "main" {
-        return;
-    }
-
-    let Ok(pos) = win.outer_position() else {
-        return;
-    };
-    let Ok(size) = win.outer_size() else {
-        return;
-    };
-    let Ok(monitors) = win.available_monitors() else {
-        return;
-    };
-    if monitors.is_empty() {
-        return;
-    }
-
-    let current = win.current_monitor().ok().flatten();
-    let primary = win.primary_monitor().ok().flatten();
-    let Some((target_w, target_h, x, y, work_x, work_y, work_w, work_h)) =
-        main_window_visible_geometry(pos, size, &monitors, current, primary)
-    else {
-        return;
-    };
-
-    if target_w != size.width || target_h != size.height {
-        let _ = win.set_size(PhysicalSize::new(target_w, target_h));
-    }
-
-    if x != pos.x || y != pos.y {
-        tracing::info!(
-            "[main-window] clamping position from ({},{}) to ({},{}) work_area=({},{} {}x{})",
-            pos.x,
-            pos.y,
-            x,
-            y,
-            work_x,
-            work_y,
-            work_w,
-            work_h
-        );
-        let _ = win.set_position(PhysicalPosition::new(x, y));
-    }
-}
-
+/// Position-only off-screen rescue: given the window's current position and
+/// size, return where its top-left should go so it stays inside a monitor's
+/// work area. Never changes the window size — sizing is owned entirely by the
+/// frontend (which knows the UI zoom level). Returns (x, y, work_x, work_y,
+/// work_w, work_h).
 fn main_window_visible_geometry(
     pos: tauri::PhysicalPosition<i32>,
     size: tauri::PhysicalSize<u32>,
     monitors: &[tauri::Monitor],
     current: Option<tauri::Monitor>,
     primary: Option<tauri::Monitor>,
-) -> Option<(u32, u32, i32, i32, i32, i32, u32, u32)> {
+) -> Option<(i32, i32, i32, i32, u32, u32)> {
     let monitor = monitors
         .iter()
         .max_by_key(|m| {
@@ -633,18 +590,11 @@ fn main_window_visible_geometry(
         .or(primary)?;
 
     let work = monitor.work_area();
-    let scale = monitor.scale_factor();
-    let min_w = (MAIN_WINDOW_MIN_W * scale).round().max(1.0) as u32;
-    let min_h = (MAIN_WINDOW_MIN_H * scale).round().max(1.0) as u32;
-    let max_w = work.size.width.max(min_w);
-    let max_h = work.size.height.max(min_h);
-    let target_w = size.width.clamp(min_w, max_w);
-    let target_h = size.height.clamp(min_h, max_h);
     let (x, y) = clamp_window_position_to_work_area(
         pos.x,
         pos.y,
-        target_w as i32,
-        target_h as i32,
+        size.width as i32,
+        size.height as i32,
         work.position.x,
         work.position.y,
         work.size.width as i32,
@@ -652,8 +602,6 @@ fn main_window_visible_geometry(
     );
 
     Some((
-        target_w,
-        target_h,
         x,
         y,
         work.position.x,
@@ -2824,18 +2772,14 @@ pub fn run() {
         })
         // Close button hides to tray instead of quitting
         .on_window_event(|window, event| {
-            match event {
-                WindowEvent::CloseRequested { api, .. } => {
-                    let _ = window.hide();
-                    api.prevent_close();
-                }
-                WindowEvent::Moved(_)
-                | WindowEvent::Resized(_)
-                | WindowEvent::ScaleFactorChanged { .. }
-                | WindowEvent::Focused(true) => {
-                    ensure_main_native_window_visible(window);
-                }
-                _ => {}
+            // Close button hides to tray instead of quitting. We deliberately do
+            // NOT clamp size/position on Moved/Resized/Focused — the frontend owns
+            // sizing (it knows the UI zoom), and the OS enforces the min size. The
+            // only off-screen rescue happens when the window is shown (see
+            // show_main_window → ensure_main_webview_window_visible).
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
             }
         })
         .build(tauri::generate_context!())

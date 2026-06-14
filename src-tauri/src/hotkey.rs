@@ -661,11 +661,13 @@ pub(crate) mod common {
             // to Transcribing and stays that way through Cleaning + Pasting.
             // Idle is restored exactly once at the end of the lifecycle.
             //
-            // Stop the recorder BEFORE reading statics. In toggle mode, two
-            // rapid presses can spawn two ptt_up workers; the winner is the one
-            // whose rec.stop() succeeds. By calling stop() first and only
-            // taking statics on the Ok arms, we guarantee the winner reads
-            // the statics after initiating the stop transition.
+            // Capture the cancel epoch BEFORE rec.stop(). If we capture it
+            // after stop() returns (as was the case before TASK-23 fix), the
+            // Escape handler's trigger_cancel may increment CANCEL_EPOCH
+            // while we're inside stop() or the three Mutex::take() calls that
+            // follow — cancel_epoch_at_stop then holds the post-cancel value
+            // and all subsequent job_cancelled_since checks never fire.
+            let cancel_epoch_at_stop = cancel_epoch();
             match rec.stop() {
                 Ok(StopOutcome::Wav {
                     path,
@@ -686,7 +688,6 @@ pub(crate) mod common {
                     // Wav arm to assemble concurrent segment results with the tail.
                     // Dropped automatically (joining its worker) in Discard / Err arms.
                     let seg_transcriber_opt = CURRENT_SEG_TRANSCRIBER.lock().take();
-                    let cancel_epoch_at_stop = cancel_epoch();
 
                     // We are now in `FinalizingAudio` per recorder contract.
                     let _ = tray.set_icon(Some(tray::make_icon(TrayState::Transcribing)));
@@ -1148,7 +1149,6 @@ pub(crate) mod common {
                     let job_id_opt = CURRENT_JOB_ID.lock().take();
                     let focus_at_start: Option<String> = FOCUS_AT_START.lock().take().flatten();
                     let seg_transcriber_opt = CURRENT_SEG_TRANSCRIBER.lock().take();
-                    let cancel_epoch_at_stop = cancel_epoch();
 
                     // Tail-empty recovery: when a silence-boundary segment cut
                     // takes all the audio just before stop(), the tail has 0
