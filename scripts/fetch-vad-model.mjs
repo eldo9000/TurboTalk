@@ -33,6 +33,29 @@ async function sha256File(path) {
   });
 }
 
+async function fetchWithRetry(url, retries = 3) {
+  const backoff = [2000, 8000, 30000];
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+      if (res.ok) return res;
+      if (res.status === 429 && attempt < retries) {
+        console.warn(`[fetch-vad-model] HTTP 429 — retrying in ${backoff[attempt] / 1000}s (attempt ${attempt + 1})`);
+        await new Promise(r => setTimeout(r, backoff[attempt]));
+        continue;
+      }
+      throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      if (attempt < retries && (err.cause?.code === 'UND_ERR_CONNECT_TIMEOUT' || err.message?.includes('fetch failed'))) {
+        console.warn(`[fetch-vad-model] connect timeout — retrying in ${backoff[attempt] / 1000}s (attempt ${attempt + 1})`);
+        await new Promise(r => setTimeout(r, backoff[attempt]));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 async function main() {
   await mkdir(dirname(dest), { recursive: true });
 
@@ -51,7 +74,7 @@ async function main() {
   }
 
   console.log(`[fetch-vad-model] downloading ${URL}`);
-  const res = await fetch(URL);
+  const res = await fetchWithRetry(URL);
   if (!res.ok) {
     console.error(`[fetch-vad-model] HTTP ${res.status} fetching ${URL}`);
     process.exit(1);
