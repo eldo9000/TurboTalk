@@ -1,7 +1,7 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-06-13  
-**Current state:** Two fixes landed: Parakeet `vocab.txt` SHA-256 hash corrected (was stale, causing download failure during onboarding), and PTT hotkey now silently suppressed while the welcome/onboarding screen is visible.
+**Current state:** Three fixes landed: Parakeet `vocab.txt` SHA-256 corrected / hotkey suppressed during onboarding / CI cache poisoning resolved. `fetch-vad-model.mjs` now retries transient HuggingFace failures. macOS CI cache key renamed (dropped stale `target/`); Windows cargo caches purged.
 
 ## Open backlog
 
@@ -9,6 +9,8 @@
 |------|--------|
 | **Parakeet vocab.txt SHA-256 stale** | **Fixed** — hashes updated for tdt-0.6b-v2 and tdt-0.6b-v3; verified against live HuggingFace content. |
 | **Hotkey fires during onboarding** | **Fixed** — `ONBOARDING_ACTIVE` atomic gate in `ptt_down`; cleared on ready startup or `clear_force_onboarding`. |
+| **CI Windows build red (stale cache)** | **Fixed** — cached `target/` poisoned by old `TurboTalk-App` paths; removed from cache keys, old caches deleted. |
+| **CI HuggingFace transient failures** | **Mitigated** — `fetch-vad-model.mjs` retries 3× with backoff (2s/8s/30s) on 429s and connect timeouts.
 | **TASK-61 — Windows platform gaps** | **Complete** — all 10 items already implemented, verified in source. |
 | **Manual device-lost repro** | **TODO** — verify `lib.rs:2286` fix: hold key → unplug/switch mic mid-recording → release → next press must start a normal recording (no instant "recording-cancelled"). Fix is verified-by-construction only; runtime not yet observed. |
 | Release CI run | **Complete** — v0.9.8 builds, codesign, updater artifacts all green ([#27322438132](https://github.com/eldo9000/TurboTalk-App/actions/runs/27322438132)) |
