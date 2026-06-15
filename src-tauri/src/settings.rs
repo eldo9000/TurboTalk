@@ -64,6 +64,9 @@ pub struct Config {
     /// tray click). Defaults off to match the rest of the audio cues.
     #[serde(default)]
     pub sound_on_cancel: bool,
+    /// Play an error beep when dictation is filtered or pasted with issues.
+    #[serde(default = "default_sound_on_error")]
+    pub sound_on_error: bool,
     /// Volume for sound cues, 0.0–1.0.
     #[serde(default = "default_sound_volume")]
     pub sound_volume: f32,
@@ -79,6 +82,10 @@ pub struct Config {
 
 fn default_sound_volume() -> f32 {
     0.5
+}
+
+fn default_sound_on_error() -> bool {
+    true
 }
 
 fn default_theme() -> String {
@@ -340,6 +347,7 @@ impl Default for Config {
             sound_on_start: true,
             sound_on_finish: false,
             sound_on_cancel: true,
+            sound_on_error: true,
             sound_volume: 0.5,
             backend: BackendFamily::default(),
             backend_variant: String::new(),
@@ -442,6 +450,10 @@ pub fn write_private_file(path: &std::path::Path, contents: &[u8]) -> std::io::R
 pub struct HistoryEntry {
     pub text: String,
     pub ts: u64,
+    /// True when the transcript triggered a garbage/hallucination detector
+    /// but was still pasted. Rendered with a yellow outline in the list.
+    #[serde(default)]
+    pub flaky: Option<bool>,
 }
 
 /// Result of loading history. `dropped` counts entries that failed per-entry
@@ -932,6 +944,7 @@ mod tests {
             .map(|ts| HistoryEntry {
                 text: format!("entry {}", ts),
                 ts,
+                flaky: None,
             })
             .collect();
 
@@ -962,6 +975,7 @@ mod tests {
             .map(|ts| HistoryEntry {
                 text: format!("entry {}", ts),
                 ts,
+                flaky: None,
             })
             .collect();
 
@@ -1204,6 +1218,7 @@ mod tests {
         let entries = vec![HistoryEntry {
             text: "test".into(),
             ts: 1,
+            flaky: None,
         }];
         save_history_at(&path, &entries).expect("save_history_at");
         assert!(path.exists());

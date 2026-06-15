@@ -79,6 +79,24 @@
         "maximizable": false,
         "skipTaskbar": true,
         "center": true
+      },
+      {
+        "label": "status",
+        "title": "",
+        "width": 280,
+        "height": 80,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "visible": false,
+        "focus": false,
+        "resizable": false,
+        "closable": false,
+        "minimizable": false,
+        "maximizable": false,
+        "skipTaskbar": true,
+        "center": true
       }
     ],
     "security": {

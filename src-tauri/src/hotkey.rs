@@ -18,7 +18,7 @@ pub(crate) mod common {
     use crate::tray::{self, TrayState};
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
     use std::sync::Arc;
-    use tauri::{tray::TrayIcon, AppHandle, Emitter};
+    use tauri::{tray::TrayIcon, AppHandle, Emitter, Manager};
 
     /// Set by `ptt_up` when `rec.stop()` fails because the recorder wasn't
     /// Recording yet (key-up thread won the scheduler over key-down thread in
@@ -184,6 +184,18 @@ pub(crate) mod common {
         }
     }
 
+    /// Show the main TurboTalk window and switch to the History tab.
+    /// Called automatically when a transcription rejection fires so the
+    /// user can immediately inspect the problematic text.
+    pub(super) fn open_main_history(app: &AppHandle) {
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.show();
+            let _ = win.set_focus();
+        }
+        let _ = app.emit("open-history", ());
+        tracing::info!("[hotkey] opened main window to History tab");
+    }
+
     /// Cell shared between `ptt_down` and `ptt_up` so the upstroke worker can
     /// recover the `job_id` allocated by the downstroke worker. Holds `None`
     /// when no recording is in flight. Guarded by `parking_lot::Mutex`; the
@@ -311,10 +323,11 @@ pub(crate) mod common {
     /// toggles and a distinct macOS system sound, so the user can keep them
     /// individually on/off and tell them apart by ear.
     #[derive(Debug, Clone, Copy)]
-    pub(super) enum ChimeEvent {
+    pub(crate) enum ChimeEvent {
         Start,
         Finish,
         Cancel,
+        Error,
     }
 
     /// Soft event chime. Played from the backend rather than the frontend
@@ -323,18 +336,20 @@ pub(crate) mod common {
     /// gesture, so a frontend Web Audio chime would be silently dropped.
     /// Fires `afplay` on macOS with a built-in system sound; on Windows
     /// uses PowerShell `SystemSounds`; on Linux silently no-ops.
-    pub(super) fn play_chime(event: ChimeEvent) {
+    pub(crate) fn play_chime(event: ChimeEvent) {
         let cfg = crate::settings::load();
         let (enabled, sound) = match event {
             // Sound choices are deliberate: short and "soft" by design, and
-            // distinct enough that the four events are recognizable by ear.
+            // distinct enough that the five events are recognizable by ear.
             //   Pop    — quick percussive "go" for recording start
             //   Morse  — two-blip "thinking" pattern while transcribing
             //   Bottle — gentle glass clink at paste time
             //   Tink   — softest of the system sounds, paired with cancel
+            //   Basso  — low, obvious beep for errors / filtered dictation
             ChimeEvent::Start => (cfg.sound_on_start, "/System/Library/Sounds/Pop.aiff"),
             ChimeEvent::Finish => (cfg.sound_on_finish, "/System/Library/Sounds/Bottle.aiff"),
             ChimeEvent::Cancel => (cfg.sound_on_cancel, "/System/Library/Sounds/Tink.aiff"),
+            ChimeEvent::Error => (cfg.sound_on_error, "/System/Library/Sounds/Basso.aiff"),
         };
         if !enabled {
             return;
@@ -363,6 +378,7 @@ pub(crate) mod common {
                 ChimeEvent::Start => "[System.Media.SystemSounds]::Hand.Play()",
                 ChimeEvent::Finish => "[System.Media.SystemSounds]::Asterisk.Play()",
                 ChimeEvent::Cancel => "[System.Media.SystemSounds]::Exclamation.Play()",
+                ChimeEvent::Error => "[System.Media.SystemSounds]::Hand.Play()",
             };
             let mut cmd = std::process::Command::new("powershell");
             cmd.args(["-NoProfile", "-NonInteractive", "-Command", ps_cmd]);
@@ -874,9 +890,11 @@ pub(crate) mod common {
                                     serde_json::json!({
                                         "text": raw_text,
                                         "reason": format!("partial_rejection — used clean {} chars", salvaged_text.chars().count()),
+                                        "pasted": true,
                                     }),
                                 );
-
+                                play_chime(ChimeEvent::Error);
+                                open_main_history(&app);
                                 // Fall through to the normal cleanup path using
                                 // `salvaged_text` instead of `raw_text`.
                                 let final_text = crate::cleanup::process(&salvaged_text, &app);
@@ -1006,10 +1024,12 @@ pub(crate) mod common {
                             }
 
                             // If the transcript tripped a hallucination filter with
-                            // no salvageable clean parts, block the paste entirely.
+                            // no salvageable clean parts, paste the text anyway but
+                            // tell the user — the garbage text is still more useful
+                            // than appearing to have done nothing.
                             if let Some(reason) = rejection {
                                 tracing::warn!(
-                                    "[cleanup job_id={:?}] transcript rejected ({:?}) — blocking paste",
+                                    "[cleanup job_id={:?}] transcript rejected ({:?}) — pasting anyway with flaky flag",
                                     job_id_opt,
                                     reason
                                 );
@@ -1019,15 +1039,18 @@ pub(crate) mod common {
                                     serde_json::json!({
                                         "text": raw_text,
                                         "reason": reason.description(),
+                                        "label": reason.label(),
+                                        "pasted": true,
+                                        "flaky": true,
                                     }),
                                 );
-                                rec.finish_guarded();
-                                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                                if let Some(job_id) = job_id_opt {
-                                    emit_stage(&app, job_id, "ready");
-                                }
-                                play_chime(ChimeEvent::Finish);
-                                return;
+                                play_chime(ChimeEvent::Error);
+                                open_main_history(&app);
+                                // Fall through to the normal cleanup + paste path
+                                // below — the same code that runs when there is
+                                // no rejection at all. The `transcription-rejected`
+                                // event already informed the UI; the paste itself
+                                // proceeds identically.
                             }
 
                             // Stage 2: cleanup as its own explicit call site.
@@ -1294,20 +1317,6 @@ pub(crate) mod common {
                                                 },
                                             );
                                         }
-                                    }
-                                    // Defense-in-depth: verify the recorder is still
-                                    // in Pasting state before pasting in seg-recovery.
-                                    if !matches!(rec.state(), crate::recorder::State::Pasting) {
-                                        tracing::info!(
-                                            "[hotkey job_id={:?}] seg-recovery paste suppressed — recorder is {:?}, expected Pasting",
-                                            job_id_opt,
-                                            rec.state()
-                                        );
-                                        let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                                        if let Some(job_id) = job_id_opt {
-                                            emit_stage(&app, job_id, "ready");
-                                        }
-                                        return;
                                     }
                                     let paste_text = format!("{} ", final_text);
                                     match crate::paste::paste(&paste_text) {
@@ -1760,6 +1769,38 @@ mod imp {
                                     }
                                     common::trigger_cancel(&recorder_cb, &tray_cb, &app_cb);
                                 }
+                            }
+
+                            // DEBUG: F19 (0x50 = 80) triggers simulated error panel.
+                            // Cancels any active recording first so the error
+                            // accurately simulates a real rejection during dictation.
+                            if keycode == 80 {
+                                // Cancel any in-flight recording
+                                let s = recorder_cb.state();
+                                if s.is_busy() {
+                                    if !toggle_mode
+                                        && matches!(s, crate::recorder::State::Recording)
+                                    {
+                                        common::arm_ptt_up_suppression();
+                                    }
+                                    common::trigger_cancel(&recorder_cb, &tray_cb, &app_cb);
+                                }
+
+                                // Then emit the error event
+                                use tauri::Emitter;
+                                tracing::info!("[debug] F19 — cancel + emit simulated rejection");
+                                let _ = app_cb.emit(
+                                    "transcription-rejected",
+                                    serde_json::json!({
+                                        "text": "[Debug] F19 triggered error",
+                                        "reason": "Debug trigger via F19 key",
+                                        "label": "Error detected",
+                                        "pasted": true,
+                                        "flaky": true,
+                                    }),
+                                );
+                                common::play_chime(common::ChimeEvent::Error);
+                                common::open_main_history(&app_cb);
                             }
                         }
 

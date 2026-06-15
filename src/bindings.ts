@@ -12,6 +12,12 @@ export const commands = {
 	saveConfig: (cfg: Config) => typedError<null, string>(__TAURI_INVOKE("save_config", { cfg })),
 	prewarmModel: () => typedError<null, string>(__TAURI_INVOKE("prewarm_model")),
 	resetWarmupCache: () => typedError<null, string>(__TAURI_INVOKE("reset_warmup_cache")),
+	/**
+	 *  Debug: simulate a hallucination-rejection event so the user can test the
+	 *  error UX in the overlay without waiting for a real false-positive. Emits
+	 *  the exact same `transcription-rejected` event as the hotkey pipeline.
+	 */
+	simulateRejection: () => __TAURI_INVOKE<void>("simulate_rejection"),
 	scanModelsDir: () => __TAURI_INVOKE<string[]>("scan_models_dir"),
 	/**
 	 *  Return the available models for a given backend family.
@@ -108,6 +114,7 @@ export const commands = {
 	cancelRecording: () => typedError<null, string>(__TAURI_INVOKE("cancel_recording")),
 	startRecording: () => __TAURI_INVOKE<void>("start_recording"),
 	stopRecording: () => __TAURI_INVOKE<void>("stop_recording"),
+	showMainAndOpenHistory: () => __TAURI_INVOKE<void>("show_main_and_open_history"),
 	// Open the TurboTalk data folder in the platform's file manager.
 	openDataFolder: () => typedError<null, string>(__TAURI_INVOKE("open_data_folder")),
 	/**
@@ -354,6 +361,8 @@ export type Config = {
 	 *  tray click). Defaults off to match the rest of the audio cues.
 	 */
 	sound_on_cancel?: boolean,
+	// Play an error beep when dictation is filtered or pasted with issues.
+	sound_on_error?: boolean,
 	// Volume for sound cues, 0.0–1.0.
 	sound_volume?: number,
 	// Which transcription backend family to use. Default: Parakeet.
@@ -418,6 +427,11 @@ export type ExportDiagnosticResult = {
 export type HistoryEntry = {
 	text: string,
 	ts: number,
+	/**
+	 *  True when the transcript triggered a garbage/hallucination detector
+	 *  but was still pasted. Rendered with a yellow outline in the list.
+	 */
+	flaky?: boolean | null,
 };
 
 export type HotkeyConfig = {

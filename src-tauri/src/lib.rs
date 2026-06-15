@@ -123,6 +123,28 @@ fn reset_warmup_cache(recorder_state: tauri::State<'_, RecorderState>) -> Result
     reset_warmup_cache_inner(recorder_state.inner())
 }
 
+/// Debug: simulate a hallucination-rejection event so the user can test the
+/// error UX in the overlay without waiting for a real false-positive. Emits
+/// the exact same `transcription-rejected` event as the hotkey pipeline.
+#[tauri::command]
+#[specta::specta]
+fn simulate_rejection(app: tauri::AppHandle) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        "transcription-rejected",
+        serde_json::json!({
+            "text": "Simulated repetition: but but but but but but buttons",
+            "reason": "Repetition loop detected — the same phrase appeared too many times.",
+            "label": "Error detected",
+            "pasted": true,
+            "flaky": true,
+        }),
+    );
+    crate::hotkey::common::play_chime(crate::hotkey::common::ChimeEvent::Error);
+    show_main_and_open_history(app.clone());
+    tracing::info!("[debug] simulate_rejection emitted transcription-rejected event");
+}
+
 /// After an alt-backend model download, persist the variant, invalidate the
 /// worker, and prewarm against the new backend.
 fn apply_alt_backend_after_download(
@@ -371,6 +393,58 @@ pub fn reposition_overlay_to_cursor_monitor(app: &tauri::AppHandle) {
     if let Ok(post) = overlay.outer_position() {
         tracing::info!("[overlay] post_outer={:?}", post);
     }
+}
+
+/// Position the status window on the cursor's monitor, centered horizontally
+/// and placed near the top portion of the screen so it's visible but not
+/// obscuring content. The status window is fixed-size (280x80 from conf).
+#[cfg(target_os = "macos")]
+fn reposition_status_to_cursor(win: &tauri::WebviewWindow) {
+    use tauri::{LogicalPosition, Manager};
+    const STATUS_W: f64 = 280.0;
+    const STATUS_H: f64 = 80.0;
+    let Ok(cursor) = win.app_handle().cursor_position() else { return };
+    let Ok(monitors) = win.available_monitors() else { return };
+    if monitors.is_empty() { return };
+
+    let primary_scale = win
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| m.scale_factor())
+        .unwrap_or(1.0);
+    let cx = cursor.x / primary_scale;
+    let cy = cursor.y / primary_scale;
+
+    let monitor = monitors
+        .iter()
+        .find(|m| {
+            let p = m.position();
+            let s = m.size();
+            let lw = s.width as f64 / m.scale_factor();
+            let lh = s.height as f64 / m.scale_factor();
+            cx >= p.x as f64
+                && cx < p.x as f64 + lw
+                && cy >= p.y as f64
+                && cy < p.y as f64 + lh
+        })
+        .cloned()
+        .or_else(|| win.primary_monitor().ok().flatten());
+
+    let Some(m) = monitor else { return };
+    let mp = m.position();
+    let ms = m.size();
+    let scale = m.scale_factor();
+    let mw = ms.width as f64 / scale;
+    let mh = ms.height as f64 / scale;
+    // Center horizontally; place ~200 logical pixels below the top edge so it's
+    // prominent but not in the way.
+    let x = (mp.x as f64 + (mw - STATUS_W) / 2.0).max(mp.x as f64);
+    let y = mp.y as f64 + 200.0_f64.min(mh - STATUS_H - 40.0);
+
+    let _ = win.set_always_on_top(false);
+    let _ = win.set_position(LogicalPosition::new(x, y));
+    let _ = win.set_always_on_top(true);
 }
 
 #[cfg(target_os = "macos")]
@@ -708,6 +782,12 @@ pub fn reposition_overlay_to_cursor_monitor(app: &tauri::AppHandle) {
     let _ = overlay.set_position(LogicalPosition::new(x, y));
 }
 
+/// Non-macOS stub: position is best-effort.
+#[cfg(not(target_os = "macos"))]
+fn reposition_status_to_cursor(_win: &tauri::WebviewWindow) {
+    // No-op — the window is already centered via tauri.conf.json.
+}
+
 fn apply_overlay_visibility(app: &tauri::AppHandle, show: bool) {
     // Only toggle when the requested state differs from the current state.
     // Calling `show()` on an already-visible window on macOS reorders it to
@@ -884,6 +964,20 @@ fn delete_backend_model(family: String, variant: String) -> Result<bool, String>
 
     transcribe::invalidate_worker();
     Ok(true)
+}
+
+#[tauri::command]
+#[specta::specta]
+fn show_main_and_open_history(app: tauri::AppHandle) {
+    use tauri::Emitter;
+    // Show and focus the main window
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+    // Tell the main window to switch to the history tab
+    let _ = app.emit("open-history", ());
+    tracing::info!("[cmd] show_main_and_open_history");
 }
 
 #[tauri::command]
@@ -2126,6 +2220,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         save_config,
         prewarm_model,
         reset_warmup_cache,
+        simulate_rejection,
         scan_models_dir,
         list_models_for_family,
         get_launch_at_login,
@@ -2145,6 +2240,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         cancel_recording,
         start_recording,
         stop_recording,
+        show_main_and_open_history,
         open_data_folder,
         open_releases_page,
         ollama::check_ollama_model,
@@ -2290,6 +2386,7 @@ pub fn run() {
             save_config,
             prewarm_model,
             reset_warmup_cache,
+            simulate_rejection,
             scan_models_dir,
             list_models_for_family,
             get_launch_at_login,
@@ -2309,6 +2406,7 @@ pub fn run() {
             cancel_recording,
             start_recording,
             stop_recording,
+            show_main_and_open_history,
             open_data_folder,
             open_releases_page,
             ollama::check_ollama_model,
@@ -2571,6 +2669,14 @@ pub fn run() {
             // ── Cursor dot — cursor-transparent, always starts hidden ──
             if let Some(dot) = app.get_webview_window("cursor-dot") {
                 let _ = dot.set_ignore_cursor_events(true);
+            }
+
+            // ── Status window — clickable, starts hidden ──────────────────
+            // Positioned near the cursor so the warm-up / rejection status
+            // tile appears wherever the user is focused.  Cursor events are
+            // NOT ignored — the X button on rejection messages must work.
+            if let Some(status_win) = app.get_webview_window("status") {
+                reposition_status_to_cursor(&status_win);
             }
 
             // Pin the overlay to the cursor's monitor at startup so the very

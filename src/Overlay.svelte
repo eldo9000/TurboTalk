@@ -4,10 +4,9 @@
   import { getCurrentWindow, cursorPosition, primaryMonitor } from '@tauri-apps/api/window';
   import { commands } from './bindings.ts';
 
-  // 'arming' = backend received the press but whisper-server hasn't finished
-  // loading yet. The normal overlay surface stays the same size and carries a
-  // spinner + flashing yellow outline so there is no second tiny warm-up pop.
-  let mode      = $state('idle'); // 'idle' | 'arming' | 'recording' | 'transcribing' | 'error'
+  // 'recording' | 'transcribing' | 'error' | 'idle'
+  // Arming (warm-up) is now handled by the separate Status window.
+  let mode      = $state('idle'); // 'idle' | 'recording' | 'transcribing' | 'error'
   let canvasEl  = $state(null);
   let wordCount = $state(0);
 
@@ -241,23 +240,6 @@
     // Backend emits ptt-armed BEFORE ptt-down only when whisper-server is
     // still loading (cold start). On the warm path ptt-down fires directly
     // and the arming state is skipped entirely — no yellow flash.
-    listen('ptt-armed', () => {
-      levels = Array(HISTORY).fill(0);
-      speechFrames = 0;
-      wordCount = 0;
-      segPreview = {};
-      resetMeterPeak();
-      startElapsed();
-      mode = 'arming';
-      draw();
-      setTimeout(() => { refreshHoverZone(); }, 200);
-    }).then(u => uns.push(u));
-
-    listen('ptt-arm-failed', () => {
-      stopTranscribing('error');
-      setTimeout(() => { mode = 'idle'; }, 2500);
-    }).then(u => uns.push(u));
-
     listen('ptt-down', () => {
       levels = Array(HISTORY).fill(0);
       speechFrames = 0;
@@ -289,41 +271,89 @@
     }).then(u => uns.push(u));
 
     listen('transcript', () => {
+      // If the error panel is showing (flaky paste), don't dismiss it early.
+      if (mode === 'error') return;
       setTimeout(() => { stopTranscribing('idle'); }, 350);
     }).then(u => uns.push(u));
 
-    listen('transcription-rejected', () => {
-      stopTranscribing('idle');
+    // Error panel helpers — toggle overlay cursor events so the user can
+    // click the panel to open the main window at the history tab.
+    let errorTimer = null;
+
+    function enterError() {
+      stopTranscribing('error');
+    }
+
+    function exitError() {
+      clearTimeout(errorTimer);
+      errorTimer = null;
+      mode = 'idle';
+    }
+
+    // Guard: don't override the error panel with an idle transition.
+    // The error panel owns the display until its timer dismisses it.
+    function skipIfError() {
+      return mode === 'error';
+    }
+
+    // Hallucination rejection — interrupt whatever the overlay is showing
+    // (recording or transcribing) and replace it with a fixed-size error
+    // panel that stays for 3 seconds regardless of overlay size mode.
+    listen('transcription-rejected', (e) => {
+      const payload = e.payload || {};
+      if (skipIfError()) return;
+      // Only interrupt for flaky (pasted despite detection) or blocked
+      // (nothing pasted). Partial salvage follows transcript normally.
+      if (payload.flaky || payload.pasted === false) {
+        enterError();
+        errorTimer = setTimeout(exitError, 3000);
+      }
     }).then(u => uns.push(u));
 
     listen('transcript-error', () => {
-      stopTranscribing('error');
-      setTimeout(() => { mode = 'idle'; }, 2500);
+      if (skipIfError()) return;
+      enterError();
+      errorTimer = setTimeout(exitError, 3000);
     }).then(u => uns.push(u));
 
-    listen('recording-discarded', () => {
-      stopTranscribing('idle');
+    listen('recording-discarded', (e) => {
+      if (skipIfError()) return;
+      // empty-final-text means transcription ran but cleanup produced nothing
+      // (e.g. all non-speech annotations stripped). Show feedback so the user
+      // knows the system tried. Other discards (too-short, error-path) are
+      // quick-tap or transient — go to idle silently.
+      if (e.payload === 'empty-final-text') {
+        enterError();
+        errorTimer = setTimeout(exitError, 3000);
+      } else {
+        stopTranscribing('idle');
+      }
     }).then(u => uns.push(u));
 
     listen('recording-cancelled', () => {
+      if (skipIfError()) return;
       stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     listen('recording-recovered', () => {
+      if (skipIfError()) return;
       stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     listen('recording-too-short', () => {
+      if (skipIfError()) return;
       stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     listen('device-lost', () => {
+      if (skipIfError()) return;
       stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     listen('paste-error', () => {
-      stopTranscribing('error');
-      setTimeout(() => { mode = 'idle'; }, 2500);
+      if (skipIfError()) return;
+      enterError();
+      errorTimer = setTimeout(exitError, 3000);
     }).then(u => uns.push(u));
 
     // Belt-and-suspenders: backend always emits stage=ready when a job ends.
@@ -382,6 +412,7 @@
       clearInterval(cursorTimer);
       clearInterval(elapsedTimer);
       clearTimeout(flashTimer);
+      clearTimeout(errorTimer);
       uns.forEach(u => u());
     };
   });
@@ -467,17 +498,47 @@
   .pill.transcribing {
     animation: pulse-yellow 10s ease-in-out infinite;
   }
-  /* Arming = press registered, whisper-server still loading. Same overlay
-     size as recording, with a deliberately obvious yellow outline pulse. */
-  .pill.arming {
+  .pill-inner {
+    display: contents;
+    transition: opacity 120ms ease-out;
+  }
+  .pill.small {
+    width: auto;
+    min-width: 68px;
+    height: 38px;
+    box-sizing: border-box;
+    gap: 7px;
+    padding: 0 12px 0 11px;
+    border-radius: 999px;
+  }
+  .pill.large {
+    min-width: 984px;
+    min-height: 92px;
+    box-sizing: border-box;
+    gap: 18px;
+    padding: 18px 22px;
+    border-radius: 20px;
+  }
+
+  /* Error / rejection panel — fixed size regardless of overlay size mode.
+     Interrupts and replaces whatever recording/transcribing state was active.
+     Yellow pulsing border (same as warm-up tile), content centered, no
+     waveform or timer. Clickable — opens main window at the history tab. */
+  .pill.error {
     width: 260px;
     height: 80px;
     box-sizing: border-box;
     justify-content: center;
+    gap: 0;
+    padding: 0;
+    border-radius: 20px;
     border-color: rgba(251, 191, 36, 0.85);
-    animation: pulse-arming 1.15s ease-in-out infinite;
+    animation: pulse-error 1.15s ease-in-out infinite;
+    pointer-events: auto;
+    cursor: pointer;
   }
-  @keyframes pulse-arming {
+
+  @keyframes pulse-error {
     0%, 100% {
       border-color: rgba(251, 191, 36, 0.28);
       box-shadow: 0 0 0 0 rgba(251, 191, 36, 0);
@@ -489,48 +550,31 @@
         0 0 22px 5px rgba(251, 191, 36, 0.34);
     }
   }
-  .arming-spinner {
-    width: 24px;
-    height: 24px;
-    border: 2.5px solid rgba(251, 191, 36, 0.22);
-    border-top-color: rgba(251, 191, 36, 0.95);
-    border-radius: 50%;
-    animation: arming-spin 1s linear infinite;
-  }
-  @keyframes arming-spin {
-    to { transform: rotate(360deg); }
-  }
-  .pill-inner {
-    display: contents;
-    transition: opacity 120ms ease-out;
-  }
-  .pill.arming .pill-inner {
+
+  .error-panel {
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 14px;
-    width: 100%;
+    gap: 4px;
   }
-  .pill.small {
-    width: auto;
-    min-width: 68px;
-    height: 38px;
-    box-sizing: border-box;
-    gap: 7px;
-    padding: 0 12px 0 11px;
-    border-radius: 999px;
+
+  .error-label {
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0;
+    color: #fbbf24;
+    user-select: none;
   }
-  .pill.small.arming {
-    width: 124px;
-    height: 42px;
-  }
-  .pill.large {
-    min-width: 984px;
-    min-height: 92px;
-    box-sizing: border-box;
-    gap: 18px;
-    padding: 18px 22px;
-    border-radius: 20px;
+
+  .error-hint {
+    font-size: 9px;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: 0.08em;
+    color: rgba(251, 191, 36, 0.55);
+    user-select: none;
   }
   .status-dot {
     width: 11px;
@@ -541,8 +585,7 @@
     box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.14), 0 0 14px rgba(248, 113, 113, 0.4);
     transition: opacity 55ms linear;
   }
-  .status-dot.transcribing,
-  .status-dot.arming {
+  .status-dot.transcribing {
     background: #fbbf24;
     box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.14), 0 0 14px rgba(251, 191, 36, 0.36);
   }
@@ -643,14 +686,15 @@
      Anchor the pill to the screen-edge side — bottom of the window for bottom
      position, top for top position — with a 100 px gutter, so the pill lands
      in the same on-screen spot as the default size while the transcript bubble
-     grows into the rest of the window. Small/medium stay centered. -->
+     grows into the rest of the window. Small/medium stay centered.
+     Error mode always centers regardless of overlay size. -->
 <div
   class="w-full h-full flex justify-center"
-  class:items-center={overlaySize !== 'large'}
-  class:items-end={overlaySize === 'large' && overlayPosition !== 'top'}
-  class:items-start={overlaySize === 'large' && overlayPosition === 'top'}
-  style:padding-bottom={overlaySize === 'large' && overlayPosition !== 'top' ? '100px' : '0'}
-  style:padding-top={overlaySize === 'large' && overlayPosition === 'top' ? '100px' : '0'}
+  class:items-center={overlaySize !== 'large' || mode === 'error'}
+  class:items-end={overlaySize === 'large' && overlayPosition !== 'top' && mode !== 'error'}
+  class:items-start={overlaySize === 'large' && overlayPosition === 'top' && mode !== 'error'}
+  style:padding-bottom={overlaySize === 'large' && overlayPosition !== 'top' && mode !== 'error' ? '100px' : '0'}
+  style:padding-top={overlaySize === 'large' && overlayPosition === 'top' && mode !== 'error' ? '100px' : '0'}
 >
   <div class="relative">
   {#if showPreview}
@@ -669,9 +713,9 @@
   <div
     class="pill flex items-center gap-3.5 px-5 py-3.5 rounded-2xl"
     class:show={mode !== 'idle'}
-    class:small={overlaySize === 'small'}
-    class:large={overlaySize === 'large'}
-    class:arming={mode === 'arming'}
+    class:small={overlaySize === 'small' && mode !== 'error'}
+    class:large={overlaySize === 'large' && mode !== 'error'}
+    class:error={mode === 'error'}
     class:recording={mode === 'recording'}
     class:flash={mode === 'recording' && justConnected}
     class:transcribing={mode === 'transcribing'}
@@ -684,7 +728,15 @@
     style:opacity={mode === 'idle' ? 0 : isPeeking ? 0.24 : 1}
   >
     <div class="pill-inner">
-    {#if overlaySize === 'small'}
+    {#if mode === 'error'}
+      <!-- Fixed-size error panel — same regardless of small/medium/large.
+           Auto-dismisses after 3 seconds. The main window opens to History
+           automatically so the user can inspect the problematic text. -->
+      <div class="error-panel">
+        <span class="error-label">Error captured</span>
+        <span class="error-hint">checking history…</span>
+      </div>
+    {:else if overlaySize === 'small'}
       <canvas
         bind:this={canvasEl}
         aria-hidden="true"
@@ -692,22 +744,10 @@
       ></canvas>
       <div
         class="status-dot"
-        class:arming={mode === 'arming'}
         class:transcribing={mode === 'transcribing'}
         style:opacity={mode === 'recording' ? miniDotLevel : 1}
       ></div>
       <div class="small-time">{fmtElapsed(elapsedSecs)}</div>
-    {:else if mode === 'arming'}
-      <div class="flex items-center justify-center gap-3.5 w-full">
-        <div class="arming-spinner"></div>
-        <div class="flex flex-col items-start gap-[1px]">
-          <span class="text-[11px] font-semibold tracking-wide leading-tight"
-                style="color: #fbbf24;">Starting…</span>
-          <span class="text-[9px] tabular-nums leading-tight" style="color: rgba(255,255,255,0.4);">
-            {fmtElapsed(elapsedSecs)}
-          </span>
-        </div>
-      </div>
     {:else if overlaySize === 'large'}
       <canvas
         bind:this={canvasEl}
@@ -720,7 +760,7 @@
           class="large-title"
           class:transcribing={mode === 'transcribing'}
         >
-          {mode === 'recording' ? 'Recording' : mode === 'error' ? 'Error' : 'Transcribing'}
+          {mode === 'recording' ? 'Recording' : 'Transcribing'}
         </span>
         <span class="large-meta">
           {wordCount > 0 ? `About ${wordCount} words · ` : ''}{fmtElapsed(elapsedSecs)}
@@ -735,9 +775,9 @@
     <div class="flex flex-col items-start gap-[1px]">
       <span
         class="text-[11px] font-semibold tracking-wide select-none leading-tight"
-        style="color: {mode === 'recording' ? '#f87171' : mode === 'error' ? '#f87171' : '#fbbf24'};"
+        style="color: {mode === 'recording' ? '#f87171' : '#fbbf24'};"
       >
-        {mode === 'recording' ? 'Recording' : mode === 'error' ? 'Error' : 'Transcribing…'}
+        {mode === 'recording' ? 'Recording' : 'Transcribing…'}
       </span>
       {#if mode === 'recording' || (mode === 'transcribing' && elapsedSecs > 0)}
         <span class="text-[9px] tabular-nums select-none leading-tight"

@@ -461,6 +461,7 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgSoundOnStart      = $state(false);
   let cfgSoundOnFinish     = $state(false);
   let cfgSoundOnCancel     = $state(false);
+  let cfgSoundOnError      = $state(true);
   let cfgSoundVolume       = $state(0.7);
   let cfgVadEnabled        = $state(true);
   let cfgBackend           = $state('parakeet'); // 'whisper' | 'moonshine' | 'parakeet'
@@ -1015,6 +1016,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfgSoundOnStart      = cfg.sound_on_start                  ?? false;
     cfgSoundOnFinish     = cfg.sound_on_finish                  ?? false;
     cfgSoundOnCancel     = cfg.sound_on_cancel                  ?? false;
+    cfgSoundOnError      = cfg.sound_on_error                   ?? true;
     cfgSoundVolume       = cfg.sound_volume                     ?? 0.7;
     cfgVadEnabled        = cfg.whisper?.vad_enabled             ?? true;
     cfgBackend           = cfg.backend                          ?? 'parakeet';
@@ -1045,6 +1047,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfg.sound_on_start                = cfgSoundOnStart;
     cfg.sound_on_finish               = cfgSoundOnFinish;
     cfg.sound_on_cancel               = cfgSoundOnCancel;
+    cfg.sound_on_error                = cfgSoundOnError;
     cfg.sound_volume                  = cfgSoundVolume;
     cfg.whisper.vad_enabled           = cfgVadEnabled;
     cfg.backend                       = cfgBackend;
@@ -1185,7 +1188,7 @@ Reply with only the single word, lowercase, no punctuation.
         filteredEntry = { text: p.text || '', reason: p.reason || 'Hallucination detected' };
         const text = p.text;
         if (text) {
-          history = [{ text, ts: Date.now() }, ...history];
+          history = [{ text, ts: Date.now(), flaky: true }, ...history];
           commands.saveHistory(history);
         }
         const id = ++uiErrorId;
@@ -1449,6 +1452,7 @@ Reply with only the single word, lowercase, no punctuation.
               onclick={() => copyHistoryItem(item)}
               title="Click to copy"
               class="tt-history-item"
+              class:tt-history-item-flaky={item.flaky}
             >
               <span class="tt-history-text" class:tt-history-text-hidden={copiedTs === item.ts}>
                 {item.text}
@@ -2142,6 +2146,10 @@ Reply with only the single word, lowercase, no punctuation.
                 onclick={() => { cfgSoundOnCancel = !cfgSoundOnCancel; saveSettings(); }}
                 class="tt-multi-btn" class:tt-multi-on={cfgSoundOnCancel}
                 data-tip="Play a chime when recording is cancelled">on Cancel</button>
+              <button
+                onclick={() => { cfgSoundOnError = !cfgSoundOnError; saveSettings(); }}
+                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnError}
+                data-tip="Play a low beep when dictation has errors">on Error</button>
             </div>
           </div>
           <div class="tt-row tt-row-field tt-row-col" data-tip="Volume for audio notification chimes">
@@ -2954,7 +2962,7 @@ Reply with only the single word, lowercase, no punctuation.
     padding: 8px 12px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 6px;
   }
   .tt-history-item {
     position: relative;
@@ -2964,14 +2972,17 @@ Reply with only the single word, lowercase, no punctuation.
     line-height: 1.55;
     padding: 8px 10px;
     border: none;
-    background: transparent;
+    background: color-mix(in srgb, var(--surface) 50%, transparent);
     border-radius: 6px;
     cursor: pointer;
     color: var(--text-primary);
     transition: background 0.1s;
   }
   .tt-history-item:hover {
-    background: color-mix(in srgb, var(--text-primary) 6%, var(--surface-raised));
+    background: color-mix(in srgb, var(--text-primary) 6%, color-mix(in srgb, var(--surface) 50%, transparent));
+  }
+  .tt-history-item-flaky {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, #fbbf24 50%, transparent);
   }
   .tt-history-text {
     display: block;

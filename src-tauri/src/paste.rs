@@ -178,7 +178,12 @@ pub fn paste(text: &str) -> anyhow::Result<bool> {
     }
 
     // Delay to let the paste land before restoring clipboard.
-    std::thread::sleep(std::time::Duration::from_millis(150));
+    // 500 ms: the dictation cycle already takes ~2-3 s (transcription +
+    // cleanup), so an extra 350 ms is imperceptible to the user.  150 ms
+    // was too tight — heavyweight apps (Electron, Xcode, etc.) with a
+    // busy main thread could miss the paste and pick up the restored
+    // clipboard content instead.
+    std::thread::sleep(std::time::Duration::from_millis(500));
 
     if let Some(prev) = prior {
         let _ = cb.set_text(prev);

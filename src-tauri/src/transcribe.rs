@@ -109,6 +109,11 @@ impl RejectReason {
             }
         }
     }
+
+    /// Short label (1-3 words) suitable for the push-to-talk overlay.
+    pub fn label(&self) -> &'static str {
+        "Error detected"
+    }
 }
 
 /// Outcome of `TranscriptionWorker::transcribe`. Either a clean transcript or
@@ -1489,7 +1494,8 @@ impl SegmentTranscriber {
         let map = self.results.lock().unwrap_or_else(|e| e.into_inner());
         map.values()
             .filter(|t| !t.is_empty())
-            .cloned()
+            .map(|t| t.trim_end_matches('.').to_string())
+            .filter(|t| !t.is_empty())
             .collect::<Vec<_>>()
             .join(" ")
     }

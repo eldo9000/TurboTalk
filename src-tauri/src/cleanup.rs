@@ -225,6 +225,9 @@ fn strip_whisper_artifacts(text: &str) -> String {
     let s = s.trim_end_matches("...");
     let s = s.trim_end_matches(" ...");
     let s = s.trim_end_matches(" .");
+    // Whisper also adds a bare trailing period after every utterance/segment.
+    // Strip it so pause-boundary segments don't leave periods mid-sentence.
+    let s = s.trim_end_matches('.');
     s.trim().to_string()
 }
 

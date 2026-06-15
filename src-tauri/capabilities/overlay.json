@@ -4,8 +4,10 @@
   "description": "Capabilities for the TurboTalk recording overlay",
   "windows": ["overlay"],
   "permissions": [
+    "core:app:default",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
+    "core:event:allow-emit",
     "core:window:allow-cursor-position",
     "core:window:allow-outer-position",
     "core:window:allow-outer-size",
