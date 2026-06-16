@@ -490,7 +490,7 @@ pub(crate) mod common {
 
                 // Pin the overlay to the cursor's monitor up front so the
                 // arming tile never flashes on the wrong display.
-                crate::reposition_overlay_to_cursor_monitor(&app);
+                crate::windowing::reposition_overlay_to_cursor_monitor(&app);
                 emit_critical(&app, "ptt-armed", ());
                 overlay_armed = true;
                 tracing::info!("[hotkey] arming — waiting for whisper-server readiness");
@@ -588,7 +588,7 @@ pub(crate) mod common {
             // and no yellow flash shows.
             if !rec.audio_live() {
                 if !overlay_armed {
-                    crate::reposition_overlay_to_cursor_monitor(&app);
+                    crate::windowing::reposition_overlay_to_cursor_monitor(&app);
                     emit_critical(&app, "ptt-armed", ());
                 }
                 // Poll up to 2 s for the first callback. 5 ms tick keeps the
@@ -638,7 +638,7 @@ pub(crate) mod common {
             // ptt-down so the recording UI never flashes on the wrong display.
             // The arming branch above already repositioned, but a second call
             // is harmless (window position is set unconditionally).
-            crate::reposition_overlay_to_cursor_monitor(&app);
+            crate::windowing::reposition_overlay_to_cursor_monitor(&app);
             emit_critical(&app, "ptt-down", ());
             emit_stage(&app, job_id, "recording");
             play_chime(ChimeEvent::Start);
