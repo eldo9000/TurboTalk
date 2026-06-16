@@ -215,20 +215,6 @@ struct BackendBundleInventory {
 fn backend_bundle_inventory() -> Vec<BackendBundleInventory> {
     let mut out = Vec::new();
 
-    #[cfg(feature = "moonshine")]
-    for variant in ["tiny", "base"] {
-        if let Some(path) = crate::transcribe_backends::moonshine::variant_dir(variant) {
-            let valid =
-                crate::transcribe_backends::moonshine::validate_moonshine_model_dir(&path).is_ok();
-            out.push(BackendBundleInventory {
-                family: "moonshine".into(),
-                variant: variant.into(),
-                path: path.to_string_lossy().into_owned(),
-                valid,
-            });
-        }
-    }
-
     #[cfg(feature = "parakeet")]
     for variant in ["tdt-0.6b-v2", "tdt-0.6b-v3"] {
         if let Some(path) = crate::transcribe_backends::parakeet::variant_dir(variant) {
@@ -289,8 +275,7 @@ pub async fn build_report_text(note: Option<&str>) -> String {
     let _ = writeln!(out, "debug_build: {}", cfg!(debug_assertions));
     let _ = writeln!(
         out,
-        "features: moonshine={} parakeet={} telegram_bugreport={}",
-        cfg!(feature = "moonshine"),
+        "features: parakeet={} telegram_bugreport={}",
         cfg!(feature = "parakeet"),
         cfg!(feature = "dev-telegram-bugreport")
     );

@@ -25,10 +25,9 @@ export const commands = {
 	 *  - Whisper: returns the three models in the existing catalog (same IDs as
 	 *    `download_model` accepts). The UI should show installed vs. not-installed
 	 *    state by cross-referencing with `scan_models_dir`.
-	 *  - Moonshine: returns "tiny" and "base" ONNX variants from the onnx-community repo.
 	 *  - Parakeet: returns "tdt-0.6b-v2" (English) and "tdt-0.6b-v3" (multilingual).
 	 * 
-	 *  `family` is a lowercase string: "whisper" | "moonshine" | "parakeet".
+	 *  `family` is a lowercase string: "whisper" | "parakeet".
 	 *  Unknown values are treated as "whisper".
 	 */
 	listModelsForFamily: (family: string) => __TAURI_INVOKE<ModelDescriptor[]>("list_models_for_family", { family }),
@@ -45,29 +44,6 @@ export const commands = {
 	detectLogitechMouse: () => __TAURI_INVOKE<boolean>("detect_logitech_mouse"),
 	downloadModel: (modelId: string) => typedError<string, string>(__TAURI_INVOKE("download_model", { modelId })),
 	cancelDownload: (modelId: string) => __TAURI_INVOKE<void>("cancel_download", { modelId }),
-	/**
-	 *  Download a Moonshine ONNX model bundle from HuggingFace.
-	 * 
-	 *  `variant` must be "tiny" or "base". Files are stored under:
-	 *    `~/.config/turbotalk/models/moonshine/<variant>/`
-	 * 
-	 *  Progress events match the Whisper `download-progress` pattern:
-	 *    `{ "name": "moonshine-<variant>", "pct": 0..100 }`
-	 * 
-	 *  The HuggingFace ONNX community repo for each variant:
-	 *    tiny: https://huggingface.co/onnx-community/moonshine-tiny-ONNX
-	 *    base: https://huggingface.co/onnx-community/moonshine-base-ONNX
-	 * 
-	 *  The three required files per variant are:
-	 *    encoder_model.onnx
-	 *    decoder_model_merged.onnx
-	 *    tokenizer.json
-	 * 
-	 *  Each file is downloaded separately. Progress ticks are per-file (pct within
-	 *  the overall set). The download key used in progress events is
-	 *  `"moonshine-<variant>"` so the frontend can show a per-variant progress bar.
-	 */
-	downloadMoonshineModel: (variant: string) => typedError<null, string>(__TAURI_INVOKE("download_moonshine_model", { variant })),
 	/**
 	 *  Download a Parakeet TDT ONNX model bundle from HuggingFace.
 	 * 
@@ -93,12 +69,12 @@ export const commands = {
 	 */
 	deleteModelFile: (path: string) => typedError<boolean, string>(__TAURI_INVOKE("delete_model_file", { path })),
 	/**
-	 *  Delete an ONNX model bundle directory for Moonshine or Parakeet.
+	 *  Delete an ONNX model bundle directory for Parakeet.
 	 * 
-	 *  `family` is "moonshine" or "parakeet"; `variant` is the variant slug
-	 *  (e.g. "tiny", "tdt-0.6b-v2"). Clears `backend_variant` when the removed
-	 *  bundle was the active selection. Returns `Ok(true)` when a directory was
-	 *  removed, `Ok(false)` when it was already gone.
+	 *  `family` is "parakeet"; `variant` is the variant slug (e.g.
+	 *  "tdt-0.6b-v2"). Clears `backend_variant` when the removed bundle was the
+	 *  active selection. Returns `Ok(true)` when a directory was removed,
+	 *  `Ok(false)` when it was already gone.
 	 */
 	deleteBackendModel: (family: string, variant: string) => typedError<boolean, string>(__TAURI_INVOKE("delete_backend_model", { family, variant })),
 	loadHistory: () => __TAURI_INVOKE<HistoryEntry[]>("load_history"),
@@ -274,9 +250,10 @@ export type AudioConfig = {
 /**
  *  Which transcription backend family to use.
  * 
- *  Persisted as lowercase ("whisper" / "moonshine" / "parakeet").
+ *  Persisted as lowercase ("whisper" / "parakeet"). Legacy "moonshine"
+ *  configs are accepted on load and normalized to Parakeet.
  */
-export type BackendFamily = "whisper" | "moonshine" | "parakeet";
+export type BackendFamily = "whisper" | "parakeet";
 
 export type BugReportResult = {
 	// Short, human-quotable id the tester can reference (e.g. "A1B3C5").
@@ -368,9 +345,9 @@ export type Config = {
 	// Which transcription backend family to use. Default: Parakeet.
 	backend?: BackendFamily,
 	/**
-	 *  Active variant within the chosen backend family — e.g. "tiny"/"base"
-	 *  for Moonshine, "tdt-0.6b-v2" for Parakeet. Empty means use the family
-	 *  default in `resolve_backend_variant`.
+	 *  Active variant within the chosen backend family — e.g. "tdt-0.6b-v2"
+	 *  for Parakeet. Empty means use the family default in
+	 *  `resolve_backend_variant`.
 	 */
 	backend_variant?: string,
 };
@@ -465,7 +442,7 @@ export type ModelDescriptor = {
 	id: string,
 	// Human tier label (e.g. "Recommended", "Large") — matches Whisper Models UI.
 	tier: string,
-	// Technical model name shown in the monospace pill (e.g. `moonshine-tiny`).
+	// Technical model name shown in the monospace pill (e.g. `parakeet-en-v2`).
 	label: string,
 	description: string,
 	size: string,

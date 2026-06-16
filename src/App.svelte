@@ -8,6 +8,9 @@
   import { initTheme } from '@libre/ui/src/theme.js';
   import Select from '@libre/ui/src/components/Select.svelte';
   import UpdateManager from './UpdateManager.svelte';
+  import HistoryTab from './HistoryTab.svelte';
+  import ModelsTab from './ModelsTab.svelte';
+  import ModesTab from './ModesTab.svelte';
 
   const HOTKEY_KEY_ITEMS_MAC = [
     { category: 'Keyboard' },
@@ -58,29 +61,6 @@
     platform === 'windows' ? HOTKEY_KEY_ITEMS_WIN : HOTKEY_KEY_ITEMS_MAC
   );
 
-  function hotkeyDisplayName(key) {
-    const shared = {
-      mouse_back: 'Mouse Back', mouse_forward: 'Mouse Fwd', mouse_middle: 'Mouse Middle',
-    };
-    if (shared[key]) return shared[key];
-    if (platform === 'windows') {
-      const win = {
-        left_option: 'Left Alt', right_option: 'Right Alt',
-        left_control: 'Left Ctrl', right_control: 'Right Ctrl',
-        left_command: 'Left Win', right_command: 'Right Win',
-        left_shift: 'Left Shift', right_shift: 'Right Shift',
-      };
-      return win[key] ?? key.toUpperCase();
-    }
-    const mac = {
-      right_option: 'Right Option ⌥', left_option: 'Left Option ⌥',
-      right_control: 'Right Control ⌃', left_control: 'Left Control ⌃',
-      right_command: 'Right Command ⌘', left_command: 'Left Command ⌘',
-      right_shift: 'Right Shift ⇧', left_shift: 'Left Shift ⇧',
-    };
-    return mac[key] ?? key.toUpperCase();
-  }
-
   const HISTORY_AUTO_DELETE_ITEMS = [
     { value: 'restart', label: 'On app restart' },
     { value: '1d',      label: 'After 1 day'    },
@@ -108,6 +88,29 @@
   }
   function defaultHotkeyMode() {
     return platform === 'windows' ? 'toggle' : 'hold';
+  }
+
+  function hotkeyDisplayName(key) {
+    const shared = {
+      mouse_back: 'Mouse Back', mouse_forward: 'Mouse Fwd', mouse_middle: 'Mouse Middle',
+    };
+    if (shared[key]) return shared[key];
+    if (platform === 'windows') {
+      const win = {
+        left_option: 'Left Alt', right_option: 'Right Alt',
+        left_control: 'Left Ctrl', right_control: 'Right Ctrl',
+        left_command: 'Left Win', right_command: 'Right Win',
+        left_shift: 'Left Shift', right_shift: 'Right Shift',
+      };
+      return win[key] ?? key.toUpperCase();
+    }
+    const mac = {
+      right_option: 'Right Option ⌥', left_option: 'Left Option ⌥',
+      right_control: 'Right Control ⌃', left_control: 'Left Control ⌃',
+      right_command: 'Right Command ⌘', left_command: 'Left Command ⌘',
+      right_shift: 'Right Shift ⇧', left_shift: 'Left Shift ⇧',
+    };
+    return mac[key] ?? key.toUpperCase();
   }
 
   async function recheckReadiness() {
@@ -267,7 +270,7 @@
   let newModelPath    = $state('');
   // { [modelName: string]: number } — key present = downloading, value = pct 0-99
   let downloadProgress = $state({});
-  // Moonshine / Parakeet model descriptors (loaded from backend on tab open)
+  // Parakeet model descriptors (loaded from backend on tab open)
   let altModels       = $state(/** @type {import('./bindings').ModelDescriptor[]} */ ([]));
 
   // Modes tab — Chaperone classifier presets.
@@ -358,8 +361,9 @@ Reply with only the single word, lowercase, no punctuation.
     PROMPT_PRESETS.find(p => p.prompt === cfgClassifierPrompt)?.id ?? null
   );
 
-  function applyPreset(p) {
-    cfgClassifierPrompt = p.prompt;
+  function applyPreset(id) {
+    const prompt = PROMPT_PRESETS.find(p => p.id === id)?.prompt ?? DEFAULT_CLASSIFIER_PROMPT;
+    cfgClassifierPrompt = prompt;
     saveModes();
   }
 
@@ -470,19 +474,19 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgSoundOnError      = $state(true);
   let cfgSoundVolume       = $state(0.7);
   let cfgVadEnabled        = $state(true);
-  let cfgBackend           = $state('parakeet'); // 'whisper' | 'moonshine' | 'parakeet'
+  let cfgBackend           = $state('parakeet'); // 'whisper' | 'parakeet'
   let cfgBackendVariant    = $state('');
   let readinessModelPresent = $state(false);
 
-  const DEFAULT_ALT_VARIANT = { moonshine: 'tiny', parakeet: 'tdt-0.6b-v2' };
+  const DEFAULT_PARAKEET_VARIANT = 'tdt-0.6b-v2';
 
   function resolvedAltVariant() {
     if (cfgBackendVariant) return cfgBackendVariant;
-    return DEFAULT_ALT_VARIANT[cfgBackend] ?? '';
+    return cfgBackend === 'parakeet' ? DEFAULT_PARAKEET_VARIANT : '';
   }
 
   function altModelVariant(m) {
-    return m.id.replace(/^moonshine-|^parakeet-/, '');
+    return m.id.replace(/^parakeet-/, '');
   }
 
   function altModelActive(m) {
@@ -715,14 +719,6 @@ Reply with only the single word, lowercase, no punctuation.
     setTimeout(() => { if (copiedTs === item.ts) copiedTs = null; }, 1500);
   }
 
-  // ── Models ────────────────────────────────────────────────────────────────
-
-  const ENGINE_OPTIONS = [
-    ['parakeet', 'Parakeet'],
-    ['whisper', 'Whisper'],
-    ['moonshine', 'Moonshine'],
-  ];
-
   async function setTranscriptionEngine(v) {
     cfgBackend = v;
     await saveSettings();
@@ -731,35 +727,6 @@ Reply with only the single word, lowercase, no punctuation.
       await openModels();
     }
   }
-
-  // Whisper starter model — recommended when the Whisper engine is selected.
-  const RECOMMENDED_MODEL = {
-    name: 'ggml-large-v3-turbo',
-    tier: 'Recommended',
-    size: '1.6 GB',
-    description: 'multilingual · best accuracy',
-    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin',
-  };
-
-  const MODEL_CATALOG = [
-    {
-      name: 'ggml-large-v3-turbo-q5_0',
-      tier: 'Small',
-      size: '574 MB',
-      description: 'low RAM, english only, not bad',
-      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin',
-    },
-    {
-      name: 'ggml-large-v3',
-      tier: 'Large',
-      size: '3.1 GB',
-      description: 'high accuracy, high RAM, slow',
-      url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin',
-    },
-  ];
-
-  // Catalog filenames the "Custom" detector should treat as known.
-  const KNOWN_FILENAMES = [RECOMMENDED_MODEL, ...MODEL_CATALOG].map(m => m.name + '.bin');
 
   async function openModels() {
     const cfg = await commands.getConfig();
@@ -776,14 +743,8 @@ Reply with only the single word, lowercase, no punctuation.
 
   async function startAltDownload(m) {
     downloadProgress = { ...downloadProgress, [m.id]: 0 };
-    let res;
-    if (cfgBackend === 'moonshine') {
-      const variant = altModelVariant(m);
-      res = await commands.downloadMoonshineModel(variant);
-    } else {
-      const variant = altModelVariant(m);
-      res = await commands.downloadParakeetModel(variant);
-    }
+    const variant = altModelVariant(m);
+    const res = await commands.downloadParakeetModel(variant);
     const { [m.id]: _removed, ...rest } = downloadProgress;
     downloadProgress = rest;
     if (res.status === 'ok') {
@@ -821,6 +782,12 @@ Reply with only the single word, lowercase, no punctuation.
     downloadProgress = rest;
   }
 
+  const KNOWN_FILENAMES = [
+    'ggml-large-v3-turbo.bin',
+    'ggml-large-v3-turbo-q5_0.bin',
+    'ggml-large-v3.bin',
+  ];
+
   async function setCustomModel(path) {
     const trimmed = path.trim();
     if (!trimmed || cfgModels.includes(trimmed)) return;
@@ -846,11 +813,6 @@ Reply with only the single word, lowercase, no punctuation.
     if (cfgModel === path) cfgModel = '';
     await saveModels();
   }
-
-  // Single custom slot — first path not matching a known catalog filename.
-  const customPath = $derived(
-    cfgModels.find(p => !KNOWN_FILENAMES.some(fn => p.endsWith(fn))) ?? ''
-  );
 
   async function saveModels() {
     const cfg = await commands.getConfig();
@@ -1075,6 +1037,106 @@ Reply with only the single word, lowercase, no punctuation.
     }
   }
 
+  function historyState() {
+    return {
+      history,
+      copiedTs,
+      transcriptError,
+      filteredEntry,
+      recording,
+      transcribing,
+      hotkeyLabel: hotkeyDisplayName(cfgHotkeyKey),
+      cfgHotkeyMode,
+    };
+  }
+
+  function historyActions() {
+    return {
+      toggleRecording: () => {
+        if (recording) commands.stopRecording();
+        else tryStartRecording();
+      },
+      clearHistory,
+      copyHistoryItem,
+      dismissTranscriptError: () => { transcriptError = ''; },
+      dismissFilteredEntry: () => { filteredEntry = null; },
+    };
+  }
+
+  function modelsState() {
+    return {
+      cfgBackend,
+      cfgModels,
+      cfgModel,
+      downloadProgress,
+      altModels,
+      newModelPath,
+      modelConfigured,
+    };
+  }
+
+  function modelsActions() {
+    return {
+      setTranscriptionEngine,
+      startDownload,
+      cancelDownload: (name) => commands.cancelDownload(name),
+      selectModel,
+      removeModel,
+      startAltDownload,
+      cancelAltDownload,
+      selectAltModel,
+      removeAltModel,
+      browseCustomModel,
+      setCustomModel,
+      setNewModelPath: (v) => { newModelPath = v; },
+    };
+  }
+
+  function modesState() {
+    return {
+      cfgCleanupMode,
+      cfgStripFillers,
+      cfgAppendPeriod,
+      cfgStripArtifacts,
+      cfgOllamaUrl,
+      cfgLlmModel,
+      cfgVocabulary,
+      cfgClassifierPrompt,
+      activePresetId,
+      cfgVadEnabled,
+      ollamaReachable,
+      ollamaModelPresent,
+      ollamaModelPartial,
+      ollamaPullState,
+    };
+  }
+
+  function modesActions() {
+    return {
+      setCleanupMode: (v) => {
+        cfgCleanupMode = v;
+        saveModes();
+        if (v === 'chaperone') commands.prewarmOllama(); // fire-and-forget
+      },
+      setStripFillers: (v) => { cfgStripFillers = v; saveModes(); },
+      setAppendPeriod: (v) => { cfgAppendPeriod = v; saveModes(); },
+      setStripArtifacts: (v) => { cfgStripArtifacts = v; saveModes(); },
+      setVadEnabled: (v) => { cfgVadEnabled = v; saveModes(); },
+      setVocabulary: (v) => { cfgVocabulary = v; saveModes(); },
+      setOllamaUrl: (v) => { cfgOllamaUrl = v; saveModes(); },
+      setLlmModel: (v) => { cfgLlmModel = v; saveModes(); },
+      setClassifierPrompt: (v) => { cfgClassifierPrompt = v; saveModes(); },
+      applyPreset,
+      resetClassifierPrompt: () => {
+        cfgClassifierPrompt = DEFAULT_CLASSIFIER_PROMPT;
+        saveModes();
+      },
+      refreshOllamaSetup,
+      startOllamaPull,
+      installOllama,
+    };
+  }
+
   function switchTab(tab) {
     activeTab = tab;
     if (tab === 'models')   openModels();
@@ -1106,8 +1168,8 @@ Reply with only the single word, lowercase, no punctuation.
       case 'download-progress': {
         const pct = payload.pct;
         const name_ = payload.name;
-        const altKey = name_.startsWith('moonshine-') ? `moonshine-${name_.slice('moonshine-'.length)}`
-          : name_.startsWith('parakeet-') ? `parakeet-${name_.slice('parakeet-'.length)}`
+        const altKey = name_.startsWith('parakeet-')
+          ? `parakeet-${name_.slice('parakeet-'.length)}`
           : null;
         if (pct >= 100) {
           const next = { ...downloadProgress };
@@ -1431,544 +1493,17 @@ Reply with only the single word, lowercase, no punctuation.
 
   <!-- History tab -->
   {#if activeTab === 'history'}
-    <div class="tt-history flex-1 min-h-0 flex flex-col">
-      {#if transcriptError}
-        <div class="tt-banner-error">
-          <span class="tt-banner-error-msg">{transcriptError}</span>
-          <button onclick={() => { transcriptError = ''; }} class="tt-banner-close">×</button>
-        </div>
-      {/if}
-      <!-- Hallucination-rejected transcript. Single-line warning only —
-           the full text was added to history by the event handler so the user
-           can click-to-copy it from the list below. -->
-      {#if filteredEntry}
-        <div class="tt-banner-error" style="border-color: var(--warning, #c97d00); background: var(--warning-bg, #fff8e0);">
-          <span style="font-size: 0.72rem; font-weight: 600; color: var(--warning, #c97d00);">⚠ Filtered: {filteredEntry.reason}</span>
-          <button onclick={() => { filteredEntry = null; }} class="tt-banner-close">×</button>
-        </div>
-      {/if}
-      {#if history.length === 0}
-        <div class="tt-history-empty">
-          {#if recording || transcribing}
-            <p class="tt-history-empty-status">{recording ? 'Recording…' : 'Transcribing…'}</p>
-          {:else}
-            <kbd class="tt-kbd">{hotkeyDisplayName(cfgHotkeyKey)}</kbd>
-            <p class="tt-history-empty-hint">
-              {cfgHotkeyMode === 'toggle' ? 'Press to start · press again to stop' : 'Hold to record'}
-            </p>
-          {/if}
-        </div>
-      {:else}
-        <div class="tt-history-list">
-          {#each history as item (item.ts)}
-            <button
-              onclick={() => copyHistoryItem(item)}
-              title="Click to copy"
-              class="tt-history-item"
-              class:tt-history-item-flaky={item.flaky}
-            >
-              <span class="tt-history-text" class:tt-history-text-hidden={copiedTs === item.ts}>
-                {item.text}
-              </span>
-              {#if copiedTs === item.ts}
-                <span class="tt-history-copied">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="20 6 9 17 4 12"/>
-                  </svg>
-                  Copied
-                </span>
-              {/if}
-            </button>
-          {/each}
-        </div>
-      {/if}
-      <div class="tt-history-actions">
-        <button
-          onclick={() => recording ? commands.stopRecording() : tryStartRecording()}
-          disabled={transcribing}
-          title="Record into the history list. Transcript stays here — won't paste into another app."
-          class="tt-btn tt-btn-icon"
-          class:tt-btn-recording={recording}
-        >
-          <span class="tt-rec-dot"></span>
-          {recording ? 'Stop' : 'Record'}
-        </button>
-        {#if history.length > 0}
-          <button onclick={clearHistory} class="tt-btn tt-btn-icon tt-btn-danger-hover">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-            </svg>
-            Clear all
-          </button>
-        {/if}
-      </div>
-    </div>
+    <HistoryTab state={historyState()} actions={historyActions()} />
   {/if}
-
-  {#snippet modelRow(m)}
-    {@const filename      = m.name + '.bin'}
-    {@const installedPath = cfgModels.find(p => p.endsWith(filename))}
-    {@const isInstalled   = !!installedPath}
-    {@const isSelected    = isInstalled && cfgModel === installedPath}
-    {@const isDownloading = m.name in downloadProgress}
-    {@const pct           = downloadProgress[m.name] ?? 0}
-    <div class="tt-model-row group">
-      <div class="tt-row-info">
-        <div class="tt-model-name-row">
-          <span class="tt-tier-name">{m.tier}</span>
-          <span class="tt-model-name-pill">{m.name}</span>
-        </div>
-        <span class="tt-model-desc" class:tt-warn={m.warn}>{m.description}</span>
-      </div>
-      <span class="tt-model-size">{m.size}</span>
-      {#if isDownloading}
-        <span class="tt-model-pct">{pct}%</span>
-        <button onclick={() => commands.cancelDownload(m.name)} class="tt-btn tt-btn-danger">Cancel</button>
-      {:else if !isInstalled}
-        <button onclick={() => startDownload(m)} class="tt-btn">Download</button>
-      {:else if isSelected}
-        <button onclick={() => removeModel(installedPath)} title="Remove" class="tt-model-x">×</button>
-        <button disabled class="tt-btn tt-btn-success">Selected</button>
-      {:else}
-        <button onclick={() => removeModel(installedPath)} title="Remove" class="tt-model-x">×</button>
-        <button onclick={() => selectModel(installedPath)} class="tt-btn tt-btn-accent">Use</button>
-      {/if}
-    </div>
-  {/snippet}
-
-  {#snippet altModelActions(m, accent = false)}
-    {@const isDownloading = m.id in downloadProgress}
-    {@const pct           = downloadProgress[m.id] ?? 0}
-    {@const isInstalled   = m.installed}
-    {@const isActive      = altModelActive(m)}
-    {#if isDownloading}
-      <span class="tt-model-pct" class:tt-model-pct-lg={accent}>{pct}%</span>
-      <button onclick={() => cancelAltDownload(m)} class="tt-btn" class:tt-btn-md={accent} class:tt-btn-danger={accent}>Cancel</button>
-    {:else if !isInstalled}
-      <button onclick={() => startAltDownload(m)} class="tt-btn" class:tt-btn-md={accent} class:tt-btn-accent={accent}>Download</button>
-    {:else if isActive}
-      <button onclick={() => removeAltModel(m)} title="Remove" class="tt-model-x" class:tt-model-x-lg={accent}>×</button>
-      <button disabled class="tt-btn" class:tt-btn-md={accent} class:tt-btn-success={accent}>Selected</button>
-    {:else}
-      <button onclick={() => removeAltModel(m)} title="Remove" class="tt-model-x" class:tt-model-x-lg={accent}>×</button>
-      <button onclick={() => selectAltModel(m)} class="tt-btn" class:tt-btn-md={accent} class:tt-btn-accent={!accent}>Use</button>
-    {/if}
-  {/snippet}
-
-  {#snippet altModelRow(m, accent = false)}
-    {@const isActive = altModelActive(m)}
-    {#if accent}
-      <div class="tt-model-card group" class:tt-model-card-selected={isActive}>
-        <div class="tt-model-card-hd">
-          <span class="tt-model-star">★</span>
-          <span class="tt-model-star-lbl">Recommended</span>
-        </div>
-        <div class="tt-model-card-body">
-          <div class="tt-row-info">
-            <div class="tt-model-name-row">
-              <span class="tt-tier-name">{m.tier}</span>
-              <span class="tt-model-name-pill">{m.label}</span>
-            </div>
-            <span class="tt-desc">{m.description}</span>
-          </div>
-          <span class="tt-model-size">{m.size}</span>
-          {@render altModelActions(m, true)}
-        </div>
-      </div>
-    {:else}
-      <div class="tt-model-row group">
-        <div class="tt-row-info">
-          <div class="tt-model-name-row">
-            <span class="tt-tier-name">{m.tier}</span>
-            <span class="tt-model-name-pill">{m.label}</span>
-          </div>
-          <span class="tt-model-desc">{m.description}</span>
-        </div>
-        <span class="tt-model-size">{m.size}</span>
-        {@render altModelActions(m, false)}
-      </div>
-    {/if}
-  {/snippet}
 
   <!-- Models tab -->
   {#if activeTab === 'models'}
-    <div class="tt-set flex-1 min-h-0 overflow-y-auto">
-
-    <!-- Transcription Engine -->
-    <div class="tt-section">
-      <div class="subsection-hd"><span class="subsection-hd-title">Transcription Engine</span></div>
-      <div class="tt-row tt-row-field" data-tip="Which local transcription engine to use. Download a model below after switching.">
-        <div class="tt-seg tt-seg-wide">
-          {#each ENGINE_OPTIONS as [v, lbl], i}
-            <button onclick={() => setTranscriptionEngine(v)} class={seg(cfgBackend === v, i, ENGINE_OPTIONS.length)}>{lbl}</button>
-          {/each}
-        </div>
-      </div>
-      {#if cfgBackend === 'parakeet'}
-        <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">Recommended default · English-only · fastest. Download the model below.</p>
-      {:else if cfgBackend === 'moonshine'}
-        <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">English-only · low hallucination on silence. Download Moonshine Tiny below.</p>
-      {:else}
-        <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">Multilingual · most accurate. Model managed below.</p>
-      {/if}
-    </div>
-
-    {#if cfgBackend === 'whisper'}
-      {@const rmFilename      = RECOMMENDED_MODEL.name + '.bin'}
-      {@const rmInstalledPath = cfgModels.find(p => p.endsWith(rmFilename))}
-      {@const rmIsInstalled   = !!rmInstalledPath}
-      {@const rmIsSelected    = rmIsInstalled && cfgModel === rmInstalledPath}
-      {@const rmIsDownloading = RECOMMENDED_MODEL.name in downloadProgress}
-      {@const rmPct           = downloadProgress[RECOMMENDED_MODEL.name] ?? 0}
-
-      <!-- Recommended -->
-      <div class="tt-section">
-        <div class="subsection-hd"><span class="subsection-hd-title">Recommended</span></div>
-        <div class="tt-row tt-row-field">
-          <div class="tt-model-card group" class:tt-model-card-selected={rmIsSelected}>
-            <div class="tt-model-card-hd">
-              <span class="tt-model-star">★</span>
-              <span class="tt-model-star-lbl">Recommended</span>
-            </div>
-            <div class="tt-model-card-body">
-              <div class="tt-row-info">
-                <div class="tt-model-name-row">
-                  <span class="tt-tier-name">{RECOMMENDED_MODEL.tier}</span>
-                  <span class="tt-model-name-pill">{RECOMMENDED_MODEL.name}</span>
-                </div>
-                <span class="tt-desc">{RECOMMENDED_MODEL.description}</span>
-              </div>
-              <span class="tt-model-size">{RECOMMENDED_MODEL.size}</span>
-              {#if rmIsDownloading}
-                <span class="tt-model-pct tt-model-pct-lg">{rmPct}%</span>
-                <button onclick={() => commands.cancelDownload(RECOMMENDED_MODEL.name)} class="tt-btn tt-btn-md tt-btn-danger">Cancel</button>
-              {:else if !rmIsInstalled}
-                <button onclick={() => startDownload(RECOMMENDED_MODEL)} class="tt-btn tt-btn-md tt-btn-accent">Download</button>
-              {:else if rmIsSelected}
-                <button onclick={() => removeModel(rmInstalledPath)} title="Remove" class="tt-model-x tt-model-x-lg">×</button>
-                <button disabled class="tt-btn tt-btn-md tt-btn-success">Selected</button>
-              {:else}
-                <button onclick={() => removeModel(rmInstalledPath)} title="Remove" class="tt-model-x tt-model-x-lg">×</button>
-                <button onclick={() => selectModel(rmInstalledPath)} class="tt-btn tt-btn-md tt-btn-accent">Use</button>
-              {/if}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Available -->
-      <div class="tt-section">
-        <div class="subsection-hd"><span class="subsection-hd-title">Available</span></div>
-        {#each MODEL_CATALOG as m}
-          {@render modelRow(m)}
-        {/each}
-      </div>
-
-      <!-- Custom model -->
-      <div class="tt-section tt-section-last">
-        <div class="subsection-hd"><span class="subsection-hd-title">Custom model</span></div>
-        {#if customPath}
-          <div class="tt-row tt-row-field">
-            <div class="tt-custom-pill">
-              <span class="tt-custom-name" title={customPath}>{customPath.split('/').at(-1)}</span>
-              <span class="tt-custom-status">Connected</span>
-              <button onclick={() => removeModel(customPath)} title="Clear custom model" class="tt-model-x tt-model-x-visible">×</button>
-            </div>
-          </div>
-        {:else}
-          <div class="tt-row tt-row-field">
-            <input
-              bind:value={newModelPath}
-              onkeydown={(e) => e.key === 'Enter' && setCustomModel(newModelPath)}
-              placeholder="Paste path to .bin file…"
-              class="tt-input"
-              spellcheck="false"
-            />
-            <button onclick={browseCustomModel} class="tt-btn">Browse</button>
-          </div>
-        {/if}
-        {#if !modelConfigured}
-          <div class="tt-row">
-            <p class="tt-warn">No model selected — transcription will fail.</p>
-          </div>
-        {/if}
-      </div>
-
-    {:else}
-      <!-- Moonshine / Parakeet model catalog -->
-      {#if altModels.length === 0}
-        <div class="tt-section">
-          <div class="subsection-hd"><span class="subsection-hd-title">{cfgBackend === 'moonshine' ? 'Moonshine' : 'Parakeet'} Models</span></div>
-          <div class="tt-row"><p class="tt-desc">Loading…</p></div>
-        </div>
-      {:else}
-        {@const recAltModel = altModels.find(m => m.recommended)}
-        {@const altCatalog  = altModels.filter(m => !m.recommended)}
-
-        {#if recAltModel}
-          <div class="tt-section">
-            <div class="subsection-hd"><span class="subsection-hd-title">Recommended</span></div>
-            <div class="tt-row tt-row-field">
-              {@render altModelRow(recAltModel, true)}
-            </div>
-          </div>
-        {/if}
-
-        {#if altCatalog.length > 0}
-          <div class="tt-section">
-            <div class="subsection-hd"><span class="subsection-hd-title">Available</span></div>
-            {#each altCatalog as m}
-              {@render altModelRow(m, false)}
-            {/each}
-          </div>
-        {/if}
-      {/if}
-
-      <div class="tt-section tt-section-last">
-        {#if !modelConfigured}
-          <div class="tt-row">
-            <p class="tt-warn">No model selected — transcription will fail.</p>
-          </div>
-        {/if}
-        <div class="tt-row tt-row-col">
-          <p class="tt-desc">Models are stored in <code>~/.config/turbotalk/models/{cfgBackend}/</code>.</p>
-        </div>
-      </div>
-    {/if}
-
-    </div>
+    <ModelsTab state={modelsState()} actions={modelsActions()} />
   {/if}
 
   <!-- Modes tab -->
   {#if activeTab === 'modes'}
-    {@const isAdv = cfgCleanupMode === 'chaperone'}
-    <div class="flex-1 min-h-0 overflow-y-auto pb-4 bg-[var(--surface)]">
-
-      <div class="tt-set" style={isAdv ? 'min-height:auto' : ''}>
-        <!-- Post-processing -->
-        <div class="tt-section">
-          <div class="subsection-hd"><span class="subsection-hd-title">Post-processing</span></div>
-          <div class="tt-row tt-row-field">
-            <div class="tt-seg tt-seg-wide">
-              {#each [['off','Off'],['regex','Simple'],['chaperone','Advanced']] as [v, lbl], i}
-                <button onclick={() => handleModeClick(v)} class={seg(cfgCleanupMode === v, i, 3)}>{lbl}</button>
-              {/each}
-            </div>
-          </div>
-          <div class="tt-row tt-row-col">
-            <p class="tt-desc">
-              {#if cfgCleanupMode === 'off'}
-                Paste raw Whisper output — no formatting, no changes.
-              {:else if cfgCleanupMode === 'regex'}
-                Capitalizes the first letter. Fast, deterministic, works offline.
-              {:else}
-                Routes transcript through a local Ollama model for intent-aware formatting. Sends transcript to your local Ollama server (localhost only — no internet).
-              {/if}
-            </p>
-          </div>
-
-          {#if cfgCleanupMode !== 'off'}
-            <div class="tt-row tt-row-col tt-check-stack-list">
-              {#each [
-                ['strip_fillers',   cfgStripFillers,   (v) => { cfgStripFillers   = v; saveModes(); }, 'Strip filler words',      'Removes um, uh, er, hmm.'],
-                ['append_period',   cfgAppendPeriod,   (v) => { cfgAppendPeriod   = v; saveModes(); }, 'Append period',           'Adds a period if no punctuation present.'],
-                ['strip_artifacts', cfgStripArtifacts, (v) => { cfgStripArtifacts = v; saveModes(); }, 'Strip Whisper artifacts', 'Removes trailing " ." and "..." on silence.'],
-              ] as [key, val, setter, label, desc]}
-                <label class="tt-check-row tt-check-row-stacked">
-                  <input
-                    type="checkbox"
-                    class="cb-native"
-                    checked={val}
-                    onchange={() => setter(!val)}
-                  />
-                  <div class="tt-check-stack">
-                    <span class="tt-check-lbl tt-check-lbl-strong">{label}</span>
-                    <p class="tt-check-desc">{desc}</p>
-                  </div>
-                </label>
-              {/each}
-            </div>
-          {/if}
-        </div>
-
-        <!-- Whisper bias prompt -->
-        <div class="tt-section {isAdv ? '' : 'tt-section-last'}">
-          <div class="subsection-hd"><span class="subsection-hd-title">Whisper</span></div>
-          <div class="tt-row tt-row-field" data-tip="Skip silent regions before transcription — prevents hallucination on silence and speeds up long recordings">
-            <span class="tt-lbl">Silence Filter</span>
-            <div class="tt-multi">
-              <button
-                onclick={() => { cfgVadEnabled = !cfgVadEnabled; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgVadEnabled}
-                data-tip="Silero VAD pre-filter — when on, whisper-server skips silent regions before transcribing">Skip silent regions (VAD)</button>
-            </div>
-          </div>
-          <div class="tt-row tt-row-col">
-            <label for="custom-vocabulary" class="tt-lbl tt-lbl-fixed">Custom vocabulary</label>
-            <textarea
-              id="custom-vocabulary"
-              bind:value={cfgVocabulary}
-              onchange={() => saveModes()}
-              rows="4"
-              placeholder={"One word or phrase per line…\nTurbo Talk\nOllama\nggml-base"}
-              class="tt-input tt-mono"
-              spellcheck="false"
-            ></textarea>
-            <p class="tt-desc">Domain terms Whisper tends to mishear. Applied as <code class="tt-code">--prompt</code> bias every transcription.</p>
-          </div>
-        </div>
-      </div>
-
-      <!-- TODO: test Advanced tab Ollama buttons (Install Ollama, Download model) on Windows — ensure buttons are reachable and functional -->
-      <!-- Advanced (Chaperone) — stacked below Post-processing + Whisper -->
-      {#if isAdv}
-        <div class="tt-set adv-panel-in" style="min-height:auto">
-
-          <!-- Setup -->
-          <div class="tt-section">
-            <div class="subsection-hd">
-              <span class="subsection-hd-title">Setup</span>
-              {#if ollamaReachable && ollamaModelPresent}
-                <span class="tt-status-ready">Ready</span>
-              {/if}
-            </div>
-
-            {#if ollamaReachable === null}
-              <div class="tt-row tt-row-action">
-                <div class="tt-row-info">
-                  <span class="tt-check-lbl tt-check-lbl-strong">Checking Ollama…</span>
-                </div>
-                <button onclick={refreshOllamaSetup} class="tt-btn">Refresh</button>
-              </div>
-            {:else if ollamaReachable === false}
-              <div class="tt-row tt-row-action">
-                <div class="tt-row-info">
-                  <span class="tt-check-lbl tt-check-lbl-strong">Ollama not running</span>
-                  <p class="tt-check-desc">Start the Ollama app, then click Refresh. Or install it if you haven't yet.</p>
-                </div>
-                <div class="flex flex-col gap-1.5 items-end">
-                  <button onclick={refreshOllamaSetup} class="tt-btn">Refresh</button>
-                  <button onclick={installOllama} class="tt-btn" style="font-size:10px;opacity:0.7">Install Ollama</button>
-                </div>
-              </div>
-            {:else if ollamaReachable === true && !ollamaModelPresent}
-              <div class="tt-row tt-row-action">
-                <div class="tt-row-info">
-                  <span class="tt-check-lbl tt-check-lbl-strong">ollama reachable · classifier model missing</span>
-                  <p class="tt-check-desc">{cfgLlmModel || 'llama3.2:3b'} — not yet pulled</p>
-                  {#if ollamaPullState.inFlight}
-                    <div class="tt-progress-row">
-                      <div class="tt-progress-track">
-                        <div class="tt-progress-fill" style="width:{ollamaPullState.pct}%"></div>
-                      </div>
-                      <span class="tt-progress-pct">{ollamaPullState.pct}%</span>
-                    </div>
-                    {#if ollamaPullState.status}
-                      <p class="tt-check-desc tt-truncate">{ollamaPullState.status}</p>
-                    {/if}
-                  {/if}
-                  {#if ollamaPullState.error}
-                    <p class="tt-check-desc" style="color:var(--error,#f87171)">{ollamaPullState.error}</p>
-                  {/if}
-                </div>
-                <button onclick={startOllamaPull} disabled={ollamaPullState.inFlight} class="tt-btn">
-                  {ollamaPullState.inFlight ? '↓ …' : 'Download (~2GB)'}
-                </button>
-              </div>
-            {:else if ollamaReachable === true && ollamaModelPresent}
-              <div class="tt-row tt-row-action">
-                <div class="tt-row-info">
-                  {#if ollamaModelPartial}
-                    <span class="tt-check-lbl tt-check-lbl-strong" style="color:var(--error,#f87171)">Incomplete download detected</span>
-                    <p class="tt-check-desc">The previous download was interrupted. Re-pull to fix.</p>
-                  {:else}
-                    <span class="tt-check-lbl tt-check-lbl-strong">Model present</span>
-                    <p class="tt-check-desc">Re-pull if the model is behaving incorrectly.</p>
-                  {/if}
-                  {#if ollamaPullState.inFlight}
-                    <div class="tt-progress-row">
-                      <div class="tt-progress-track">
-                        <div class="tt-progress-fill" style="width:{ollamaPullState.pct}%"></div>
-                      </div>
-                      <span class="tt-progress-pct">{ollamaPullState.pct}%</span>
-                    </div>
-                    {#if ollamaPullState.status}
-                      <p class="tt-check-desc tt-truncate">{ollamaPullState.status}</p>
-                    {/if}
-                  {/if}
-                  {#if ollamaPullState.error}
-                    <p class="tt-check-desc" style="color:var(--error,#f87171)">{ollamaPullState.error}</p>
-                  {/if}
-                </div>
-                <button onclick={startOllamaPull} disabled={ollamaPullState.inFlight} class="tt-btn" class:tt-btn-danger-hover={ollamaModelPartial && !ollamaPullState.inFlight}>
-                  {ollamaPullState.inFlight ? '↓ …' : ollamaModelPartial ? 'Fix Download' : 'Re-pull'}
-                </button>
-              </div>
-            {/if}
-          </div>
-
-          <!-- Ollama -->
-          <div class="tt-section">
-            <div class="subsection-hd"><span class="subsection-hd-title">Ollama</span></div>
-            <div class="tt-row tt-row-col">
-              <label for="ollama-url" class="tt-lbl tt-lbl-fixed">URL</label>
-              <input
-                id="ollama-url"
-                bind:value={cfgOllamaUrl}
-                onchange={() => saveModes()}
-                class="tt-input"
-                spellcheck="false"
-              />
-            </div>
-            <div class="tt-row tt-row-col">
-              <label for="classifier-model" class="tt-lbl tt-lbl-fixed">Classifier model</label>
-              <input
-                id="classifier-model"
-                bind:value={cfgLlmModel}
-                onchange={() => saveModes()}
-                placeholder="llama3.2:3b"
-                class="tt-input"
-                spellcheck="false"
-              />
-              <p class="tt-desc">Run <code class="tt-code">ollama pull llama3.2:3b</code> to fetch.</p>
-            </div>
-          </div>
-
-          <!-- Classifier prompt -->
-          <div class="tt-section tt-section-last">
-            <div class="subsection-hd"><span class="subsection-hd-title">Classifier prompt</span></div>
-            <div class="tt-row tt-row-col">
-              <div class="tt-multi tt-multi-wrap">
-                {#each PROMPT_PRESETS as p (p.id)}
-                  <button
-                    onclick={() => applyPreset(p)}
-                    class="tt-multi-btn"
-                    class:tt-multi-on={activePresetId === p.id}
-                  >{p.label}</button>
-                {/each}
-              </div>
-              <textarea
-                id="classifier-prompt"
-                bind:value={cfgClassifierPrompt}
-                onchange={() => saveModes()}
-                rows="10"
-                class="tt-input tt-mono"
-                spellcheck="false"
-              ></textarea>
-              <div class="tt-inline-foot">
-                <p class="tt-desc"><code class="tt-code">{'{text}'}</code> replaced with transcript.</p>
-                <button
-                  onclick={() => { cfgClassifierPrompt = DEFAULT_CLASSIFIER_PROMPT; saveModes(); }}
-                  class="tt-reset-btn"
-                >Reset</button>
-              </div>
-            </div>
-          </div>
-
-        </div>
-      {/if}
-
-    </div>
+    <ModesTab state={modesState()} actions={modesActions()} />
   {/if}
 
   <!-- Settings tab -->
@@ -2427,664 +1962,3 @@ Reply with only the single word, lowercase, no punctuation.
   </div>
 
 </div>
-
-<style>
-  @keyframes about-backdrop-in {
-    0%   { background: rgba(0,0,0,0);   backdrop-filter: blur(0px); }
-    100% { background: rgba(0,0,0,0.55); backdrop-filter: blur(8px); }
-  }
-  @keyframes about-backdrop-out {
-    0%   { background: rgba(0,0,0,0.55); backdrop-filter: blur(8px); }
-    100% { background: rgba(0,0,0,0);    backdrop-filter: blur(0px); }
-  }
-  @keyframes about-card-in {
-    0%   { opacity: 0; filter: blur(8px); transform: translateY(10px) scale(0.97); }
-    100% { opacity: 1; filter: blur(0px); transform: translateY(0)    scale(1);    }
-  }
-  @keyframes about-card-out {
-    0%   { opacity: 1; filter: blur(0px); transform: translateY(0)    scale(1);    }
-    100% { opacity: 0; filter: blur(8px); transform: translateY(10px) scale(0.97); }
-  }
-
-  .about-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .about-backdrop-in  { animation: about-backdrop-in  0.35s ease-out forwards; }
-  .about-backdrop-out { animation: about-backdrop-out 0.45s ease-in  forwards; }
-
-  .about-card {
-    width: 220px;
-    background: var(--surface-raised, #1a1a1a);
-    border: 1px solid var(--border, #2a2a2a);
-    border-radius: 14px;
-    padding: 16px 16px 12px;
-    box-shadow: 0 24px 48px rgba(0,0,0,0.6), 0 4px 12px rgba(0,0,0,0.4);
-  }
-  .reset-card { width: 280px; }
-  .reset-card-sep {
-    height: 1px;
-    margin: 6px 0 2px;
-    background: var(--border, color-mix(in srgb, var(--text-primary) 12%, transparent));
-  }
-  /* Bug-note: keep the fixed little box, let text overflow/scroll, never show a scrollbar. */
-  #bug-note { overflow-y: auto; scrollbar-width: none; }
-  #bug-note::-webkit-scrollbar { width: 0; height: 0; display: none; }
-  .about-card-in  { animation: about-card-in  0.4s cubic-bezier(0.16,1,0.3,1) forwards; }
-  .about-card-out { animation: about-card-out 0.35s ease-in              forwards; }
-
-  @keyframes adv-panel-in {
-    from { opacity: 0; transform: translateY(12px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-  .adv-panel-in { animation: adv-panel-in 0.2s cubic-bezier(0.16,1,0.3,1) forwards; }
-
-  /* ── Settings panel — conventions ───
-     Compact ruled sections with custom segmented and multi-toggle controls.
-     Shared classes (.subsection-hd, .cb-native) live in @libre/ui tokens. */
-  .tt-set {
-    display: flex;
-    flex-direction: column;
-    min-height: 100%;
-    background: var(--surface);
-    color: var(--text-primary);
-    font-size: 13px;
-  }
-  .tt-section {
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 10px;
-  }
-  .tt-section-last { border-bottom: none; padding-bottom: 0; }
-  .tt-section-last .tt-row:last-child { padding-bottom: 0; }
-  .tt-section-last .tt-row-field:last-child { padding-bottom: 4px; }
-
-  .tt-row {
-    display: flex;
-    align-items: center;
-    padding: 4px 12px;
-    gap: 6px;
-    transition: background 0.1s;
-  }
-  .tt-row:hover :global(.tt-lbl) { color: var(--text-primary); }
-  .tt-row-field  { padding-top: 5px; padding-bottom: 5px; }
-  .tt-row-col    { flex-direction: column; align-items: flex-start; gap: 5px; }
-
-  .tt-key-sel    { flex: 1; min-width: 0; margin-left: 12px; }
-  .tt-key-sel :global(button) { padding-top: 5px; padding-bottom: 5px; font-size: 13px; }
-  .tt-key-sel :global(button span) { font-size: 12px; }
-  /* Fixed-width seg slot so paired-row dropdowns left-align cleanly. */
-  .tt-row .tt-seg:not(.tt-seg-wide) { width: 120px; }
-
-  .tt-lbl        { flex: 1; font-size: 12px; color: var(--text-secondary); }
-  .tt-lbl-fixed  { flex: unset; }
-
-  .tt-check-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
-  }
-  .tt-check-disabled { opacity: 0.4; cursor: not-allowed; }
-  .tt-check-lbl      { font-size: 11px; color: var(--text-secondary); }
-
-  /* Segmented buttons */
-  .tt-seg       { display: flex; flex-shrink: 0; }
-  .tt-seg-wide  { width: 100%; }
-  .tt-seg-dim   { opacity: 0.4; }
-  .tt-seg-btn {
-    flex: 1;
-    padding: 3px 10px;
-    font-size: 11px;
-    font-family: inherit;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    background: var(--surface-panel);
-    border: 1px solid var(--border);
-    border-left: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: background 0.1s, color 0.1s;
-    white-space: nowrap;
-  }
-  .tt-seg-first { border-left: 1px solid var(--border); border-radius: 4px 0 0 4px; }
-  .tt-seg-last  { border-radius: 0 4px 4px 0; }
-  .tt-seg-btn:hover {
-    color: var(--text-primary);
-    background: color-mix(in srgb, var(--surface-panel) 80%, var(--text-primary));
-  }
-  .tt-seg-on {
-    background: color-mix(in srgb, var(--accent) 18%, var(--surface-panel));
-    color: #fff;
-    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-  }
-  .tt-seg-on + .tt-seg-btn {
-    border-left-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-  }
-  :global(html:not(.dark)) .tt-seg-on { color: var(--text-primary); }
-
-  /* Multi-toggle pills (Audio indicators) */
-  .tt-multi { display: flex; gap: 4px; flex-shrink: 0; }
-  .tt-multi-btn {
-    padding: 3px 10px;
-    font-size: 11px;
-    font-family: inherit;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    border-radius: 4px;
-    border: 1px solid var(--border);
-    background: var(--surface-panel);
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: background 0.1s, color 0.1s;
-  }
-  .tt-multi-btn:hover { color: var(--text-primary); }
-  .tt-multi-btn:disabled { opacity: 0.35; cursor: default; }
-  .tt-multi-on {
-    background: color-mix(in srgb, var(--accent) 18%, var(--surface-panel));
-    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-    color: #fff;
-  }
-  :global(html:not(.dark)) .tt-multi-on { color: var(--text-primary); }
-
-  /* Volume slider */
-  .tt-vol-hd {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .tt-vol-val {
-    font-size: 10px;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-muted);
-  }
-  .tt-range {
-    width: 100%;
-    height: 4px;
-    appearance: none;
-    -webkit-appearance: none;
-    background: linear-gradient(to right, var(--accent) var(--pct, 70%), var(--border) var(--pct, 70%));
-    border-radius: 2px;
-    cursor: pointer;
-    outline: none;
-  }
-  .tt-range::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: radial-gradient(circle, #fff 30%, var(--accent) 30%);
-    border: 2px solid var(--surface);
-    box-shadow: 0 0 0 1px var(--accent);
-    cursor: pointer;
-  }
-
-  .tt-footer-tip {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 10px;
-    color: var(--text-tertiary, #888);
-    white-space: nowrap;
-    pointer-events: none;
-  }
-
-  .tt-update-row { padding-top: 10px; }
-
-  /* ── Modes panel extensions ──────────────────────────────────────────── */
-
-  /* Descriptive paragraph under section headers / form fields */
-  .tt-desc {
-    font-size: 11px;
-    line-height: 1.5;
-    color: var(--text-muted);
-  }
-  .tt-code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 10.5px;
-    padding: 1px 4px;
-    border-radius: 3px;
-    background: color-mix(in srgb, var(--surface-panel) 60%, var(--border));
-    color: var(--text-secondary);
-  }
-
-  /* Stacked check row: checkbox + (label, description) two-line content */
-  .tt-check-stack-list { gap: 8px; }
-  .tt-check-row-stacked { align-items: flex-start; }
-  .tt-check-row-stacked .cb-native { margin-top: 2px; }
-  .tt-check-stack {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    min-width: 0;
-  }
-  .tt-check-lbl-strong {
-    color: var(--text-primary);
-    font-size: 12px;
-  }
-  .tt-check-desc {
-    font-size: 11px;
-    color: var(--text-muted);
-  }
-
-  /* Inputs & textarea (Modes-only patterns) */
-  .tt-input {
-    width: 100%;
-    padding: 6px 8px;
-    font-size: 12.5px;
-    font-family: inherit;
-    background: var(--surface-raised);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    color: var(--text-primary);
-    outline: none;
-    transition: border-color 0.1s;
-  }
-  textarea.tt-input { resize: none; line-height: 1.5; }
-  .tt-input:hover, .tt-input:focus { border-color: var(--accent); }
-  .tt-input::placeholder { color: var(--text-muted); }
-  .tt-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-
-  /* Row with info on the left, action button on the right */
-  .tt-row-action { align-items: flex-start; gap: 8px; }
-  .tt-row-info   { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-
-  /* Inline-foot row: text on left, small action on right */
-  .tt-inline-foot {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-  .tt-reset-btn {
-    font-size: 11px;
-    color: var(--text-muted);
-    background: transparent;
-    border: none;
-    padding: 0;
-    cursor: pointer;
-    transition: color 0.1s;
-  }
-  .tt-reset-btn:hover { color: var(--accent); }
-
-  /* Ollama pull progress */
-  .tt-progress-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 4px;
-  }
-  .tt-progress-track {
-    flex: 1;
-    height: 4px;
-    background: var(--border);
-    border-radius: 2px;
-    overflow: hidden;
-  }
-  .tt-progress-fill {
-    height: 100%;
-    background: var(--accent);
-    border-radius: 2px;
-    transition: width 0.3s;
-  }
-  .tt-progress-pct {
-    width: 32px;
-    text-align: right;
-    font-size: 10px;
-    color: var(--accent);
-    font-variant-numeric: tabular-nums;
-  }
-  .tt-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-  /* "Ready" badge in subsection-hd */
-  .tt-status-ready {
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: color-mix(in srgb, var(--accent) 60%, #4ade80);
-  }
-
-  /* Preset chip container — uses .tt-multi-btn underneath but wraps */
-  .tt-multi-wrap { flex-wrap: wrap; gap: 4px; }
-
-  /* Note: .tt-btn family (base + size/variant/state modifiers) lives in
-     src/app.css — global because UpdateManager (separate component) needs
-     the same look. The .tt-btn-recording state for History also lives there. */
-
-  /* ── Models tab ──────────────────────────────────────────────────────── */
-  .tt-model-card {
-    width: 100%;
-    padding: 12px 14px;
-    border-radius: 10px;
-    border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
-    background: color-mix(in srgb, var(--accent) 8%, var(--surface));
-    transition: border-color 0.1s, background 0.1s;
-  }
-  .tt-model-card:hover {
-    border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
-  }
-  .tt-model-card-selected {
-    background: color-mix(in srgb, #22c55e 10%, var(--surface));
-    border-color: color-mix(in srgb, #22c55e 40%, var(--border));
-  }
-  .tt-model-card-hd {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: 6px;
-  }
-  .tt-model-star {
-    color: #f59e0b;
-    font-size: 13px;
-    line-height: 1;
-  }
-  :global(html.dark) .tt-model-star { color: #facc15; }
-  .tt-model-star-lbl {
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: #f59e0b;
-  }
-  :global(html.dark) .tt-model-star-lbl { color: #facc15; }
-  .tt-model-card-body {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .tt-model-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
-  }
-  .tt-model-name-row {
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-    min-width: 0;
-  }
-  .tt-tier-name {
-    font-size: 13px;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    color: var(--text-primary);
-  }
-  .tt-model-name-pill {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 9px;
-    color: color-mix(in srgb, var(--text-muted) 60%, var(--text-primary));
-    opacity: 0.7;
-    background: color-mix(in srgb, var(--text-muted) 8%, transparent);
-    border: 1px solid color-mix(in srgb, var(--text-muted) 14%, transparent);
-    border-radius: 4px;
-    padding: 1px 5px;
-    white-space: nowrap;
-    align-self: center;
-  }
-  .tt-model-size {
-    font-size: 11px;
-    color: var(--text-muted);
-    flex-shrink: 0;
-  }
-  .tt-model-desc {
-    font-size: 10.5px;
-    color: color-mix(in srgb, var(--text-muted) 60%, var(--text-primary));
-  }
-  .tt-model-pct {
-    flex-shrink: 0;
-    width: 32px;
-    text-align: right;
-    font-size: 10px;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-primary);
-  }
-  .tt-model-pct-lg { width: 40px; font-size: 12px; }
-  .tt-model-x {
-    flex-shrink: 0;
-    width: 20px;
-    height: 20px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 4px;
-    border: none;
-    background: transparent;
-    color: #f87171;
-    font-size: 13px;
-    cursor: pointer;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.1s, background 0.1s;
-  }
-  .tt-model-x:hover { background: color-mix(in srgb, #ef4444 15%, transparent); }
-  .group:hover .tt-model-x { opacity: 1; pointer-events: auto; }
-  .tt-model-x-lg { width: 24px; height: 24px; font-size: 14px; }
-  .tt-model-x-visible { opacity: 1; pointer-events: auto; }
-
-  .tt-custom-pill {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    border-radius: 8px;
-    border: 1px solid color-mix(in srgb, #22c55e 40%, var(--border));
-    background: color-mix(in srgb, #22c55e 10%, var(--surface));
-  }
-  .tt-custom-name {
-    flex: 1;
-    min-width: 0;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    color: #4ade80;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .tt-custom-status {
-    flex-shrink: 0;
-    font-size: 11px;
-    font-weight: 600;
-    color: #4ade80;
-  }
-
-  .tt-warn { color: #f87171; font-size: 11px; }
-  :global(html:not(.dark)) .tt-warn { color: #dc2626; }
-
-  /* ── History tab ─────────────────────────────────────────────────────── */
-  .tt-history {
-    font-size: 13px;
-    color: var(--text-primary);
-  }
-
-  .tt-banner-error {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    margin: 8px 12px 0;
-    padding: 8px 12px;
-    border-radius: 8px;
-    border: 1px solid color-mix(in srgb, #ef4444 30%, var(--border));
-    background: color-mix(in srgb, #ef4444 10%, var(--surface));
-  }
-  .tt-banner-error-msg {
-    flex: 1;
-    font-size: 11px;
-    line-height: 1.4;
-    color: #f87171;
-  }
-  .tt-banner-close {
-    flex-shrink: 0;
-    background: none;
-    border: none;
-    color: color-mix(in srgb, #f87171 70%, transparent);
-    font-size: 14px;
-    line-height: 1;
-    cursor: pointer;
-    padding: 0;
-  }
-  .tt-banner-close:hover { color: #f87171; }
-
-  .tt-history-empty {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-  }
-  .tt-history-empty-status {
-    color: var(--text-muted);
-    user-select: none;
-    animation: pulse 1.6s ease-in-out infinite;
-  }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50%      { opacity: 0.45; }
-  }
-  .tt-history-empty-hint {
-    color: var(--text-muted);
-    font-size: 12px;
-    user-select: none;
-  }
-  .tt-kbd {
-    padding: 6px 14px;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    background: var(--surface-raised);
-    color: var(--text-secondary);
-    font-family: inherit;
-    font-size: 14px;
-    user-select: none;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-  }
-
-  .tt-history-list {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 8px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .tt-history-item {
-    position: relative;
-    width: 100%;
-    text-align: left;
-    font-size: 13px;
-    line-height: 1.55;
-    padding: 8px 10px;
-    border: none;
-    background: color-mix(in srgb, var(--surface) 50%, transparent);
-    border-radius: 6px;
-    cursor: pointer;
-    color: var(--text-primary);
-    transition: background 0.1s;
-  }
-  .tt-history-item:hover {
-    background: color-mix(in srgb, var(--text-primary) 6%, color-mix(in srgb, var(--surface) 50%, transparent));
-  }
-  .tt-history-item-flaky {
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, #fbbf24 50%, transparent);
-  }
-  .tt-history-text {
-    display: block;
-    max-height: 4.875em;
-    overflow: hidden;
-    -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 1.5em), transparent);
-    mask-image: linear-gradient(to bottom, black calc(100% - 1.5em), transparent);
-  }
-  .tt-history-text-hidden { visibility: hidden; }
-  .tt-history-copied {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    font-weight: 500;
-    color: #4ade80;
-    pointer-events: none;
-  }
-
-  .tt-history-actions {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 8px 12px;
-  }
-  .tt-rec-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #f87171;
-    flex-shrink: 0;
-  }
-  /* .tt-btn-recording lives in src/app.css alongside the rest of the .tt-btn family. */
-
-  /* ── No-model yellow popup ───────────────────────────────────────────── */
-  .no-model-card {
-    width: 280px;
-    background: #facc15;
-    border: 2px solid #ca8a04;
-    color: #422006;
-    box-shadow: 0 24px 48px rgba(0,0,0,0.6), 0 4px 12px rgba(202,138,4,0.4);
-  }
-  .no-model-icon {
-    font-size: 32px;
-    line-height: 1;
-    color: #422006;
-  }
-  .no-model-title {
-    font-size: 16px;
-    font-weight: 800;
-    letter-spacing: 0.04em;
-    color: #422006;
-    text-align: center;
-  }
-  .no-model-body {
-    font-size: 12px;
-    line-height: 1.4;
-    color: #422006;
-    text-align: center;
-    margin-top: 2px;
-  }
-  .no-model-cta {
-    width: 100%;
-    padding: 8px 12px;
-    background: #422006;
-    color: #facc15;
-    border: none;
-    border-radius: 8px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.15s ease;
-  }
-  .no-model-cta:hover { background: #1c1207; }
-  .no-model-dismiss {
-    width: 100%;
-    padding: 6px 12px;
-    background: transparent;
-    color: #422006;
-    border: 1px solid color-mix(in srgb, #422006 30%, transparent);
-    border-radius: 8px;
-    font-size: 11px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background 0.15s ease;
-  }
-  .no-model-dismiss:hover { background: color-mix(in srgb, #422006 10%, transparent); }
-</style>

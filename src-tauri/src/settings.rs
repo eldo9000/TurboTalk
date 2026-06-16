@@ -1,6 +1,6 @@
 // Config persistence — ~/.config/turbotalk/config.toml
 use parking_lot::RwLock;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -73,9 +73,9 @@ pub struct Config {
     /// Which transcription backend family to use. Default: Parakeet.
     #[serde(default)]
     pub backend: BackendFamily,
-    /// Active variant within the chosen backend family — e.g. "tiny"/"base"
-    /// for Moonshine, "tdt-0.6b-v2" for Parakeet. Empty means use the family
-    /// default in `resolve_backend_variant`.
+    /// Active variant within the chosen backend family — e.g. "tdt-0.6b-v2"
+    /// for Parakeet. Empty means use the family default in
+    /// `resolve_backend_variant`.
     #[serde(default)]
     pub backend_variant: String,
 }
@@ -116,14 +116,44 @@ pub struct WhisperConfig {
 
 /// Which transcription backend family to use.
 ///
-/// Persisted as lowercase ("whisper" / "moonshine" / "parakeet").
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, specta::Type)]
+/// Persisted as lowercase ("whisper" / "parakeet"). Legacy "moonshine"
+/// configs are accepted on load and normalized to Parakeet.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum BackendFamily {
     Whisper,
-    Moonshine,
     #[default]
     Parakeet,
+}
+
+impl<'de> Deserialize<'de> for BackendFamily {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct BackendFamilyVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for BackendFamilyVisitor {
+            type Value = BackendFamily;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str(r#"one of "whisper", "parakeet", or legacy "moonshine""#)
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "whisper" => Ok(BackendFamily::Whisper),
+                    "parakeet" | "moonshine" => Ok(BackendFamily::Parakeet),
+                    other => Err(E::unknown_variant(other, &["whisper", "parakeet"])),
+                }
+            }
+        }
+
+        deserializer.deserialize_str(BackendFamilyVisitor)
+    }
 }
 
 /// Resolve the active ONNX/Whisper variant string for the current config.
@@ -132,7 +162,6 @@ pub fn resolve_backend_variant(cfg: &Config) -> String {
         return cfg.backend_variant.clone();
     }
     match cfg.backend {
-        BackendFamily::Moonshine => "tiny".into(),
         BackendFamily::Parakeet => "tdt-0.6b-v2".into(),
         BackendFamily::Whisper => String::new(),
     }
@@ -645,6 +674,19 @@ fn migrate_file_if_newer(old_dir: &std::path::Path, new_dir: &std::path::Path, n
     }
 }
 
+fn migrate_legacy_backend(cfg: &mut Config, raw: &toml::Value) -> bool {
+    let Some(backend) = raw.get("backend").and_then(|v| v.as_str()) else {
+        return false;
+    };
+    if backend != "moonshine" {
+        return false;
+    }
+    tracing::info!("[settings] migrating legacy moonshine backend → parakeet");
+    cfg.backend = BackendFamily::Parakeet;
+    cfg.backend_variant.clear();
+    true
+}
+
 fn copy_dir_recursively(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
     if !dst.exists() {
         std::fs::create_dir_all(dst)?;
@@ -672,6 +714,7 @@ pub fn load_detailed() -> LoadConfigResult {
             parse_error: None,
         };
     };
+    let raw_value = toml::from_str::<toml::Value>(&contents).ok();
 
     // First attempt: strict parse.
     let strict_err = match toml::from_str::<Config>(&contents) {
@@ -679,6 +722,13 @@ pub fn load_detailed() -> LoadConfigResult {
             if migrate_platform_defaults(&mut cfg) {
                 if let Err(e) = save(&cfg) {
                     tracing::warn!("[settings] failed to persist platform migration: {e}");
+                }
+            }
+            if let Some(raw) = raw_value.as_ref() {
+                if migrate_legacy_backend(&mut cfg, raw) {
+                    if let Err(e) = save(&cfg) {
+                        tracing::warn!("[settings] failed to persist legacy backend migration: {e}");
+                    }
                 }
             }
             return LoadConfigResult {
@@ -699,6 +749,7 @@ pub fn load_detailed() -> LoadConfigResult {
     // with default, and try again. This catches the common case where an old
     // `mode = "<typo>"` makes the new `CleanupMode` enum reject the file.
     if let Ok(mut value) = toml::from_str::<toml::Value>(&contents) {
+        let raw_for_migration = value.clone();
         if let Some(table) = value.as_table_mut() {
             if table.contains_key("cleanup") {
                 tracing::warn!(
@@ -711,6 +762,11 @@ pub fn load_detailed() -> LoadConfigResult {
             if migrate_platform_defaults(&mut cfg) {
                 if let Err(e) = save(&cfg) {
                     tracing::warn!("[settings] failed to persist platform migration: {e}");
+                }
+            }
+            if migrate_legacy_backend(&mut cfg, &raw_for_migration) {
+                if let Err(e) = save(&cfg) {
+                    tracing::warn!("[settings] failed to persist legacy backend migration: {e}");
                 }
             }
             // Recovery succeeded — surface the original strict-parse error so
@@ -826,6 +882,33 @@ mod tests {
         assert!(serde_json::from_str::<CleanupMode>("\"Off\"").is_err());
         assert!(serde_json::from_str::<CleanupMode>("\"Regex\"").is_err());
         assert!(serde_json::from_str::<CleanupMode>("\"Chaperone\"").is_err());
+    }
+
+    #[test]
+    fn backend_family_accepts_legacy_moonshine_alias() {
+        assert_eq!(
+            serde_json::from_str::<BackendFamily>("\"moonshine\"").unwrap(),
+            BackendFamily::Parakeet
+        );
+    }
+
+    #[test]
+    fn legacy_moonshine_backend_migrates_to_parakeet() {
+        let mut cfg = Config {
+            backend: BackendFamily::Parakeet,
+            backend_variant: "tdt-0.6b-v2".into(),
+            ..Config::default()
+        };
+        let raw: toml::Value = toml::from_str(
+            r#"
+backend = "moonshine"
+backend_variant = "tiny"
+"#,
+        )
+        .expect("raw toml");
+        assert!(migrate_legacy_backend(&mut cfg, &raw));
+        assert_eq!(cfg.backend, BackendFamily::Parakeet);
+        assert_eq!(cfg.backend_variant, "");
     }
 
     #[test]

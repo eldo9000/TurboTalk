@@ -258,14 +258,6 @@ fn model_present() -> bool {
     let cfg = crate::settings::load();
     match cfg.backend {
         BackendFamily::Whisper => whisper_model_present(),
-        BackendFamily::Moonshine => {
-            let variant = crate::settings::resolve_backend_variant(&cfg);
-            crate::transcribe_backends::moonshine::variant_dir(&variant)
-                .and_then(|d| {
-                    crate::transcribe_backends::moonshine::validate_moonshine_model_dir(&d).ok()
-                })
-                .is_some()
-        }
         BackendFamily::Parakeet => {
             let variant = crate::settings::resolve_backend_variant(&cfg);
             crate::transcribe_backends::parakeet::variant_dir(&variant)

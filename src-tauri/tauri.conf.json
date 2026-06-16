@@ -4,7 +4,7 @@
   "identifier": "com.turbotalk.dictation",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:1428",
+    "devUrl": "http://127.0.0.1:1431",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },

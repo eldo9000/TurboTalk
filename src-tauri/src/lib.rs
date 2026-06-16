@@ -311,22 +311,18 @@ fn delete_model_file(path: String) -> Result<bool, String> {
     Ok(true)
 }
 
-/// Delete an ONNX model bundle directory for Moonshine or Parakeet.
+/// Delete an ONNX model bundle directory for Parakeet.
 ///
-/// `family` is "moonshine" or "parakeet"; `variant` is the variant slug
-/// (e.g. "tiny", "tdt-0.6b-v2"). Clears `backend_variant` when the removed
-/// bundle was the active selection. Returns `Ok(true)` when a directory was
-/// removed, `Ok(false)` when it was already gone.
+/// `family` is "parakeet"; `variant` is the variant slug (e.g.
+/// "tdt-0.6b-v2"). Clears `backend_variant` when the removed bundle was the
+/// active selection. Returns `Ok(true)` when a directory was removed,
+/// `Ok(false)` when it was already gone.
 #[tauri::command]
 #[specta::specta]
 fn delete_backend_model(family: String, variant: String) -> Result<bool, String> {
     use crate::settings::BackendFamily;
 
     let (dir, base) = match family.to_lowercase().as_str() {
-        "moonshine" => (
-            crate::transcribe_backends::moonshine::variant_dir(&variant),
-            crate::transcribe_backends::moonshine::moonshine_models_dir(),
-        ),
         "parakeet" => (
             crate::transcribe_backends::parakeet::variant_dir(&variant),
             crate::transcribe_backends::parakeet::parakeet_models_dir(),
@@ -357,13 +353,10 @@ fn delete_backend_model(family: String, variant: String) -> Result<bool, String>
 
     let mut cfg = settings::load();
     if cfg.backend_variant == variant {
-        match cfg.backend {
-            BackendFamily::Moonshine | BackendFamily::Parakeet => {
-                cfg.backend_variant.clear();
-                settings::save(&cfg).map_err(|e| format!("failed to save config: {}", e))?;
-                settings::update_cache(&cfg);
-            }
-            _ => {}
+        if matches!(cfg.backend, BackendFamily::Parakeet) {
+            cfg.backend_variant.clear();
+            settings::save(&cfg).map_err(|e| format!("failed to save config: {}", e))?;
+            settings::update_cache(&cfg);
         }
     }
 
@@ -759,319 +752,6 @@ async fn verify_runtime_model_file(
     Ok(())
 }
 
-/// Download a Moonshine ONNX model bundle from HuggingFace.
-///
-/// `variant` must be "tiny" or "base". Files are stored under:
-///   `~/.config/turbotalk/models/moonshine/<variant>/`
-///
-/// Progress events match the Whisper `download-progress` pattern:
-///   `{ "name": "moonshine-<variant>", "pct": 0..100 }`
-///
-/// The HuggingFace ONNX community repo for each variant:
-///   tiny: https://huggingface.co/onnx-community/moonshine-tiny-ONNX
-///   base: https://huggingface.co/onnx-community/moonshine-base-ONNX
-///
-/// The three required files per variant are:
-///   encoder_model.onnx
-///   decoder_model_merged.onnx
-///   tokenizer.json
-///
-/// Each file is downloaded separately. Progress ticks are per-file (pct within
-/// the overall set). The download key used in progress events is
-/// `"moonshine-<variant>"` so the frontend can show a per-variant progress bar.
-#[tauri::command]
-#[specta::specta]
-async fn download_moonshine_model(
-    variant: String,
-    app: tauri::AppHandle,
-    cancel_set: tauri::State<'_, DownloadCancelSet>,
-) -> Result<(), String> {
-    use tokio::io::AsyncWriteExt;
-
-    // Validate variant name early so we fail fast.
-    if !matches!(variant.as_str(), "tiny" | "base") {
-        return Err(format!(
-            "unknown Moonshine variant {:?} — expected \"tiny\" or \"base\"",
-            variant
-        ));
-    }
-
-    let repo = match variant.as_str() {
-        "tiny" => "onnx-community/moonshine-tiny-ONNX",
-        "base" => "onnx-community/moonshine-base-ONNX",
-        _ => unreachable!(),
-    };
-
-    // FP32 ONNX files live under `onnx/` on HuggingFace. Int8 exports proved
-    // unreliable in practice (empty transcripts on real mic audio despite
-    // healthy peak levels). transcribe-rs's own Moonshine tests use FP32.
-    let files: &[RuntimeModelFileSpec] = match variant.as_str() {
-        "tiny" => &[
-            RuntimeModelFileSpec {
-                remote_path: "onnx/encoder_model.onnx",
-                local_name: "encoder_model.onnx",
-                max_bytes: 40 * MIB,
-                sha256: Some("cbbf580f703b2af2137e0f6d14cd87f31cc67bd858bfd8715403a9489982d1a5"),
-            },
-            RuntimeModelFileSpec {
-                remote_path: "onnx/decoder_model_merged.onnx",
-                local_name: "decoder_model_merged.onnx",
-                max_bytes: 100 * MIB,
-                sha256: Some("4131cef00b62942e9cdef691101f2cc7dbbcd828d71eee8c6c46c28fd051d6cb"),
-            },
-            RuntimeModelFileSpec {
-                remote_path: "tokenizer.json",
-                local_name: "tokenizer.json",
-                max_bytes: 8 * MIB,
-                sha256: Some("e1f9d42221e82686d50cfa0cebfa9e26d3770aa785db0937449409a20b5e7118"),
-            },
-        ],
-        "base" => &[
-            RuntimeModelFileSpec {
-                remote_path: "onnx/encoder_model.onnx",
-                local_name: "encoder_model.onnx",
-                max_bytes: 100 * MIB,
-                sha256: Some("153e128e7abd64a74ee47f2c3f585c3171c4d46cbb368b032827934c4e01e779"),
-            },
-            RuntimeModelFileSpec {
-                remote_path: "onnx/decoder_model_merged.onnx",
-                local_name: "decoder_model_merged.onnx",
-                max_bytes: 200 * MIB,
-                sha256: Some("58778763ca8438963190244d6b26572bdca2cedec56a4b91e828f3f2d69ef3c5"),
-            },
-            RuntimeModelFileSpec {
-                remote_path: "tokenizer.json",
-                local_name: "tokenizer.json",
-                max_bytes: 8 * MIB,
-                sha256: Some("e1f9d42221e82686d50cfa0cebfa9e26d3770aa785db0937449409a20b5e7118"),
-            },
-        ],
-        _ => unreachable!(),
-    };
-
-    // Build destination directory.
-    let mut dest_dir =
-        dirs::home_dir().ok_or_else(|| "Could not locate home directory".to_string())?;
-    dest_dir.push(".config/turbotalk/models/moonshine");
-    dest_dir.push(&variant);
-    tokio::fs::create_dir_all(&dest_dir)
-        .await
-        .map_err(|e| format!("Failed to create model directory: {}", e))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dest_dir, std::fs::Permissions::from_mode(0o700));
-    }
-    let canon_dir = dest_dir
-        .canonicalize()
-        .map_err(|e| format!("Failed to canonicalize model directory: {}", e))?;
-
-    // Verify destination is inside the expected moonshine models dir.
-    {
-        let mut expected_base =
-            dirs::home_dir().ok_or_else(|| "Could not locate home directory".to_string())?;
-        expected_base.push(".config/turbotalk/models/moonshine");
-        if let Ok(canon_base) = expected_base.canonicalize() {
-            if !canon_dir.starts_with(&canon_base) {
-                return Err("Download destination is outside the allowed directory".to_string());
-            }
-        }
-    }
-
-    let event_name = format!("moonshine-{}", variant);
-    let client = reqwest::Client::builder()
-        .user_agent("TurboTalk/0.0.1")
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let _ = app.emit(
-        "download-progress",
-        serde_json::json!({ "name": &event_name, "pct": 0u8 }),
-    );
-
-    // Drop deprecated int8-only bundles so re-download picks up FP32 weights.
-    for legacy in &["encoder_model.int8.onnx", "decoder_model_merged.int8.onnx"] {
-        let p = canon_dir.join(legacy);
-        if p.exists() {
-            let _ = tokio::fs::remove_file(&p).await;
-            tracing::info!("[moonshine-dl] removed legacy int8 file {}", legacy);
-        }
-    }
-
-    for (file_idx, spec) in files.iter().enumerate() {
-        let remote_path = spec.remote_path;
-        let local_name = spec.local_name;
-        let download_key = format!("{}-{}", event_name, local_name);
-
-        // Check for cancellation before starting each file.
-        if cancel_set.lock().remove(&event_name) {
-            return Err("cancelled".into());
-        }
-
-        let url = format!(
-            "https://huggingface.co/{}/resolve/main/{}",
-            repo, remote_path
-        );
-
-        // Validate URL shape — must be huggingface.co.
-        {
-            let parsed = url::Url::parse(&url).map_err(|e| format!("invalid URL: {}", e))?;
-            if parsed.scheme() != "https" || parsed.host_str() != Some("huggingface.co") {
-                return Err("model downloads must use https://huggingface.co".to_string());
-            }
-        }
-
-        // Reject path traversal in local filename.
-        if local_name.contains(std::path::MAIN_SEPARATOR) || local_name.contains("..") {
-            return Err(format!("invalid filename: {}", local_name));
-        }
-        let dest_path = canon_dir.join(local_name);
-        if !dest_path.starts_with(&canon_dir) {
-            return Err("download destination escaped model directory".to_string());
-        }
-
-        // Skip if already downloaded (idempotent re-runs).
-        if dest_path.exists() {
-            match verify_runtime_model_file(&dest_path, spec).await {
-                Ok(()) => {
-                    tracing::info!("[moonshine-dl] {} already present — skipping", local_name);
-                    // Still emit progress for the file.
-                    let base_pct = ((file_idx + 1) * 100 / files.len()).min(99) as u8;
-                    let _ = app.emit(
-                        "download-progress",
-                        serde_json::json!({ "name": &event_name, "pct": base_pct }),
-                    );
-                    continue;
-                }
-                Err(e) => {
-                    let _ = tokio::fs::remove_file(&dest_path).await;
-                    tracing::warn!(
-                        "[moonshine-dl] removed invalid existing {}: {}",
-                        local_name,
-                        e
-                    );
-                }
-            }
-        }
-
-        tracing::info!("[moonshine-dl] downloading {} from {}", local_name, url);
-
-        let mut resp = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| format!("Request failed for {}: {}", local_name, e))?;
-
-        if !resp.status().is_success() {
-            return Err(format!("HTTP {} downloading {}", resp.status(), local_name));
-        }
-
-        let total = resp.content_length();
-        if total.is_some_and(|t| t > spec.max_bytes) {
-            return Err(format!("{} is larger than the allowed limit", local_name));
-        }
-        let mut downloaded: u64 = 0;
-
-        let temp_path = tempfile::Builder::new()
-            .prefix("turbotalk-moonshine-")
-            .suffix(".download")
-            .tempfile_in(&canon_dir)
-            .map_err(|e| format!("Failed to create temp file: {}", e))?
-            .into_temp_path();
-        let temp_file_path = temp_path.to_path_buf();
-        let mut file = tokio::fs::File::create(&temp_file_path)
-            .await
-            .map_err(|e| format!("Failed to create file: {}", e))?;
-
-        loop {
-            if cancel_set.lock().remove(&event_name) {
-                drop(file);
-                let _ = tokio::fs::remove_file(&temp_file_path).await;
-                return Err("cancelled".into());
-            }
-            // Also check per-file cancel key.
-            if cancel_set.lock().remove(&download_key) {
-                drop(file);
-                let _ = tokio::fs::remove_file(&temp_file_path).await;
-                return Err("cancelled".into());
-            }
-            match resp.chunk().await {
-                Ok(Some(chunk)) => {
-                    downloaded += chunk.len() as u64;
-                    if downloaded > spec.max_bytes {
-                        drop(file);
-                        let _ = tokio::fs::remove_file(&temp_file_path).await;
-                        let _ = tokio::fs::remove_file(&dest_path).await;
-                        return Err(format!("{} is larger than the allowed limit", local_name));
-                    }
-                    if let Err(e) = file.write_all(&chunk).await {
-                        drop(file);
-                        let _ = tokio::fs::remove_file(&temp_file_path).await;
-                        return Err(format!("Write failed for {}: {}", local_name, e));
-                    }
-                    // Progress: blend per-file progress with overall file index.
-                    // Each file contributes an equal fraction of 0..99%.
-                    let file_pct = total
-                        .filter(|&t| t > 0)
-                        .map(|t| (downloaded * 100 / t).min(100) as u8)
-                        .unwrap_or(50u8);
-                    let overall_pct = ((file_idx as u32 * 100 + file_pct as u32)
-                        / files.len() as u32)
-                        .min(99) as u8;
-                    let _ = app.emit(
-                        "download-progress",
-                        serde_json::json!({ "name": &event_name, "pct": overall_pct }),
-                    );
-                }
-                Ok(None) => break,
-                Err(e) => {
-                    drop(file);
-                    let _ = tokio::fs::remove_file(&temp_file_path).await;
-                    return Err(format!("Download interrupted for {}: {}", local_name, e));
-                }
-            }
-        }
-
-        file.flush().await.map_err(|e| e.to_string())?;
-        drop(file);
-
-        if let Err(e) = verify_runtime_model_file(&temp_file_path, spec).await {
-            let _ = tokio::fs::remove_file(&temp_file_path).await;
-            let _ = tokio::fs::remove_file(&dest_path).await;
-            return Err(e);
-        }
-
-        tokio::fs::rename(&temp_file_path, &dest_path)
-            .await
-            .map_err(|e| format!("Rename failed for {}: {}", local_name, e))?;
-
-        // Verify the final path is still within canon_dir (rename target check).
-        if let Ok(canon_dest) = dest_path.canonicalize() {
-            if !canon_dest.starts_with(&canon_dir) {
-                let _ = tokio::fs::remove_file(&dest_path).await;
-                return Err("downloaded file escaped model directory".to_string());
-            }
-        }
-
-        tracing::info!("[moonshine-dl] {} complete", local_name);
-    }
-
-    let _ = app.emit(
-        "download-progress",
-        serde_json::json!({ "name": &event_name, "pct": 100u8 }),
-    );
-
-    tracing::info!(
-        "[moonshine-dl] all files for variant {:?} downloaded to {}",
-        variant,
-        canon_dir.display()
-    );
-
-    apply_alt_backend_after_download(&app, settings::BackendFamily::Moonshine, &variant)?;
-
-    Ok(())
-}
-
 /// Download a Parakeet TDT ONNX model bundle from HuggingFace.
 ///
 /// Model source: https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx
@@ -1387,7 +1067,7 @@ pub struct ModelDescriptor {
     pub id: String,
     /// Human tier label (e.g. "Recommended", "Large") — matches Whisper Models UI.
     pub tier: String,
-    /// Technical model name shown in the monospace pill (e.g. `moonshine-tiny`).
+    /// Technical model name shown in the monospace pill (e.g. `parakeet-en-v2`).
     pub label: String,
     pub description: String,
     pub size: String,
@@ -1397,12 +1077,6 @@ pub struct ModelDescriptor {
     pub installed: bool,
     /// True for the recommended starter model within this backend family.
     pub recommended: bool,
-}
-
-fn moonshine_installed(variant: &str) -> bool {
-    crate::transcribe_backends::moonshine::variant_dir(variant)
-        .and_then(|d| crate::transcribe_backends::moonshine::validate_moonshine_model_dir(&d).ok())
-        .is_some_and(|d| d.join("encoder_model.onnx").exists())
 }
 
 fn parakeet_installed(variant: &str) -> bool {
@@ -1416,39 +1090,14 @@ fn parakeet_installed(variant: &str) -> bool {
 /// - Whisper: returns the three models in the existing catalog (same IDs as
 ///   `download_model` accepts). The UI should show installed vs. not-installed
 ///   state by cross-referencing with `scan_models_dir`.
-/// - Moonshine: returns "tiny" and "base" ONNX variants from the onnx-community repo.
 /// - Parakeet: returns "tdt-0.6b-v2" (English) and "tdt-0.6b-v3" (multilingual).
 ///
-/// `family` is a lowercase string: "whisper" | "moonshine" | "parakeet".
+/// `family` is a lowercase string: "whisper" | "parakeet".
 /// Unknown values are treated as "whisper".
 #[tauri::command]
 #[specta::specta]
 fn list_models_for_family(family: String) -> Vec<ModelDescriptor> {
     match family.to_lowercase().as_str() {
-        "moonshine" => vec![
-            ModelDescriptor {
-                id: "moonshine-tiny".to_string(),
-                tier: "Recommended".to_string(),
-                label: "moonshine-tiny".to_string(),
-                description: "english-only · fastest · low silence hallucination".to_string(),
-                size: "110 MB".to_string(),
-                download_url: "https://huggingface.co/onnx-community/moonshine-tiny-ONNX".to_string(),
-                path_hint: ".config/turbotalk/models/moonshine/tiny/".to_string(),
-                installed: moonshine_installed("tiny"),
-                recommended: true,
-            },
-            ModelDescriptor {
-                id: "moonshine-base".to_string(),
-                tier: "Large".to_string(),
-                label: "moonshine-base".to_string(),
-                description: "english-only · more accurate".to_string(),
-                size: "250 MB".to_string(),
-                download_url: "https://huggingface.co/onnx-community/moonshine-base-ONNX".to_string(),
-                path_hint: ".config/turbotalk/models/moonshine/base/".to_string(),
-                installed: moonshine_installed("base"),
-                recommended: false,
-            },
-        ],
         "parakeet" => vec![
             ModelDescriptor {
                 id: "parakeet-tdt-0.6b-v2".to_string(),
@@ -1637,7 +1286,6 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         detect_logitech_mouse,
         download_model,
         cancel_download,
-        download_moonshine_model,
         download_parakeet_model,
         delete_model_file,
         delete_backend_model,
@@ -1722,7 +1370,6 @@ pub fn run() {
             detect_logitech_mouse,
             download_model,
             cancel_download,
-            download_moonshine_model,
             download_parakeet_model,
             delete_model_file,
             delete_backend_model,

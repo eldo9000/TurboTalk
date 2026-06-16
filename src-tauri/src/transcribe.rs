@@ -575,38 +575,21 @@ pub trait TranscriptionBackend: Send + Sync {
 /// the Settings UI or edit `config.toml` directly to switch backends.
 ///
 /// Fallback behaviour when a feature flag is off:
-///   Moonshine or Parakeet selected but their feature gate is disabled (ort conflict
-///   between transcribe-rs rc.12 and vad-rs rc.9) → falls back to Whisper with a
-///   log warning. Activation is just a recompile once the version conflict resolves.
+///   Parakeet selected but its feature gate is disabled (ort conflict between
+///   transcribe-rs rc.12 and vad-rs rc.9) → falls back to Whisper with a log
+///   warning. Activation is just a recompile once the version conflict resolves.
 ///
 /// Note on VAD and hallucination filter:
-///   The Silero VAD pre-filter is whisper-server-specific; Moonshine/Parakeet have
-///   their own silence handling. The post-hoc hallucination filter runs on all
-///   backends (no harm, family-agnostic). The Chaperone cleanup (cleanup.rs) runs
-///   on the output of all backends — also family-agnostic.
+///   The Silero VAD pre-filter is whisper-server-specific; Parakeet has its own
+///   silence handling. The post-hoc hallucination filter runs on all backends
+///   (no harm, family-agnostic). The Chaperone cleanup (cleanup.rs) runs on the
+///   output of all backends — also family-agnostic.
 fn build_backend(
     cfg: &crate::settings::Config,
 ) -> anyhow::Result<std::sync::Arc<dyn TranscriptionBackend>> {
     use crate::settings::BackendFamily;
 
     match cfg.backend {
-        BackendFamily::Moonshine => {
-            #[cfg(feature = "moonshine")]
-            {
-                tracing::info!("[transcribe] backend=moonshine — building MoonshineBackend");
-                let backend =
-                    crate::transcribe_backends::moonshine::MoonshineBackend::from_config(cfg)?;
-                return Ok(std::sync::Arc::new(backend));
-            }
-            #[cfg(not(feature = "moonshine"))]
-            {
-                tracing::warn!(
-                    "[transcribe] backend=moonshine requested but `moonshine` feature is not compiled in. \
-                     Falling back to Whisper."
-                );
-                // Fall through to Whisper below.
-            }
-        }
         BackendFamily::Parakeet => {
             #[cfg(feature = "parakeet")]
             {
@@ -1077,16 +1060,6 @@ pub(crate) fn expected_backend_identity(cfg: &crate::settings::Config) -> String
             .canonicalize()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| cfg.whisper.model.clone()),
-        BackendFamily::Moonshine => {
-            let v = crate::settings::resolve_backend_variant(cfg);
-            match crate::transcribe_backends::moonshine::variant_dir(&v) {
-                Some(d) => {
-                    let canon = d.canonicalize().unwrap_or(d);
-                    format!("moonshine:{}:{}", v, canon.display())
-                }
-                None => format!("moonshine:{}:missing", v),
-            }
-        }
         BackendFamily::Parakeet => {
             let v = crate::settings::resolve_backend_variant(cfg);
             match crate::transcribe_backends::parakeet::variant_dir(&v) {
@@ -1706,7 +1679,7 @@ mod tests {
         assert_eq!(spec.bits_per_sample, 16);
         assert!(matches!(spec.sample_format, hound::SampleFormat::Int));
         assert_eq!(reader.duration(), samples.len() as u32);
-        #[cfg(any(feature = "moonshine", feature = "parakeet"))]
+        #[cfg(feature = "parakeet")]
         {
             transcribe_rs::audio::read_wav_samples(&path).expect("transcribe-rs read");
         }

@@ -27,7 +27,7 @@ Before doing anything else, confirm:
   `src-tauri/binaries/MANIFEST.sha256`. On Windows, `npm run fetch-sidecars`
   and `npm run fetch-onnxruntime` each verify their downloaded archives
   against pinned hashes before extracting.
-- Runtime Whisper `.bin`, Moonshine ONNX, and Parakeet ONNX model downloads
+- Runtime Whisper `.bin` and Parakeet ONNX model downloads
   are verified against pinned SHA-256 hashes before being persisted to disk.
 - The release scan pack in `RELEASE-READINESS.md` has no undocumented blockers:
   version consistency, updater/manual-update consistency, local-only/privacy network surface, Tauri IPC/capability surface, Rust risk scan, bundle asset scan, unsigned packaging state, installed-artifact smoke, orphan-process check, and docs-reality check.

@@ -1299,9 +1299,84 @@ pub(crate) mod common {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HotkeyController {
+    Hold,
+    Toggle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TriggerAction {
+    Start,
+    Stop,
+    Noop,
+}
+
+impl HotkeyController {
+    fn from_mode(mode: &str) -> Self {
+        if mode == "toggle" {
+            Self::Toggle
+        } else {
+            Self::Hold
+        }
+    }
+
+    fn is_toggle(self) -> bool {
+        matches!(self, Self::Toggle)
+    }
+
+    fn press_action(self, is_recording: bool) -> TriggerAction {
+        if self.is_toggle() && is_recording {
+            TriggerAction::Stop
+        } else {
+            TriggerAction::Start
+        }
+    }
+
+    fn release_action(self) -> TriggerAction {
+        match self {
+            Self::Hold => TriggerAction::Stop,
+            Self::Toggle => TriggerAction::Noop,
+        }
+    }
+
+    fn arm_hold_cancel(
+        self,
+        recorder: &std::sync::Arc<crate::recorder::Recorder>,
+        tray_icon: &tauri::tray::TrayIcon,
+        app: &tauri::AppHandle,
+    ) {
+        common::arm_hold_cancel(recorder, tray_icon, app, self.is_toggle());
+    }
+
+    fn arm_cancel_suppression_if_needed(self, recorder_state: crate::recorder::State) {
+        if self.should_arm_cancel_suppression(recorder_state) {
+            common::arm_ptt_up_suppression();
+        }
+    }
+
+    fn should_arm_cancel_suppression(self, recorder_state: crate::recorder::State) -> bool {
+        matches!(self, Self::Hold) && matches!(recorder_state, crate::recorder::State::Recording)
+    }
+
+    fn cancel_if_busy(
+        self,
+        recorder: &std::sync::Arc<crate::recorder::Recorder>,
+        tray_icon: &tauri::tray::TrayIcon,
+        app: &tauri::AppHandle,
+    ) {
+        let state = recorder.state();
+        if state.is_busy() {
+            self.arm_cancel_suppression_if_needed(state);
+            common::trigger_cancel(recorder, tray_icon, app);
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod imp {
     use super::common;
+    use super::{HotkeyController, TriggerAction};
     use crate::recorder::Recorder;
     use core_foundation::base::TCFType;
     use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
@@ -1484,13 +1559,13 @@ mod imp {
 
         // Read current config to check if this button is our trigger.
         // Keep the read lock as short as possible.
-        let (toggle_mode, cancel_on_hold) = {
+        let (controller, cancel_on_hold) = {
             let hk = context.hotkey_state.read();
             let target = hid_mouse_usage_for_name(&hk.key);
             if target != Some(usage) {
                 return; // fast path: not the configured button
             }
-            (hk.mode == "toggle", hk.cancel_on_hold)
+            (HotkeyController::from_mode(&hk.mode), hk.cancel_on_hold)
         };
         // Lock is dropped — ptt_* may write to settings or app state.
 
@@ -1501,28 +1576,29 @@ mod imp {
             if !was_down {
                 HID_BUTTON_STATE.fetch_or(bit, Ordering::Relaxed);
                 if cancel_on_hold && common::should_arm_hold_cancel(&context.recorder) {
-                    common::arm_hold_cancel(
-                        &context.recorder,
-                        &context.tray_icon,
-                        &context.app,
-                        toggle_mode,
-                    );
+                    controller.arm_hold_cancel(&context.recorder, &context.tray_icon, &context.app);
                 }
-                if toggle_mode {
-                    if context.recorder.is_recording() {
-                        common::ptt_up(&context.recorder, &context.tray_icon, &context.app);
-                    } else {
+                match controller.press_action(context.recorder.is_recording()) {
+                    TriggerAction::Start => {
                         common::ptt_down(&context.recorder, &context.tray_icon, &context.app);
                     }
-                } else {
-                    common::ptt_down(&context.recorder, &context.tray_icon, &context.app);
+                    TriggerAction::Stop => {
+                        common::ptt_up(&context.recorder, &context.tray_icon, &context.app);
+                    }
+                    TriggerAction::Noop => {}
                 }
             }
         } else if was_down {
             HID_BUTTON_STATE.fetch_and(!bit, Ordering::Relaxed);
             common::disarm_hold_cancel();
-            if !toggle_mode {
-                common::ptt_up(&context.recorder, &context.tray_icon, &context.app);
+            match controller.release_action() {
+                TriggerAction::Start => {
+                    common::ptt_down(&context.recorder, &context.tray_icon, &context.app);
+                }
+                TriggerAction::Stop => {
+                    common::ptt_up(&context.recorder, &context.tray_icon, &context.app);
+                }
+                TriggerAction::Noop => {}
             }
         }
     }
@@ -1638,7 +1714,7 @@ mod imp {
                         let (
                             target_keycode,
                             target_flag,
-                            toggle_mode,
+                            controller,
                             cancel_on_esc,
                             cancel_on_hold,
                             fkey_code,
@@ -1650,7 +1726,7 @@ mod imp {
                             (
                                 kc,
                                 f,
-                                hk.mode == "toggle",
+                                HotkeyController::from_mode(&hk.mode),
                                 hk.cancel_on_esc,
                                 hk.cancel_on_hold,
                                 fkc,
@@ -1663,19 +1739,7 @@ mod imp {
                         // focused app outside dictation.
                         if let CGEventType::KeyDown = etype {
                             if cancel_on_esc && keycode == ESCAPE_KEYCODE {
-                                let s = recorder_cb.state();
-                                if s.is_busy() {
-                                    // If the user is still holding the record key
-                                    // (hold mode + Recording), the matching key-up
-                                    // will fire ptt_up; arm one slot so it no-ops
-                                    // instead of cascading into CANCEL_PENDING.
-                                    if !toggle_mode
-                                        && matches!(s, crate::recorder::State::Recording)
-                                    {
-                                        common::arm_ptt_up_suppression();
-                                    }
-                                    common::trigger_cancel(&recorder_cb, &tray_cb, &app_cb);
-                                }
+                                controller.cancel_if_busy(&recorder_cb, &tray_cb, &app_cb);
                             }
 
                             // DEBUG: F19 (0x50 = 80) triggers simulated error panel.
@@ -1683,15 +1747,7 @@ mod imp {
                             // accurately simulates a real rejection during dictation.
                             if keycode == 80 {
                                 // Cancel any in-flight recording
-                                let s = recorder_cb.state();
-                                if s.is_busy() {
-                                    if !toggle_mode
-                                        && matches!(s, crate::recorder::State::Recording)
-                                    {
-                                        common::arm_ptt_up_suppression();
-                                    }
-                                    common::trigger_cancel(&recorder_cb, &tray_cb, &app_cb);
-                                }
+                                controller.cancel_if_busy(&recorder_cb, &tray_cb, &app_cb);
 
                                 // Then emit the error event
                                 use tauri::Emitter;
@@ -1720,21 +1776,16 @@ mod imp {
                                         if cancel_on_hold
                                             && common::should_arm_hold_cancel(&recorder_cb)
                                         {
-                                            common::arm_hold_cancel(
-                                                &recorder_cb,
-                                                &tray_cb,
-                                                &app_cb,
-                                                toggle_mode,
-                                            );
+                                            controller.arm_hold_cancel(&recorder_cb, &tray_cb, &app_cb);
                                         }
-                                        if toggle_mode {
-                                            if recorder_cb.is_recording() {
-                                                common::ptt_up(&recorder_cb, &tray_cb, &app_cb);
-                                            } else {
+                                        match controller.press_action(recorder_cb.is_recording()) {
+                                            TriggerAction::Start => {
                                                 common::ptt_down(&recorder_cb, &tray_cb, &app_cb);
                                             }
-                                        } else {
-                                            common::ptt_down(&recorder_cb, &tray_cb, &app_cb);
+                                            TriggerAction::Stop => {
+                                                common::ptt_up(&recorder_cb, &tray_cb, &app_cb);
+                                            }
+                                            TriggerAction::Noop => {}
                                         }
                                     }
                                 }
@@ -1742,8 +1793,14 @@ mod imp {
                                     if keycode == fkc {
                                         FKEY_DOWN.store(false, Ordering::Release);
                                         common::disarm_hold_cancel();
-                                        if !toggle_mode {
-                                            common::ptt_up(&recorder_cb, &tray_cb, &app_cb);
+                                        match controller.release_action() {
+                                            TriggerAction::Start => {
+                                                common::ptt_down(&recorder_cb, &tray_cb, &app_cb);
+                                            }
+                                            TriggerAction::Stop => {
+                                                common::ptt_up(&recorder_cb, &tray_cb, &app_cb);
+                                            }
+                                            TriggerAction::Noop => {}
                                         }
                                     }
                                 }
@@ -1763,28 +1820,23 @@ mod imp {
                                     if cancel_on_hold
                                         && common::should_arm_hold_cancel(&recorder_cb)
                                     {
-                                        common::arm_hold_cancel(
-                                            &recorder_cb,
-                                            &tray_cb,
-                                            &app_cb,
-                                            toggle_mode,
-                                        );
+                                        controller.arm_hold_cancel(&recorder_cb, &tray_cb, &app_cb);
                                     }
                                 } else {
                                     common::disarm_hold_cancel();
                                 }
-                                if toggle_mode {
-                                    if is_key_down {
-                                        if recorder_cb.is_recording() {
-                                            common::ptt_up(&recorder_cb, &tray_cb, &app_cb);
-                                        } else {
-                                            common::ptt_down(&recorder_cb, &tray_cb, &app_cb);
-                                        }
-                                    }
-                                } else if is_key_down {
-                                    common::ptt_down(&recorder_cb, &tray_cb, &app_cb);
+                                match if is_key_down {
+                                    controller.press_action(recorder_cb.is_recording())
                                 } else {
-                                    common::ptt_up(&recorder_cb, &tray_cb, &app_cb);
+                                    controller.release_action()
+                                } {
+                                    TriggerAction::Start => {
+                                        common::ptt_down(&recorder_cb, &tray_cb, &app_cb);
+                                    }
+                                    TriggerAction::Stop => {
+                                        common::ptt_up(&recorder_cb, &tray_cb, &app_cb);
+                                    }
+                                    TriggerAction::Noop => {}
                                 }
                             }
                         }
@@ -1952,6 +2004,7 @@ mod imp {
     //! surface a clear "Wayland not supported" message.
 
     use super::common;
+    use super::{HotkeyController, TriggerAction};
     use crate::recorder::Recorder;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -2078,11 +2131,11 @@ mod imp {
 
             let result = rdev::listen(move |event: rdev::Event| {
                 // Read current config under RwLock — nanoseconds, uncontended.
-                let (target_key, toggle_mode, cancel_on_esc, cancel_on_hold) = {
+                let (target_key, controller, cancel_on_esc, cancel_on_hold) = {
                     let hk = hotkey_state.read();
                     (
                         key_for_name(&hk.key),
-                        hk.mode == "toggle",
+                        HotkeyController::from_mode(&hk.mode),
                         hk.cancel_on_esc,
                         hk.cancel_on_hold,
                     )
@@ -2096,14 +2149,8 @@ mod imp {
                 // app at idle.
                 if let rdev::EventType::KeyPress(rdev::Key::Escape) = event.event_type {
                     if cancel_on_esc {
-                        let s = recorder.state();
-                        if s.is_busy() {
-                            if !toggle_mode && matches!(s, crate::recorder::State::Recording) {
-                                common::arm_ptt_up_suppression();
-                            }
-                            common::trigger_cancel(&recorder, &tray_icon, &app);
-                            return;
-                        }
+                        controller.cancel_if_busy(&recorder, &tray_icon, &app);
+                        return;
                     }
                 }
 
@@ -2120,16 +2167,16 @@ mod imp {
                         // is busy. Held past the deadline → cancel; released
                         // early → no-op and normal PTT semantics apply.
                         if cancel_on_hold && common::should_arm_hold_cancel(&recorder) {
-                            common::arm_hold_cancel(&recorder, &tray_icon, &app, toggle_mode);
+                            controller.arm_hold_cancel(&recorder, &tray_icon, &app);
                         }
-                        if toggle_mode {
-                            if recorder.is_recording() {
-                                common::ptt_up(&recorder, &tray_icon, &app);
-                            } else {
+                        match controller.press_action(recorder.is_recording()) {
+                            TriggerAction::Start => {
                                 common::ptt_down(&recorder, &tray_icon, &app);
                             }
-                        } else {
-                            common::ptt_down(&recorder, &tray_icon, &app);
+                            TriggerAction::Stop => {
+                                common::ptt_up(&recorder, &tray_icon, &app);
+                            }
+                            TriggerAction::Noop => {}
                         }
                     }
                     rdev::EventType::KeyRelease(key) if key == target_key => {
@@ -2138,8 +2185,14 @@ mod imp {
                             return;
                         }
                         common::disarm_hold_cancel();
-                        if !toggle_mode {
-                            common::ptt_up(&recorder, &tray_icon, &app);
+                        match controller.release_action() {
+                            TriggerAction::Start => {
+                                common::ptt_down(&recorder, &tray_icon, &app);
+                            }
+                            TriggerAction::Stop => {
+                                common::ptt_up(&recorder, &tray_icon, &app);
+                            }
+                            TriggerAction::Noop => {}
                         }
                         // Toggle mode: KeyRelease is a no-op; toggling happens
                         // on every KeyPress.
@@ -2182,6 +2235,33 @@ pub use hotkey_win32::{accessibility_trusted, diagnostic_probe, spawn, HotkeyPro
 pub use imp::{accessibility_trusted, spawn};
 #[cfg(target_os = "linux")]
 pub use imp::{accessibility_trusted, spawn};
+
+#[cfg(test)]
+mod tests {
+    use super::{HotkeyController, TriggerAction};
+    use crate::recorder::State;
+
+    #[test]
+    fn hold_press_and_release_are_simple() {
+        assert_eq!(HotkeyController::Hold.press_action(false), TriggerAction::Start);
+        assert_eq!(HotkeyController::Hold.press_action(true), TriggerAction::Start);
+        assert_eq!(HotkeyController::Hold.release_action(), TriggerAction::Stop);
+    }
+
+    #[test]
+    fn toggle_press_toggles_and_release_is_noop() {
+        assert_eq!(HotkeyController::Toggle.press_action(false), TriggerAction::Start);
+        assert_eq!(HotkeyController::Toggle.press_action(true), TriggerAction::Stop);
+        assert_eq!(HotkeyController::Toggle.release_action(), TriggerAction::Noop);
+    }
+
+    #[test]
+    fn only_hold_arms_cancel_suppression_for_recording() {
+        assert!(HotkeyController::Hold.should_arm_cancel_suppression(State::Recording));
+        assert!(!HotkeyController::Toggle.should_arm_cancel_suppression(State::Recording));
+        assert!(!HotkeyController::Hold.should_arm_cancel_suppression(State::Ready));
+    }
+}
 
 /// Programmatically start a recording — same path as the physical PTT down stroke.
 /// Safe to call from any thread; spawns its own worker internally.
