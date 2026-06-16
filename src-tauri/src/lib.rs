@@ -2205,7 +2205,7 @@ type TrayIconState = tauri::tray::TrayIcon;
 type DownloadCancelSet = parking_lot::Mutex<std::collections::HashSet<String>>;
 
 use tauri::{
-    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, RunEvent, WindowEvent,
 };
@@ -2266,6 +2266,11 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         permissions::reset_tcc_entry,
     ])
 }
+
+/// Cached log directory path, set once at startup so the tracing health
+/// watchdog (spawned in `.setup()`) can stat files without going through
+/// the Settings RwLock.
+static LOG_DIR_CELL: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -2345,6 +2350,9 @@ pub fn run() {
                 .with_filter(LevelFilter::WARN),
         )
         .init();
+
+    // Cache the main log dir path for the tracing health watchdog.
+    let _ = LOG_DIR_CELL.set(log_dir.clone());
 
     tracing::info!(
         "[startup] TurboTalk v{} logging to {}",
@@ -2448,14 +2456,17 @@ pub fn run() {
                 use tauri_plugin_autostart::ManagerExt;
                 app.autolaunch().is_enabled().unwrap_or(false)
             };
-            let launch_item = CheckMenuItem::with_id(
-                app,
-                "launch",
-                "Launch at Login",
-                true,
-                launch_enabled,
-                None::<&str>,
-            )?;
+            // Build the "Launch at Login" menu item as a plain MenuItem with a
+            // visual indicator in the label (✓ when enabled). Tauri 2's
+            // CheckMenuItem has a macOS tray bug where clicks don't fire menu
+            // events and set_checked doesn't update the native menu — so we
+            // manage the state ourselves via set_text.
+            let launch_label = if launch_enabled {
+                "\u{2713} Launch at Login"
+            } else {
+                "  Launch at Login"
+            };
+            let launch_item = MenuItem::with_id(app, "launch", launch_label, true, None::<&str>)?;
             let show_item = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;
             let reset_warmup_item =
                 MenuItem::with_id(app, "reset-warmup", "Clear Warmup Cache", true, None::<&str>)?;
@@ -2518,13 +2529,18 @@ pub fn run() {
                     "launch" => {
                         use tauri_plugin_autostart::ManagerExt;
                         let mgr = app.autolaunch();
-                        let new_state = !launch_item_ref.is_checked().unwrap_or(false);
+                        let new_state = !mgr.is_enabled().unwrap_or(false);
                         if new_state {
                             let _ = mgr.enable();
                         } else {
                             let _ = mgr.disable();
                         }
-                        let _ = launch_item_ref.set_checked(new_state);
+                        let label = if new_state {
+                            "\u{2713} Launch at Login"
+                        } else {
+                            "  Launch at Login"
+                        };
+                        let _ = launch_item_ref.set_text(label);
                     }
                     "show" => {
                         show_main_window(app, &menu_first_manual_main_show);
@@ -2688,6 +2704,17 @@ pub fn run() {
             // Stream opens on first keypress; always re-queries the config device
             // so built-in mic / AirPods switches work without restarting.
             let recorder: RecorderState = Arc::new(recorder::Recorder::new()?);
+
+            // ── Tracing health watchdog ──────────────────────────────────
+            // The tracing-appender NonBlocking writer can die silently if its
+            // background thread panics (e.g. a disk-I/O error on the log file).
+            // When that happens every `tracing::info!()` / `warn!()` etc.
+            // becomes a no-op and we lose all observability — no errors log,
+            // no session log, nothing. This watchdog stats the main log file
+            // every 60 s; if the mtime is > 120 s stale AND the owner flag has
+            // not already been set, it logs a warning to stderr and emits a
+            // one-shot ui-error toast so the user knows to restart.
+            spawn_tracing_watchdog(app.handle().clone());
 
             // Emit live audio level to the overlay at 20 Hz while recording.
             // Same thread also services the device-lost edge: if the cpal
@@ -2902,6 +2929,93 @@ pub fn run() {
                 _ => {}
             }
         });
+}
+
+// ── Tracing health watchdog ──────────────────────────────────────────────
+//
+// If the tracing-appender NonBlocking writer thread panics or dies, every
+// `tracing::info!()` / `warn!()` / `error!()` becomes a silent no-op. This
+// watchdog stats the newest main session-log file every 60 s.  When the
+// file's mtime is more than TRACING_STALE_SECS old, the watchdog writes a
+// one-shot warning to stderr and emits a ui-error toast so the user sees
+// something broke rather than silently losing all observability.
+//
+// One-shot semantics: the first stale detection fires the toast; subsequent
+// checks remain quiet until the app restarts. This avoids spamming the user
+// if they wait long enough between dictations that the log naturally goes
+// quiet.
+
+const TRACING_HEALTH_INTERVAL_SECS: u64 = 60;
+const TRACING_STALE_SECS: u64 = 120;
+
+fn spawn_tracing_watchdog(app: tauri::AppHandle) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::UNIX_EPOCH;
+    use tauri::Emitter;
+
+    let already_fired = Arc::new(AtomicBool::new(false));
+
+    std::thread::spawn(move || {
+        let log_dir = match LOG_DIR_CELL.get() {
+            Some(d) => d.clone(),
+            None => {
+                eprintln!("[tracing-watchdog] LOG_DIR_CELL not set — watchdog disabled");
+                return;
+            }
+        };
+
+        let now = || -> u64 {
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        };
+
+        // Give the app time to start and emit the first log lines before
+        // the watchdog begins checking.
+        std::thread::sleep(std::time::Duration::from_secs(TRACING_HEALTH_INTERVAL_SECS));
+
+        loop {
+            // Find the newest turbotalk.YYYY-MM-DD.log
+            let newest = diagnostic_log::log_files_for(diagnostic_log::MAIN_LOG_PREFIX)
+                .pop();
+            let age_secs = newest
+                .as_ref()
+                .and_then(|p| std::fs::metadata(p).ok())
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| now().saturating_sub(d.as_secs()))
+                .unwrap_or(u64::MAX);
+
+            if age_secs > TRACING_STALE_SECS {
+                if !already_fired.swap(true, Ordering::AcqRel) {
+                    let log_path = newest
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| log_dir.display().to_string());
+                    eprintln!(
+                        "[tracing-watchdog] Main session log has not been written in {age_secs}s \
+                         (path={log_path}). The tracing writer may have died — \
+                         subsequent `tracing::info!()` calls are likely no-ops. \
+                         Restart TurboTalk to restore full logging."
+                    );
+                    let msg = format!(
+                        "TurboTalk's logging pipeline may have stopped. Restart the app to restore full logging (last log write was {age_secs}s ago)."
+                    );
+                    let _ = app.emit(
+                        "ui-error",
+                        serde_json::json!({
+                            "kind": "tracing-watchdog-dead",
+                            "message": msg,
+                            "recoverable": true,
+                        }),
+                    );
+                }
+            }
+
+            std::thread::sleep(std::time::Duration::from_secs(TRACING_HEALTH_INTERVAL_SECS));
+        }
+    });
 }
 
 #[cfg(test)]

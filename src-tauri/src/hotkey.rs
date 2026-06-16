@@ -1897,10 +1897,27 @@ mod imp {
                         // create_runloop_source, so the watchdog thread can
                         // inspect and re-enable it independently.
                         let mach_port = tap.mach_port.clone();
-                        let source = tap
-                            .mach_port
-                            .create_runloop_source(0)
-                            .expect("[hotkey] create_runloop_source failed");
+                        let source = match tap.mach_port.create_runloop_source(0) {
+                            Ok(s) => s,
+                            Err(()) => {
+                                tracing::error!(
+                                    "[hotkey] CGEventTap create_runloop_source failed — \
+                                     retrying tap creation"
+                                );
+                                // Budget this like a trusted-but-failing retry so we
+                                // don't spin forever on a broken Mach port.
+                                trusted_failure_retries += 1;
+                                if trusted_failure_retries >= MAX_TRUSTED_FAILURE_RETRIES {
+                                    tracing::error!(
+                                        "[hotkey] giving up after {trusted_failure_retries} \
+                                         create_runloop_source failures"
+                                    );
+                                    return;
+                                }
+                                std::thread::sleep(std::time::Duration::from_secs(5));
+                                continue;
+                            }
+                        };
                         // SAFETY: kCFRunLoopCommonModes is a static CFStringRef
                         // constant exported by core-foundation. Reading it requires
                         // unsafe because the binding is a static extern, but the

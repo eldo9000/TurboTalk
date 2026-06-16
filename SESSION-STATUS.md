@@ -35,24 +35,24 @@
 
 ## This session
 
-**Event:** User requested a dedicated status window for warm-up/arming and rejection/flaky feedback, separate from the ephemeral recording overlay. The new window should be clickable, 100%-opaque, and use the yellow/red pulsing border aesthetic from the existing warm-up tile.
+**Event:** User reported a "strange crash" in TurboTalk. Investigation of logs and macOS crash reports revealed two distinct issues.
 
-**Design:**
-1. **`src/Status.svelte`** — new Svelte component loaded in a separate Tauri window (`label: "status"`). Listens for `ptt-armed` (yellow pulsing "Starting…"), `ptt-arm-failed` (red pulsing "Model failed to load"), `transcription-rejected` (red pulsing with dismiss button for flaky/blocked pastes), and `recording-discarded` with `empty-final-text` payload (red pulsing "Nothing to paste").
-2. **Window config** — added to `tauri.conf.json` as a transparent, always-on-top, non-decorated window (280×80), starting hidden. Capability file provides event listen/unlisten + window hide/show permissions.
-3. **No `set_ignore_cursor_events`** — the status window accepts mouse clicks, so the dismiss button works.
-4. **Positioning** — macOS version centers the window on the cursor's monitor (same cursor-position logic as overlay/splash). Non-macOS version no-ops (window is centered via tauri.conf.json).
-5. **Arming removed from overlay** — `Overlay.svelte` no longer handles `ptt-armed`/`ptt-arm-failed`; the arming class, template block, and spinner CSS are removed. The overlay now only shows recording and transcribing states.
-6. **Event routing** — the new window is wired in `main.js`; the Rust `lib.rs` setup positions it at startup.
+### Issue 1: Silent tracing pipeline death (today's crash)
 
-**Files changed:**
-- `src/Status.svelte` — new (yellow/red status overlay)
-- `src-tauri/tauri.conf.json` — added status window config
-- `src-tauri/capabilities/status.json` — new (window permissions)
-- `src/main.js` — added status window routing
-- `src-tauri/src/lib.rs` — added `reposition_status_to_cursor` + status window setup
-- `src/Overlay.svelte` — removed arming mode/state/CSS
+The session log (`turbotalk.2026-06-16.log`) ends cleanly at 18:37 with no errors, but the transcript log continued recording for ~30 seconds afterward. No `.ips` crash report was generated. Root cause: the `tracing-appender` `NonBlocking` writer thread died silently (likely a panic), causing all `tracing::info!()`/`warn!()` calls to become no-ops. The frontend lived but was unresponsive.
+
+### Issue 2: June 13 SIGABRT crash cluster (v0.9.8, 14 crashes in ~1 hour)
+
+All crashes were identical: `SIGABRT` (abort trap) on the main thread, preceded by `[hotkey] CGEventTap failed (accessibility_trusted=false)`. The only `.expect()`/`.unwrap()` in the hotkey code was `create_runloop_source` on the CGEventTap success path. While this `.expect()` is unlikely to be the crash site (it's on the Ok path), the crash cluster suggests a panic in the accessibility error recovery flow that existed in v0.9.8.
+
+### Changes made (3 files)
+
+1. **`src-tauri/src/main.rs`** — Installed a process-wide panic hook that writes the panic location, message, and backtrace to stderr before the default abort. Ensures panics in background threads (including tracing-appender) leave forensic evidence.
+
+2. **`src-tauri/src/lib.rs`** — Added a tracing health watchdog. Every 60s it stats the newest main session log file. If the mtime is > 120s stale, it writes a warning to stderr and emits a one-shot `ui-error` toast (`kind: "tracing-watchdog-dead"`) so the user sees the logging pipeline died and knows to restart.
+
+3. **`src-tauri/src/hotkey.rs`** — Hardened the single remaining `.expect()` call on `create_runloop_source`. It now handles `Err(())` gracefully by logging an error, incrementing the trusted-failure retry budget, sleeping 5s, and retrying CGEventTap creation. After `MAX_TRUSTED_FAILURE_RETRIES` (6), it returns cleanly instead of panicking.
 
 ## Next action
 
-Test the status window end-to-end: trigger a warm-up (cold start with ptt-armed), a rejection (via the Test rejection button in History), and verify the window shows correct colors, animations, and dismiss behavior.
+Restart the TurboTalk dev session (`npm run tauri dev`) to pick up the changes, then run through a few dictation rounds to confirm the panic hook and watchdog are working correctly. To test the watchdog: manually kill the tracing writer thread or use `SIGSTOP` on it to simulate a stall, then wait 120s for the toast.
