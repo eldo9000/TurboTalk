@@ -1,4 +1,4 @@
-// Streaming audio finalizer (TASK-22).
+// Streaming audio finalizer.
 //
 // =============================================================================
 // Worker boundary contract
@@ -38,7 +38,7 @@
 //
 // The cheap-looking optimization — gating raw native samples through a fast
 // RMS or VAD step *before* resampling — risks clipping word onsets and
-// offsets, which is exactly the regression TASK-11 was designed to prevent.
+// offsets, which is exactly the regression this path was designed to prevent.
 // The streaming finalizer does the work the proper way: incremental
 // resample fed by every captured sample, then incremental Silero VAD with
 // the same frame size and threshold as the batch path, with a prefill
@@ -896,7 +896,7 @@ fn run_vad_on_new_frames(resampled_buf: &[f32], state: &mut VadStreamState) {
 // Note: `lease_vad_session` returns a `&'static Mutex<Option<Vad>>` from
 // `vad::cached_vad_for_streaming`. The Mutex outlives the process. The
 // streaming worker holds the guard for ~3 ms per frame; TurboTalk runs
-// one in-flight dictation job at a time (TASK-14) so there is no
+// one in-flight dictation job at a time so there is no
 // contention with the batch-`vad::trim` path on the same session.
 
 #[cfg(test)]
@@ -1032,8 +1032,8 @@ mod tests {
         assert!(peak <= 1.0, "peak {} must not exceed 1.0", peak);
     }
 
-    /// Deterministic fixture-free word-boundary parity test (TASK-22
-    /// step 6 fallback). Synthesize per-frame `is_voice` decisions
+    /// Deterministic fixture-free word-boundary parity test.
+    /// Synthesize per-frame `is_voice` decisions
     /// representing a recording with leading silence + a "word" + a
     /// short inter-word gap + another "word" + trailing silence.
     /// Drive both the streaming smoothing state machine and the batch

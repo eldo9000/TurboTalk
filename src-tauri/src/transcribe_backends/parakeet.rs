@@ -1,4 +1,4 @@
-// Parakeet ONNX transcription backend (TASK-59)
+// Parakeet ONNX transcription backend
 //
 // Implements `TranscriptionBackend` using the `transcribe-rs` crate's Parakeet
 // support. Parakeet TDT is an NVIDIA English-only CTC/TDT model with extremely
@@ -41,7 +41,7 @@
 // to route through this backend. Download a Parakeet model via
 // `download_parakeet_model` before use.
 //
-// TODO (TASK-60): wire a settings UI toggle so users can pick Parakeet vs Whisper.
+// TODO: wire a settings UI toggle so users can pick Parakeet vs Whisper.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;

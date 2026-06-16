@@ -1,4 +1,4 @@
-// Lazy pre-warm (TASK-36):
+// Lazy pre-warm:
 //   AudioCapture keeps the cpal stream open between recordings, with the
 //   `is_recording` flag inside the cpal callback gating whether captured
 //   samples are retained. After `stop()` / `cancel()`, the stream stays
@@ -54,7 +54,7 @@ const MIN_RECORDING_MS: u32 = 100;
 /// Mic warmth — how long the cpal input stream stays open after a recording
 /// ends. Trade-off:
 ///   - warm  → next press skips CoreAudio cold-start (~200 ms) and pre-roll
-///     ring stays primed for leading-word capture (TASK-37);
+///     ring stays primed for leading-word capture;
 ///   - cold  → macOS immediately restores normal system audio routing
 ///     (YouTube/music stops sounding like a phone call).
 ///
@@ -72,7 +72,7 @@ fn idle_timeout_from_settings() -> Duration {
 /// when nothing is due.
 const WATCHDOG_TICK: Duration = Duration::from_secs(1);
 
-/// TASK-37: pre-roll ring buffer length, in milliseconds. While the cpal
+/// Pre-roll ring buffer length, in milliseconds. While the cpal
 /// stream is warm but the user hasn't pressed PTT yet, incoming samples
 /// are written into a fixed-size ring buffer. On PTT-down, the ring is
 /// drained into the per-recording `samples` buffer so the first ~300 ms
@@ -106,8 +106,7 @@ pub struct AudioCapture {
     /// `device_lost()` — swap-to-false on read so a single device-loss event
     /// surfaces exactly once.
     device_lost: Arc<AtomicBool>,
-    /// TASK-36: holds the warm cpal stream between recordings. Replaces
-    /// the per-press `active` field that this struct used to carry. The
+    /// Holds the warm cpal stream between recordings. The
     /// stream is opened once per device, gated by the `is_recording`
     /// flag inside the cpal callback, and torn down by the idle
     /// watchdog or by a device-change check at the next `start()`.
@@ -128,7 +127,7 @@ pub struct AudioCapture {
     watchdog_handle: Mutex<Option<JoinHandle<()>>>,
     /// Set on `Drop` to tell the watchdog to exit.
     shutdown_watchdog: Arc<AtomicBool>,
-    /// TASK-22: streaming finalizer worker (resample + VAD off the
+    /// Streaming finalizer worker (resample + VAD off the
     /// post-release critical path). Spawned in `start()`, shut down in
     /// `stop()` / `cancel()`. The capture-feeder thread (`feeder`) ships
     /// chunks to it from the shared `samples` buffer.
@@ -154,7 +153,7 @@ pub struct AudioCapture {
     /// the feeder has exited so it knows whether all captured audio
     /// reached the worker.
     feeder_cursor: Arc<AtomicUsize>,
-    /// TASK-37: pre-roll ring buffer. Filled by the cpal callback every
+    /// Pre-roll ring buffer. Filled by the cpal callback every
     /// tick (regardless of `is_recording`); drained by `start()` on
     /// PTT-down and prepended to `samples`. Holds raw native-rate,
     /// native-channel samples — same format as `samples` mid-recording,
@@ -342,12 +341,9 @@ fn resample_to_16k(buf: &[f32], src_rate: u32) -> anyhow::Result<Vec<f32>> {
     Ok(out)
 }
 
-/// Peak-normalize a buffer of f32 samples to the given target peak.
-/// One-way: boosts quiet input; never attenuates loud input. Built-in
-/// MacBook microphones typically peak between -25 and -18 dBFS, well below
-/// what whisper.cpp was trained on — boosting before transcription
-/// measurably reduces hallucinations on quiet audio (see
-/// https://arxiv.org/html/2505.12969v1 and faster-whisper#183).
+/// Normalizes below-peak audio to the target level without attenuating.
+/// MacBook microphones peak between -25 and -18 dBFS; boosting before
+/// transcription reduces hallucinations on quiet audio.
 fn peak_normalize(samples: &mut [f32], target: f32) {
     let peak = samples.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
     if peak > 0.0 && peak < target {
@@ -457,7 +453,7 @@ impl AudioCapture {
                 if stream_guard.is_some() {
                     *stream_guard = None;
                     *warm_device_name.lock() = None;
-                    // TASK-37: clear stale pre-roll so the next stream
+                    // Clear stale pre-roll so the next stream
                     // (potentially at a different rate / channels)
                     // starts with an empty ring.
                     preroll.lock().clear();
@@ -518,7 +514,7 @@ impl AudioCapture {
         let lvl = self.level.clone();
         let first = self.first_sample.clone();
 
-        // TASK-37: size and prepare the pre-roll ring for this stream's
+        // Size and prepare the pre-roll ring for this stream's
         // native rate / channels. Cleared (not just resized) because a
         // device change between presses must not leak old-device samples
         // into the new ring.
@@ -556,7 +552,7 @@ impl AudioCapture {
             }
         };
 
-        // ---- cpal callback discipline (TASK-22) ------------------------
+        // ---- cpal callback discipline -----------------------------------
         // The audio callback runs on CoreAudio's high-priority thread and
         // must do only:
         //   1. extend the shared `samples: Mutex<Vec<f32>>` buffer with
@@ -569,11 +565,10 @@ impl AudioCapture {
         // pulls from `samples` via the capture-feeder thread, never
         // here.
         //
-        // This matches `cjpais/Handy`'s callback discipline and the
-        // TASK-22 constraint. Verified by code inspection: the only
-        // operations below `extend_from_slice` and `level.store`. If
+        // This matches `cjpais/Handy`'s callback discipline. The only
+        // operations below are `extend_from_slice` and `level.store`. If
         // you add work here, it MUST be moved to the feeder or worker.
-        // TASK-37: feed the pre-roll ring on every callback regardless
+        // Feed the pre-roll ring on every callback regardless
         // of `is_recording`. Operations: lock → extend → trim front if
         // over capacity → unlock. One short critical section, called
         // per CoreAudio buffer (~10 ms). If profiling shows contention,
@@ -708,7 +703,7 @@ impl AudioCapture {
         if device_was_lost {
             *self.warm_stream.lock() = None;
             *self.warm_device_name.lock() = None;
-            // TASK-37: ring is sized for the (now-broken) old stream.
+            // Ring was sized for the (now-broken) old stream.
             // Clear it; open_stream() will re-size on the next call.
             self.preroll.lock().clear();
             self.preroll_capacity.store(0, Ordering::SeqCst);
@@ -743,7 +738,7 @@ impl AudioCapture {
                 if warm.is_some() {
                     *warm = None;
                     *warm_name = None;
-                    // TASK-37: drop ring contents from the old device —
+                    // Drop ring contents from the old device —
                     // they may be at a different rate / channel layout
                     // than the new stream. open_stream() below resizes
                     // the ring for the new device.
@@ -764,12 +759,12 @@ impl AudioCapture {
         // Cancel any pending idle close — we're about to record.
         *self.idle_close_at.lock() = None;
 
-        // TASK-37: drain the pre-roll ring into `samples` so the first
+        // Drain the pre-roll ring into `samples` so the first
         // ~PREROLL_MS of audio (captured while the stream was warm but
         // is_recording=false) is prepended to the recording. Time
         // ordering is preserved: oldest ring sample first.
         //
-        // `samples` was just cleared at the top of start(); splicing at
+        // `samples` is cleared at the top of start(); splicing at
         // 0..0 is effectively `extend`, no shift cost. We move the ring
         // out via `Vec::from_iter(drain)` so the lock is released
         // before `samples` is touched.
@@ -796,7 +791,7 @@ impl AudioCapture {
         // feeder cursor begins at 0 and therefore sends pre-roll first.
         self.is_recording.store(true, Ordering::SeqCst);
 
-        // TASK-22: spawn the streaming finalizer worker and the
+        // Spawn the streaming finalizer worker and the
         // capture-feeder thread. The worker owns the resampler + VAD
         // state and consumes chunks off the cpal callback's critical
         // path. The feeder polls `samples` every ~10 ms and ships any
@@ -1003,9 +998,8 @@ impl AudioCapture {
     pub fn stop(&self) -> anyhow::Result<StopOutcome> {
         // Stage timing — see ARCHITECTURE.md "Audio Pipeline Contract".
         // We log a single compact line at the end of finalization so later
-        // optimization work (TASK-17 / TASK-18 / TASK-22) is grounded in
-        // measurements instead of vibes. The legacy `total=` field is
-        // preserved for direct comparison against TASK-21 evidence, with
+        // optimization work is grounded in measurements instead of vibes.
+        // The legacy `total=` field is preserved for continuity, with
         // additional `incremental_resample_total`, `incremental_vad_total`,
         // and `finalize_flush` fields when the streaming path is used.
         let t_total_start = Instant::now();
@@ -1075,10 +1069,9 @@ impl AudioCapture {
         }
 
         // ---- Batch fallback path -------------------------------------
-        // Same code as pre-TASK-22. Reached only when the streaming
-        // path is degraded (worker init failure, mid-stream VAD/
-        // resampler error). Preserved verbatim so a streaming
-        // regression can never lose a recording.
+        // Reached only when the streaming path is degraded (worker init
+        // failure, mid-stream VAD/resampler error). Preserved verbatim so a
+        // streaming regression can never lose a recording.
         let t_capture_clone_start = Instant::now();
         let buf_full = self.samples.lock().clone();
         capture_clone_ms = t_capture_clone_start.elapsed().as_secs_f32() * 1000.0;
@@ -1154,10 +1147,9 @@ impl AudioCapture {
     }
 
     /// Write the streaming finalizer's already-trimmed, already-
-    /// peak-normalized buffer to a tempfile WAV. Logs the new TASK-22
-    /// stage-timings shape (with `incremental_*` and `finalize_flush`
-    /// fields) alongside the legacy `total=` for comparison against
-    /// TASK-21 evidence.
+    /// peak-normalized buffer to a tempfile WAV. Logs incremental-
+    /// resample and incremental-vad timings alongside the legacy
+    /// `total=` stage time.
     fn write_wav_from_streaming_result(
         &self,
         result: FinalizeResult,
@@ -1326,7 +1318,7 @@ mod tests {
 
     /// The on-disk handoff to whisper-cli must always be 16 kHz mono 16-bit
     /// PCM int. Pin that contract so an accidental edit to the constants or
-    /// the spec helper trips the test suite. TASK-13 success signal.
+    /// the spec helper trips the test suite.
     #[test]
     fn whisper_wav_spec_is_16k_mono_16bit_int() {
         let spec = whisper_wav_spec();
@@ -1349,7 +1341,7 @@ mod tests {
         assert_eq!(min_samples, 1600);
     }
 
-    /// TASK-37: pushing more samples than capacity into the pre-roll ring
+    /// Pushing more samples than capacity into the pre-roll ring
     /// must keep length pinned at capacity and retain the *latest* values.
     /// This mirrors the cpal callback's per-tick behavior: extend, then
     /// drain the front if over capacity.
@@ -1381,7 +1373,7 @@ mod tests {
         }
     }
 
-    /// TASK-37: a partially-filled ring (under capacity) must be returned
+    /// A partially-filled ring (under capacity) must be returned
     /// in full on drain — represents the cold-start case where the user
     /// presses PTT before the warm stream has run for PREROLL_MS.
     #[test]

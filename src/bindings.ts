@@ -46,7 +46,7 @@ export const commands = {
 	downloadModel: (modelId: string) => typedError<string, string>(__TAURI_INVOKE("download_model", { modelId })),
 	cancelDownload: (modelId: string) => __TAURI_INVOKE<void>("cancel_download", { modelId }),
 	/**
-	 *  Download a Moonshine ONNX model bundle from HuggingFace (TASK-58).
+	 *  Download a Moonshine ONNX model bundle from HuggingFace.
 	 * 
 	 *  `variant` must be "tiny" or "base". Files are stored under:
 	 *    `~/.config/turbotalk/models/moonshine/<variant>/`
@@ -109,7 +109,7 @@ export const commands = {
 	 *  calls `recorder.cancel()` directly and does not go through this command —
 	 *  this command exists for future UI use (e.g. an X button on the overlay).
 	 *  Registered in the invoke_handler and specta builder so it appears in
-	 *  `bindings.ts` (TASK-23).
+	 *  `bindings.ts`.
 	 */
 	cancelRecording: () => typedError<null, string>(__TAURI_INVOKE("cancel_recording")),
 	startRecording: () => __TAURI_INVOKE<void>("start_recording"),
@@ -181,7 +181,7 @@ export const commands = {
 	 *  the network or webhook is unavailable.
 	 * 
 	 *  Upload is gated behind the `dev-telegram-bugreport` Cargo feature — public
-	 *  release builds never embed Telegram credentials (TASK-66).
+	 *  release builds never embed Telegram credentials.
 	 */
 	submitBugReport: (note: string) => typedError<BugReportResult, string>(__TAURI_INVOKE("submit_bug_report", { note })),
 	openLogsFolder: () => typedError<null, string>(__TAURI_INVOKE("open_logs_folder")),

@@ -77,7 +77,7 @@ fn save_config(
     // now (rather than waiting for the next PTT) keeps the pill out of the
     // user's way the moment they toggle the setting.
     windowing::reposition_overlay_to_cursor_monitor(&app);
-    // TASK-20: drop the cached TranscriptionWorker so the next dictation
+    // Drop the cached worker so the next dictation
     // picks up any changes to `whisper.model` or `cleanup.vocabulary`. The
     // rebuild is cheap (path validation only — no model load) so we do not
     // try to detect "did anything actually change".
@@ -178,7 +178,7 @@ fn apply_overlay_visibility(app: &tauri::AppHandle, show: bool) {
     // Calling `show()` on an already-visible window on macOS reorders it to
     // the front and steals key status from whichever window the user was
     // interacting with — every settings change would defocus the main
-    // window mid-click. (TASK-40)
+    // window mid-click.
     if let Some(overlay) = app.get_webview_window("overlay") {
         let visible = overlay.is_visible().unwrap_or(false);
         if show && !visible {
@@ -759,7 +759,7 @@ async fn verify_runtime_model_file(
     Ok(())
 }
 
-/// Download a Moonshine ONNX model bundle from HuggingFace (TASK-58).
+/// Download a Moonshine ONNX model bundle from HuggingFace.
 ///
 /// `variant` must be "tiny" or "base". Files are stored under:
 ///   `~/.config/turbotalk/models/moonshine/<variant>/`
@@ -1553,7 +1553,7 @@ fn detect_logitech_mouse() -> bool {
 /// calls `recorder.cancel()` directly and does not go through this command —
 /// this command exists for future UI use (e.g. an X button on the overlay).
 /// Registered in the invoke_handler and specta builder so it appears in
-/// `bindings.ts` (TASK-23).
+/// `bindings.ts`.
 #[tauri::command]
 #[specta::specta]
 fn cancel_recording(
@@ -1951,7 +1951,7 @@ pub fn run() {
                 } // end loop
             });
 
-            // TASK-23: manage recorder and tray_icon as app state so the
+            // Manage recorder and tray_icon as app state so the
             // `cancel_recording` command can reach them from the invoke handler.
             app.manage(recorder.clone());
             app.manage(tray_icon.clone());

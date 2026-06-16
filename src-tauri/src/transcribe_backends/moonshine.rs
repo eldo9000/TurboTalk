@@ -1,10 +1,9 @@
-// Moonshine ONNX transcription backend (TASK-58)
+// Moonshine ONNX transcription backend
 //
 // Implements `TranscriptionBackend` using the `transcribe-rs` crate's Moonshine
 // support. Moonshine is a non-autoregressive ONNX speech recognition model
 // designed for dictation — it does not hallucinate "thanks for watching" on
-// silence the way Whisper does, making it a structural fix for what TASK-55/56
-// patched around.
+// silence the way Whisper does.
 //
 // ── Model storage ────────────────────────────────────────────────────────────
 //
@@ -34,7 +33,7 @@
 // to route through this backend. Download a Moonshine model via
 // `download_moonshine_model` before use.
 //
-// TODO (TASK-60): wire a settings UI toggle so users can pick Moonshine vs Whisper.
+// TODO: wire a settings UI toggle so users can pick Moonshine vs Whisper.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;

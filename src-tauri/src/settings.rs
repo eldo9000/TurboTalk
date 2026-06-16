@@ -211,10 +211,9 @@ pub struct AudioConfig {
 fn default_idle_timeout_secs() -> u32 {
     // Default OFF: close the cpal input stream as soon as a recording ends so
     // macOS restores normal system audio routing (Bluetooth A2DP, no orange
-    // mic dot). The UI control was removed in favour of always-cold; the
-    // field stays in `Config` for power users who want to re-enable warmth
-    // by editing config.toml directly. See `audio.rs::idle_timeout_from_settings`
-    // for the read site.
+    // mic dot). The field stays in `Config` for power users who want to
+    // re-enable warmth by editing config.toml directly. See
+    // `audio.rs::idle_timeout_from_settings` for the read site.
     0
 }
 
@@ -840,7 +839,7 @@ mod tests {
     }
 
     // ----------------------------------------------------------------------
-    // TASK-2: scan_models_dir path-traversal hardening.
+    // scan_models_dir path-traversal hardening.
     //
     // `scan_models_dir_in` is the testable inner helper extracted from
     // `scan_models_dir`. We drive it against a tempdir so the test does not
@@ -926,7 +925,7 @@ mod tests {
     }
 
     // ----------------------------------------------------------------------
-    // TASK-7: History pipeline hardening.
+    // History pipeline hardening.
     //
     // These exercise `save_history_at` / `load_history_detailed_at` (the
     // path-parameterized variants of `save_history` / `load_history_detailed`)
@@ -1071,7 +1070,7 @@ mod tests {
     }
 
     // ----------------------------------------------------------------------
-    // TASK-38: process-wide settings cache.
+    // Process-wide settings cache.
     //
     // The cache is a static `OnceLock<RwLock<Option<Config>>>`, so any test
     // that mutates it must run serially with the others — `serial_test` does
@@ -1140,7 +1139,7 @@ mod tests {
     }
 
     // ----------------------------------------------------------------------
-    // TASK-64: Private directory and file permission helpers.
+    // Private directory and file permission helpers.
 
     #[test]
     fn create_private_dir_all_creates_dir() {

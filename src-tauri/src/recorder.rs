@@ -241,7 +241,7 @@ impl Recorder {
     /// level-broadcast thread when device loss is detected — there's no
     /// hotkey-up coming, so we synthesize the cleanup ourselves.
     ///
-    /// TASK-23: also called by the cancel-gesture path (Ctrl+Alt hold or Esc).
+    /// Also called by the cancel-gesture path (Ctrl+Alt hold or Esc).
     ///   - From `Recording`: drops the audio stream; no WAV produced.
     ///   - From `Transcribing`: additionally kills the active whisper-cli
     ///     subprocess via `transcribe::abort_active()`.

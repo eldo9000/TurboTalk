@@ -1,3 +1,81 @@
+## cancel-epoch-TOCTOU
+Cancel (Escape / Ctrl+Alt hold) increments `CANCEL_EPOCH` while the hotkey
+thread is inside `rec.stop()` or its Mutex::take() calls. If the epoch is
+read *after* `stop()` returns, the observed value may already include the
+cancel — and all subsequent `job_cancelled_since` checks never fire, so the
+text is pasted even though the user cancelled.
+
+**Fix (TASK-23):** capture `cancel_epoch()` into a local *before* calling
+`rec.stop()`. The pre-stop epoch is the one checked throughout the rest of
+the handler. The same pattern is used for the salvaged-transcript path.
+
+**Related:** `finish_guarded()` in `recorder.rs` handles the inverse race —
+if a cancel + rapid re-press arrive between `rec.stop()` succeeding and
+the finish call, calling `finish()` would corrupt the new job's state.
+`finish_guarded()` skips the `Ready` transition when the recorder is
+already in `Recording`.
+
+## paste-delay-tuning
+Cmd+V keystroke injection and clipboard restoration race on busy main
+threads. Heavyweight apps (Electron, Xcode, etc.) with a saturated main
+thread can miss the paste if clipboard is restored too soon — the app
+reads the restored content instead of the pasted text.
+
+**Tuning history:** 150 ms was too tight. 500 ms was chosen because the
+full dictation cycle is ~2-3 s anyway (transcription + cleanup), so the
+extra 350 ms is imperceptible. The paste delay comment should state the
+invariant ("500 ms to let the paste land before restoring clipboard"),
+not the tuning history.
+
+## CoreAudio-buffer-sleep
+After setting `is_recording = false`, the hotkey thread sleeps briefly
+to let the last in-flight CoreAudio callback finish before stopping the
+stream. If the sleep is too short, the final samples may be lost.
+
+**Tuning history:** was 25 ms for headroom; reduced to 10 ms because
+one full CoreAudio buffer cycle (~10 ms at default settings) is
+sufficient. The comment should state the invariant ("wait for the last
+in-flight callback"), not the old value.
+
+## whisper-temperature-inc-hallucination
+`whisper-server` temperature-fallback retry (`temperature_inc > 0`)
+produces "same phrase 3×" repetition output on short or silent audio.
+This was carried over from the old `whisper-cli` config (commit
+`55cfa21`) and was lost-then-re-discovered during the TASK-47 server
+transition.
+
+**Fix:** set `temperature_inc=0` explicitly in the HTTP POST form to
+disable the fallback.
+
+## quick-tap-race
+In hold-to-talk mode, a very quick press/release can race: the key-up
+thread is scheduled before the key-down thread's `rec.start()` call
+completes. Without a synchronization mechanism, `ptt_up` sees the
+recorder still in `Ready`, fails its `stop()` call, and the overlay
+stays stuck forever.
+
+**Fix (TASK-2):** a `CANCEL_PENDING` atomic flag. `ptt_up` sets it on
+IllegalTransition from Ready; `ptt_down` checks the flag immediately
+after `rec.start()` succeeds and cancels the recording instead of
+showing the overlay. A second arming cancel path (`CANCEL_ARMING`) exists
+for the toggle-mode arming phase, where the key-down thread is still
+polling prewarm readiness.
+
+A stale-flag variant: orphaned key-up from a previous cancelled arming
+can leave `CANCEL_PENDING` / `CANCEL_ARMING` set. Every new `ptt_down`
+clears both flags at entry before checking prewarm state.
+
+## device-lost-deferred-cancel
+When the audio device disappears mid-recording, the level-broadcast
+thread detects it and calls `recorder.cancel()`. In hold mode, the
+subsequent key-up should be a no-op — but after a device-lost cancel,
+the `ptt_up` suppression arm was skipped, so the trailing key-up hit
+IllegalTransition and set `CANCEL_PENDING`, which would fire on the
+*next* press instead of being silent.
+
+**Fix:** arm `ptt_up` suppression in the device-lost block in `lib.rs`,
+mirroring the existing `trigger_cancel` callers.
+
 ## SVE-cmake-probe-hang
 check_cxx_source_runs for ARM SVE hangs on macOS arm64 (Apple M4/M3/M2/M1 have no SVE).
 Fix: patch check_cxx_source_runs → check_cxx_source_compiles in ggml/src/ggml-cpu/CMakeLists.txt.

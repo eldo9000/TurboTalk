@@ -88,7 +88,7 @@
     { value: '10d',     label: 'After 10 days'  },
     { value: '30d',     label: 'After 30 days'  },
   ];
-  // Typed Rust↔TS contract — see TASK-8. `commands.*` are wrappers around
+  // Typed Rust↔TS contract. `commands.*` are wrappers around
   // `invoke()` whose argument and return shapes are derived from the Rust
   // structs in `src-tauri/src/settings.rs`. Adding/removing/renaming a field
   // there produces a TypeScript error here.
@@ -249,7 +249,7 @@
   let copiedTs        = $state(null);
   let transcriptError = $state('');
 
-  // TASK-55: hallucination-rejected transcript. When the backend detects a
+  // Hallucination-rejected transcript. When the backend detects a
   // garbage transcript and emits `transcription-rejected`, we show the text
   // here with a "⚠ filtered" badge instead of adding it to history or pasting.
   // Cleared when the user dismisses or a new recording starts.
@@ -1438,7 +1438,7 @@ Reply with only the single word, lowercase, no punctuation.
           <button onclick={() => { transcriptError = ''; }} class="tt-banner-close">×</button>
         </div>
       {/if}
-      <!-- TASK-55: hallucination-rejected transcript. Single-line warning only —
+      <!-- Hallucination-rejected transcript. Single-line warning only —
            the full text was added to history by the event handler so the user
            can click-to-copy it from the list below. -->
       {#if filteredEntry}

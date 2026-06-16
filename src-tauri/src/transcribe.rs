@@ -1,13 +1,12 @@
 // Spawns whisper-server as a long-lived sidecar, feeds it the WAV via HTTP
 // POST /inference, and reads back the JSON transcript.
 //
-// TASK-47: replace the per-call whisper-cli spawn (TASK-20 option 3) with a
-// persistent whisper-server that keeps the model loaded across dictations.
-// The server is spawned once per worker lifetime (one per model config); the
-// worker is cached in the process-wide WORKER slot and rebuilt only when the
-// model changes or after an abort.
+// Spawns whisper-server as a long-lived sidecar that keeps the model loaded
+// across dictations. The server is spawned once per worker lifetime (one per
+// model config); the worker is cached in the process-wide WORKER slot and
+// rebuilt only when the model changes or after an abort.
 //
-// TASK-55: post-hoc hallucination detection. After strip_trailing_filler, the
+// Post-hoc hallucination detection. After strip_trailing_filler, the
 // transcript is passed through detect_garbage(). If it trips any of the
 // detection signals below, the caller receives a TranscriptOutcome with a
 // rejection variant, displays the text as "⚠ filtered", and skips paste.
@@ -53,7 +52,7 @@ use std::time::Instant;
 
 use tauri::Emitter;
 
-// ── Hallucination detection (TASK-55) ────────────────────────────────────────
+// ── Hallucination detection ───────────────────────────────────────────────────
 
 /// The reason a transcript was classified as garbage and rejected.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -180,7 +179,7 @@ pub fn detect_garbage(text: &str) -> Option<RejectReason> {
         }
     }
 
-    // ── Signal 2b: bigram repetition (TASK-55 follow-up) ──────────────────────
+    // ── Signal 2b: bigram repetition ─────────────────────────────────────────
     // Split on whitespace and count occurrences of each 2-word window. Catches
     // single-word stutters ("war war war war war") that the trigram filter
     // misses because the 4th position shifts to a different word before the
@@ -540,7 +539,7 @@ fn normalize_whisper_text(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-// ── TranscriptionBackend trait (TASK-57) ─────────────────────────────────────
+// ── TranscriptionBackend trait ─────────────────────────────────────────────────
 
 /// Common interface for all transcription backends. Implementations must be
 /// `Send + Sync` so they can live behind `Arc<dyn TranscriptionBackend>` and be
@@ -575,13 +574,12 @@ pub trait TranscriptionBackend: Send + Sync {
 /// in `config.toml`). The `TT_BACKEND` environment variable has been removed — use
 /// the Settings UI or edit `config.toml` directly to switch backends.
 ///
-/// Fallback behaviour when a feature flag is off (TASK-60):
+/// Fallback behaviour when a feature flag is off:
 ///   Moonshine or Parakeet selected but their feature gate is disabled (ort conflict
 ///   between transcribe-rs rc.12 and vad-rs rc.9) → falls back to Whisper with a
-///   log warning. The fallback is intentional and documented: the backend field is
-///   wired end-to-end now so activation is just a recompile once the conflict resolves.
+///   log warning. Activation is just a recompile once the version conflict resolves.
 ///
-/// Note on VAD (TASK-56) and hallucination filter (TASK-55):
+/// Note on VAD and hallucination filter:
 ///   The Silero VAD pre-filter is whisper-server-specific; Moonshine/Parakeet have
 ///   their own silence handling. The post-hoc hallucination filter runs on all
 ///   backends (no harm, family-agnostic). The Chaperone cleanup (cleanup.rs) runs
@@ -639,11 +637,10 @@ fn build_backend(
 // ── WhisperBackend ────────────────────────────────────────────────────────────
 
 /// Concrete `TranscriptionBackend` backed by a long-lived `whisper-server`
-/// subprocess. TASK-47 introduced this pattern; TASK-57 promotes it behind
-/// the `TranscriptionBackend` trait so future backends can be swapped in.
+/// subprocess.
 ///
-/// The internal `spawn_lock` enforces the one-in-flight invariant from
-/// TASK-14: any second concurrent caller blocks here rather than racing the
+/// The internal `spawn_lock` enforces the one-in-flight invariant: any
+/// second concurrent caller blocks here rather than racing the
 /// HTTP POST. `server_child` is protected by a separate `parking_lot::Mutex`
 /// so `abort()` can kill the server from another thread without taking the
 /// coarser `spawn_lock`.
@@ -672,7 +669,7 @@ pub struct WhisperBackend {
     /// Reusable HTTP client for POST /inference requests.
     http_client: reqwest::blocking::Client,
     /// audio_ctx sent per-request. 512 = ~10 s encoder window; benched at 63%
-    /// faster than default (1500) across short/medium/long utterances (TASK-44).
+    /// faster than default (1500) across short/medium/long utterances.
     audio_ctx: u32,
 }
 
@@ -740,7 +737,7 @@ impl WhisperBackend {
             cmd.creation_flags(0x08000000);
         }
 
-        // TASK-56: Silero VAD pre-filter. When enabled, whisper-server skips
+        // Silero VAD pre-filter. When enabled, whisper-server skips
         // silent regions before the decoder runs, preventing hallucination on
         // silence and reducing transcription time on recordings with long pauses.
         // The VAD model file must exist alongside the binary; if it is missing
@@ -786,7 +783,7 @@ impl WhisperBackend {
         }
         let mut child = cmd.spawn()?;
 
-        // TASK-3: responsive readiness poll instead of a flat 500ms sleep.
+        // Responsive readiness poll instead of a flat 500ms sleep.
         // Check every 50ms whether the server has either died (binary/signature/
         // ABI problem) or is already accepting connections. Break early if the
         // server responds, saving up to 450ms per server start.
@@ -890,8 +887,8 @@ impl WhisperBackend {
 
         // Pick audio_ctx based on actual WAV duration. 512 frames covers
         // ~10 s; anything longer must use the full context (0 = all) or
-        // whisper silently truncates past the cap. TASK-44 benched 512 as
-        // 63% faster on ≤8 s utterances — keep that win for short dictation,
+        // whisper silently truncates past the cap. audio_ctx=512 is 63%
+        // faster on ≤8 s utterances — keep that win for short dictation,
         // fall back to full context for long sentences.
         let effective_audio_ctx = match hound::WavReader::open(wav) {
             Ok(r) => {
@@ -912,7 +909,7 @@ impl WhisperBackend {
             // Anti-hallucination: temperature_inc=0 disables the temperature
             // fallback retry that produces "same phrase 3x" repetition output
             // on short or silent audio. Mirrors the old whisper-cli config
-            // (commit 55cfa21) lost during the TASK-47 server transition.
+            // (commit 55cfa21) lost during the persistent-server transition.
             .text("temperature", "0.0")
             .text("temperature_inc", "0.0")
             .text("suppress_nst", "true")
@@ -962,7 +959,7 @@ impl WhisperBackend {
             text.chars().count()
         );
 
-        // TASK-55: post-hoc hallucination detection on the cleaned text.
+        // Post-hoc hallucination detection on the cleaned text.
         let rejection = detect_garbage(&text);
 
         // Full transcript → local-only debug log (never uploaded). Temporary.
@@ -1035,7 +1032,7 @@ impl Drop for WhisperBackend {
 static WORKER: Mutex<Option<std::sync::Arc<dyn TranscriptionBackend>>> = Mutex::new(None);
 
 /// Abort the in-flight whisper-server subprocess. Called by `Recorder::cancel()`
-/// when a cancel is triggered while in `Transcribing` state (TASK-23).
+/// when a cancel is triggered while in `Transcribing` state.
 /// After killing the server, the cached worker is invalidated so the next
 /// dictation rebuilds it (and thus restarts the server).
 pub fn abort_active() {
@@ -1177,7 +1174,9 @@ pub fn prewarm_in_flight() -> bool {
 /// Tauri's dev runner during rapid file-change rebuilds). Best-effort: logs
 /// at warn on failure but never blocks startup.
 ///
-/// TASK-6: uses the exact resolved binary path (via `find_whisper_server`)
+/// Uses the exact resolved binary path (via `find_whisper_server`)
+/// to locate the sidecar at launch. This indirection avoids hardcoding
+/// platform-specific paths.
 /// instead of a generic `pkill -f whisper-server` so it only kills
 /// TurboTalk's own whisper-server, not another user's or another instance's.
 pub fn kill_orphans() {
@@ -1302,17 +1301,17 @@ fn is_connection_error(err: &anyhow::Error) -> bool {
 /// sidecar binary, validating the model path, and sending the HTTP POST.
 /// It does **not** call `cleanup::process` — the caller drives the stages.
 ///
-/// TASK-47: routes through `TranscriptionWorker` which keeps whisper-server
-/// alive across calls. On worker-build failure (e.g. invalid model path) the
-/// function returns the error directly — the cached worker remains absent so
-/// a fixed config is picked up on the next call.
+/// Routes through `WhisperBackend` which keeps whisper-server alive across
+/// calls. On worker-build failure (e.g. invalid model path) the function
+/// returns the error directly — the cached worker remains absent so a fixed
+/// config is picked up on the next call.
 ///
-/// TASK-55: the returned `TranscriptOutcome.rejection` signals hallucination.
-/// Callers must skip paste when `rejection.is_some()`.
+/// The returned `TranscriptOutcome.rejection` signals hallucination. Callers
+/// must skip paste when `rejection.is_some()`.
 ///
-/// TASK-3: on connection-level failure (server crash / OOM kill), the dead
-/// worker is invalidated and a fresh server is started for a single inline
-/// retry. If the retry also fails, the error propagates as before.
+/// On connection-level failure (server crash / OOM kill), the dead worker is
+/// invalidated and a fresh server is started for a single inline retry. If
+/// the retry also fails, the error propagates as before.
 pub fn run_raw(wav: &Path) -> anyhow::Result<TranscriptOutcome> {
     let cfg = crate::settings::load();
     let worker = worker_for(&cfg)?;
@@ -1334,7 +1333,7 @@ pub fn run_raw(wav: &Path) -> anyhow::Result<TranscriptOutcome> {
     }
 }
 
-// ── Segment transcription queue (TASK-54B) ───────────────────────────────────
+// ── Segment transcription queue ───────────────────────────────────────────────
 
 /// Write a slice of 16 kHz mono f32 samples to a temporary WAV file using the
 /// same 16-bit PCM contract as the tail WAV (`audio::write_transcription_wav`).
@@ -1350,7 +1349,7 @@ fn write_segment_wav(samples: &[f32], seg_index: usize) -> anyhow::Result<std::p
 ///
 /// Note: per-segment hallucination rejection is NOT applied here — rejection
 /// is applied to the final assembled transcript in the hotkey pipeline after
-/// all segments and the tail are joined (TASK-55). Individual silence-boundary
+/// all segments and the tail are joined. Individual silence-boundary
 /// segments may legitimately look repetitive in isolation.
 fn transcribe_one_segment(seg: &crate::audio_finalizer::SegmentEmit) -> String {
     let wav_path = match write_segment_wav(&seg.samples, seg.index) {
@@ -1503,7 +1502,7 @@ impl SegmentTranscriber {
 
 #[cfg(test)]
 mod tests {
-    //! Path-traversal hardening tests for TASK-2.
+    //! Path-traversal hardening tests.
     //!
     //! These tests do NOT exercise the canonicalization logic by mutation —
     //! they assert the existing guards reject the obvious attack shapes
@@ -1634,10 +1633,10 @@ mod tests {
     }
 
     // ----------------------------------------------------------------------
-    // TASK-20: TranscriptionWorker construction-time validation.
+    // Construction-time validation.
     //
     // Construction must reject an invalid model path WITHOUT spawning
-    // whisper-cli. We test by handing `from_config` a cfg whose model points
+    // a subprocess. We test by handing `from_config` a cfg whose model points
     // at /etc/hosts (exists, but lives outside the models dir). The worker
     // build path goes through `validate_model_path`, which must short-circuit
     // before any process is spawned.
@@ -1658,7 +1657,7 @@ mod tests {
         );
     }
 
-    // ── TASK-54B: SegmentTranscriber assembly ─────────────────────────────
+    // ── SegmentTranscriber assembly ──────────────────────────────────────
 
     /// BTreeMap naturally yields values in key order — verify the assembly
     /// logic preserves segment order regardless of insertion order.
@@ -1714,7 +1713,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    // ── TASK-55: detect_garbage unit tests ────────────────────────────────
+    // ── detect_garbage unit tests ─────────────────────────────────────────
 
     /// Empty string must never trigger a filter — the caller handles the
     /// empty-transcript path separately.
@@ -1871,10 +1870,7 @@ mod tests {
         );
     }
 
-    // ── TASK-47: TranscriptionWorker::abort() no-op test ─────────────────
-
-    // ----------------------------------------------------------------------
-    // TASK-47: TranscriptionWorker::abort() no-op test.
+    // ── WhisperBackend::abort() no-op test ─────────────────────
     //
     // `abort()` on a worker with no active server_child slot must return
     // cleanly without panicking. We build a minimal worker directly (bypassing

@@ -21,11 +21,9 @@
 // i.e. degrade gracefully to "no trimming" rather than crashing or dropping
 // the whole recording.
 //
-// Session reuse (TASK-17): the heavy cost in `Vad::new` is ONNX session
+// Session reuse: the heavy cost in `Vad::new` is ONNX session
 // construction (model parse, op graph build, allocator setup). Per-frame
-// `compute()` is cheap by comparison. Stage timings from TASK-13 bucket
-// init + 100×compute together as a single `vad=` number — fine for
-// pipeline debugging, useless for deciding whether to cache.
+// `compute()` is cheap by comparison.
 //
 // The `Vad` struct exposes a `reset()` method that zeros only the LSTM
 // hidden/cell tensors — the per-stream state. The ONNX `Session` itself
@@ -37,13 +35,11 @@
 // no state leak path there either.
 //
 // We intentionally use one cached `Vad` behind a `Mutex` rather than a
-// pool — TurboTalk runs one in-flight dictation job at a time (TASK-14),
+// pool — TurboTalk runs one in-flight dictation job at a time,
 // so there is never contention.
 //
-// TASK-62: vad-rs replaced with direct ort rc.12 integration so ort version
-// unifies with the transcribe-rs dep. We avoid the `ndarray` feature of ort
-// entirely by using the `(shape, &[T])` tuple form to create input tensors
-// and `try_extract_tensor` (which returns `(&Shape, &[T])`) for outputs.
+// Uses direct `ort` integration (not `ndarray`). Input tensors use
+// `(shape, &[T])` tuple form; outputs use `try_extract_tensor`.
 // This keeps us free of ndarray version-matching issues.
 
 use std::sync::OnceLock;
@@ -280,7 +276,7 @@ impl<'a> SmoothedVad<'a> {
     }
 }
 
-/// Streaming-finalizer accessor (TASK-22). Returns the cached
+/// Streaming-finalizer accessor. Returns the cached
 /// process-lifetime VAD `OnceLock<Mutex<Option<Vad>>>` so the streaming
 /// worker can hold the same session the batch path uses. Lazily
 /// initializes on first call (mirroring `trim()`'s init path) so we
@@ -324,7 +320,7 @@ pub fn trim(samples: &[f32]) -> (usize, usize) {
 
     // Acquire (and lazily initialize) the cached process-lifetime VAD.
     // We hold the mutex for the duration of this call — the audio
-    // pipeline runs one in-flight job at a time (TASK-14), so there is
+    // pipeline runs one in-flight job at a time, so there is
     // no contention to lose to. Holding it also makes "reset → push
     // frames" atomic w.r.t. any future caller, which matters because
     // reset zeros the LSTM state the frames depend on.
@@ -496,7 +492,7 @@ mod tests {
         assert_eq!(trim(&buf), (0, 100));
     }
 
-    /// State-isolation contract for the cached VAD (TASK-17).
+    /// State-isolation contract for the cached VAD.
     ///
     /// The cached `Vad` is reused across calls but `reset()` is called
     /// before each recording. We can't easily assert h/c-tensor zeroing

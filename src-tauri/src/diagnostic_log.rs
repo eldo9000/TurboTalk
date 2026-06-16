@@ -518,7 +518,7 @@ async fn upload_to_telegram(
 /// the network or webhook is unavailable.
 ///
 /// Upload is gated behind the `dev-telegram-bugreport` Cargo feature — public
-/// release builds never embed Telegram credentials (TASK-66).
+/// release builds never embed Telegram credentials.
 #[tauri::command]
 #[specta::specta]
 pub async fn submit_bug_report(note: String) -> Result<BugReportResult, String> {

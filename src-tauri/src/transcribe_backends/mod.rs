@@ -1,14 +1,13 @@
-// transcribe_backends — pluggable transcription backend impls (TASK-58+)
+// transcribe_backends — pluggable transcription backend impls
 //
 // Each sub-module implements `crate::transcribe::TranscriptionBackend`.
 // The active backend is selected at startup by `build_backend()` in
 // `transcribe.rs` via the `BackendFamily` enum stored in `settings.Config.backend`
 // (persisted as "whisper" / "moonshine" / "parakeet" in config.toml).
-// The old TT_BACKEND env var was removed in TASK-60.
 //
 // Module layout:
-//   moonshine  — Moonshine ONNX backend via transcribe-rs (TASK-58)
-//   parakeet   — Parakeet TDT ONNX backend via transcribe-rs (TASK-59)
+//   moonshine  — Moonshine ONNX backend via transcribe-rs
+//   parakeet   — Parakeet TDT ONNX backend via transcribe-rs
 //
 // Feature gate: the `moonshine` and `parakeet` features must be enabled in
 // Cargo.toml for those impls to compile. This keeps `transcribe-rs` (which

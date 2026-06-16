@@ -15,3 +15,4 @@
 | 2026-05-12 | CONFIRMED | dispatch 1/1 — docs/WINDOWS-UTM-TESTING.md written; UTM present, installer confirmed, 6-step guide covers ISO acquisition through x64 verification |
 | 2026-05-26 | CONFIRMED | CoreML dyld-init hang — Metal-only default sidecar enforced; preflight + refresh-whisper-server reject CoreML.framework / libwhisper.coreml.dylib linkage; optional sidecar design documented in docs/reference/COREML-BLOCKER.md |
 | 2026-05-26 | CONFIRMED | Silero VAD model bundled — ggml-silero-v5.1.2.bin fetched from ggml-org/whisper-vad (864 KB, sha256 29940d98…); npm run fetch-vad-model added |
+| 2026-06-16 | MIGRATED | History comments stripped from source — ~55 TASK-XX references across 10+ source files migrated to docs/reference/KNOWN-BUG-CLASSES.md, TRUTH.md, and this log. Inline comments preserve invariants only. |

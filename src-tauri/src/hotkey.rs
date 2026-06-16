@@ -128,7 +128,7 @@ pub(crate) mod common {
         job_cancelled_since(epoch)
     }
 
-    /// Payload for the additive `dictation-stage` event introduced in TASK-15.
+    /// Payload for the additive `dictation-stage` event.
     /// Frontend listeners may ignore this entirely; existing events
     /// (`ptt-down`, `ptt-up`, `transcript`, `recording-discarded`, …) are
     /// preserved unchanged for backward compatibility.
@@ -143,8 +143,8 @@ pub(crate) mod common {
         emit_critical(app, "dictation-stage", DictationStage { job_id, stage });
     }
 
-    /// Payload for the additive `focus-changed-before-paste` event introduced
-    /// in TASK-16. Emitted only when the frontmost-app identifier captured at
+    /// Payload for the additive `focus-changed-before-paste` event.
+    /// Emitted only when the frontmost-app identifier captured at
     /// recording start differs from the one captured immediately before paste.
     /// Both fields may be `None` if the macOS query failed at either capture
     /// site — see `paste::frontmost_app`. Default policy is "paste anyway,
@@ -412,7 +412,7 @@ pub(crate) mod common {
         }
 
         // Clear any stale CANCEL_PENDING / CANCEL_ARMING flags set by a
-        // previous orphaned key-up or cancelled arming (TASK-2). Without
+        // previous orphaned key-up or cancelled arming. Without
         // this the next legitimate press can instantly cancel itself.
         CANCEL_PENDING.store(false, Ordering::Relaxed);
         CANCEL_ARMING.store(false, Ordering::Relaxed);
@@ -632,7 +632,7 @@ pub(crate) mod common {
             // query so the user's "recording started" audio/visual feedback
             // lands immediately. `frontmost_app()` spawns osascript (~50-200ms);
             // audio capture is already running, so moving it after the cue is a
-            // pure latency win with no data loss (TASK-4).
+            // pure latency win with no data loss.
             let _ = tray.set_icon(Some(tray::make_icon(TrayState::Recording)));
             // Pin the overlay window to the cursor's monitor *before* emitting
             // ptt-down so the recording UI never flashes on the wrong display.
@@ -710,7 +710,7 @@ pub(crate) mod common {
             return;
         }
 
-        // Focus policy (TASK-16): paste into whatever app is frontmost *now*.
+        // Focus policy: paste into whatever app is frontmost *now*.
         let focus_at_paste = crate::paste::frontmost_app();
         tracing::info!(
             "[paste job_id={:?}] focus_at_start={:?} focus_at_paste={:?}",
@@ -789,12 +789,10 @@ pub(crate) mod common {
             // to Transcribing and stays that way through Cleaning + Pasting.
             // Idle is restored exactly once at the end of the lifecycle.
             //
-            // Capture the cancel epoch BEFORE rec.stop(). If we capture it
-            // after stop() returns (as was the case before TASK-23 fix), the
-            // Escape handler's trigger_cancel may increment CANCEL_EPOCH
-            // while we're inside stop() or the three Mutex::take() calls that
-            // follow — cancel_epoch_at_stop then holds the post-cancel value
-            // and all subsequent job_cancelled_since checks never fire.
+            // Capture the cancel epoch BEFORE rec.stop(). The stop/take calls
+            // below may overlap with Escape cancel, which increments
+            // CANCEL_EPOCH. Capturing early ensures the pre-stop epoch is the
+            // one checked throughout the rest of this handler.
             let cancel_epoch_at_stop = cancel_epoch();
             match rec.stop() {
                 Ok(StopOutcome::Wav {
@@ -852,7 +850,7 @@ pub(crate) mod common {
 
                     // Stage 1: transcribe the tail WAV (audio after the last
                     // segment cut, or the whole recording if no segments were
-                    // emitted — identical to pre-TASK-54 batch behavior).
+                    // emitted — identical to the batch path behavior).
                     // Always transcribe the tail when we have a WAV. The streaming
                     // finalizer already trimmed silence and enforced MIN_RECORDING_MS;
                     // gating on `speech_detected` caused VAD false-negatives to drop
@@ -874,9 +872,9 @@ pub(crate) mod common {
                         .map(|st| st.join_segments())
                         .unwrap_or_default();
 
-                    // TASK-55: run garbage detection on the fully assembled
+                    // Run garbage detection on the fully assembled
                     // transcript (segments + tail), not just the tail outcome.
-                    // TASK-6: also carry individual part texts so per-part
+                    // Also carry individual part texts so per-part
                     // garbage checks can salvage clean portions instead of
                     // blocking the entire paste when one part is clean.
                     type TranscribeResult = (
@@ -1605,11 +1603,9 @@ mod imp {
         );
 
         std::thread::spawn(move || {
-            // Permission watchdog loop. CGEventTap::new fails if the process
-            // lacks Accessibility trust at this moment. Pre-fix behaviour was
-            // to give up and require quit+relaunch — terrible first-run UX.
-            // Now: emit the toast once, poll AXIsProcessTrusted() every
-            // 1.5 s, and rebuild the tap as soon as trust flips. The fresh
+            // Permission watchdog loop. If the process lacks Accessibility trust,
+            // emit a toast and poll AXIsProcessTrusted() every 1.5 s; rebuild
+            // the tap once trust flips.
             // closure clones happen each iteration because CGEventTap::new
             // consumes the callback regardless of outcome.
             let mut surfaced_permission_error = false;

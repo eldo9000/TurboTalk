@@ -1,12 +1,12 @@
 // Active-application text injection.
 // macOS: write to clipboard (arboard), send Cmd+V via CGEventPost (native,
-// sub-millisecond — TASK-4), restore prior clipboard. `frontmost_app()` uses
+// sub-millisecond), restore prior clipboard. `frontmost_app()` uses
 // NSWorkspace via objc2 instead of osascript (also sub-millisecond).
 // Other platforms: not supported — both entry points return a clear
 // "unsupported platform" signal so the caller (and the UI banner) can react.
 //
-// Focused-app policy (TASK-16)
-// ─────────────────────────────
+// Focused-app policy
+// ────────────────────
 // Paste targets the app that is frontmost at the moment Cmd+V is sent — *not*
 // the app that was frontmost when recording started. This is intentional for a
 // personal push-to-talk tool: with one in-flight job, the user almost always
@@ -41,8 +41,7 @@ use arboard::Clipboard;
 /// `None` as "unknown" and never block paste on it.
 ///
 /// Uses `NSWorkspace.sharedWorkspace.frontmostApplication.localizedName`
-/// via the `objc2` crate — sub-millisecond native call, replaces the old
-/// `osascript` subprocess spawn (~50-200ms per dictation, TASK-4).
+/// via the `objc2` crate — a sub-millisecond native call.
 /// The process name is sufficient for focus-change observability.
 #[cfg(target_os = "macos")]
 pub fn frontmost_app() -> Option<String> {
@@ -142,8 +141,8 @@ fn focused_ax_role() -> Option<String> {
 /// Pastes `text` into the frontmost application via native CGEventPost.
 ///
 /// Writes to clipboard, synthesizes Cmd+V via `CGEvent::new_keyboard_event` +
-/// `CGEventPost` (sub-millisecond, replaces the old `osascript` subprocess
-/// spawn — TASK-4), then restores the prior clipboard.
+/// `CGEventPost` (sub-millisecond native keystroke injection), then restores
+/// the prior clipboard.
 ///
 /// Returns `Ok(true)` when the keystroke is posted successfully. AX role is
 /// logged at debug level for diagnostics only.
@@ -178,10 +177,8 @@ pub fn paste(text: &str) -> anyhow::Result<bool> {
     }
 
     // Delay to let the paste land before restoring clipboard.
-    // 500 ms: the dictation cycle already takes ~2-3 s (transcription +
-    // cleanup), so an extra 350 ms is imperceptible to the user.  150 ms
-    // was too tight — heavyweight apps (Electron, Xcode, etc.) with a
-    // busy main thread could miss the paste and pick up the restored
+    // Heavyweight apps (Electron, Xcode, etc.) with a busy main thread
+    // can miss the paste at shorter intervals — they may read the restored
     // clipboard content instead.
     std::thread::sleep(std::time::Duration::from_millis(500));
 

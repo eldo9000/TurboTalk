@@ -1,7 +1,7 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-06-16  
-**Current state:** Frontend event dispatch refactored — 15 inline Tauri event listeners in `App.svelte` `onMount` replaced with one-liners that call a centralized `applyBackendEvent(name, payload)` function owning all state mutations. Behavior-preserving refactor.
+**Current state:** Investigation history migrated out of inline comments — ~55 TASK-XX references across 10+ source files stripped to invariants. Full race/tuning/regression narratives moved to `docs/reference/KNOWN-BUG-CLASSES.md`, consolidated task evidence to `TRUTH.md`, migration trail to `docs/INVESTIGATION-LOG.md`.
 
 ## Open backlog
 
