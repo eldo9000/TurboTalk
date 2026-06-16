@@ -1,7 +1,7 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-06-16  
-**Current state:** Onboarding welcome-screen logic tightened — no longer shows when all gates are green (regardless of launch-at-login setting), and launch-at-login is no longer a hard gate for auto-close.
+**Current state:** Hotkey.rs dictation-completion path simplified — extracted `bail_out()` and `paste_and_teardown()` helpers, refactored all three completion paths (normal, salvaged, segment-recovery). Net -89 lines, behavior-preserving.
 
 ## Open backlog
 
@@ -40,6 +40,8 @@
 
 **Review notes:** `recorder.rs` is a good small core state machine. Complexity clusters around hotkey lifecycle orchestration, duplicated paste/finalization branches, repeated monitor geometry math, monolithic Tauri bootstrap, and frontend event listeners doing direct state mutation. Recommended first simplification is a behavior-preserving extraction/refactor of the dictation completion path in `src-tauri/src/hotkey.rs`.
 
+**Event:** Simplified `src-tauri/src/hotkey.rs` by extracting shared dictation-completion helpers — `bail_out()` (the repeated finish_guarded + tray + emit_ready pattern) and `paste_and_teardown()` (the full emit_transcript → begin_pasting → cancel-check → focus-check → paste → teardown sequence). The normal and salvaged transcript paths now call `paste_and_teardown()` instead of duplicating ~120 lines each. Segment-recovery bail-out blocks use `bail_out(false)`. Net: -89 lines from hotkey.rs. Behavior-preserving refactor — cargo check + 43 relevant tests pass (2 pre-existing transcribe::detect_garbage test failures unchanged).
+
 **Event:** User reported a "strange crash" in TurboTalk. Investigation of logs and macOS crash reports revealed two distinct issues.
 
 ### Issue 1: Silent tracing pipeline death (today's crash)
@@ -60,4 +62,6 @@ All crashes were identical: `SIGABRT` (abort trap) on the main thread, preceded 
 
 ## Next action
 
-If proceeding with simplification, first extract shared "finish transcript and paste" helpers from `src-tauri/src/hotkey.rs` without changing behavior; success signal is `cargo test --manifest-path src-tauri/Cargo.toml recorder transcribe cleanup` plus one manual dictation into TextEdit that still pastes and records history.
+Completed: extracted `bail_out()` and `paste_and_teardown()` helpers into `hotkey.rs::common` and refactored all three completion paths to use them. Normal and salvaged paths now share the same paste machinery instead of duplicating ~120 lines each. Segment-recovery bail-out blocks centralized via `bail_out(false)`.
+
+If continuing simplification, next targets: repeated monitor-geometry math in window-placement helpers, monolithic Tauri bootstrap in `lib.rs`, and frontend event listeners doing direct state mutation.

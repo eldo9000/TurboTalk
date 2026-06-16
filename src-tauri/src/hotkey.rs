@@ -657,6 +657,118 @@ pub(crate) mod common {
         });
     }
 
+    /// Finish the current job lifecycle and reset tray + stage to Ready.
+    /// Used by all completion paths to avoid duplicating the
+    /// `finish_guarded` + tray-set_icon + `emit_stage("ready")` sequence.
+    /// `call_finish_guarded` is false for the segment-recovery path, which
+    /// never entered the Cleaning/Pasting state machine.
+    fn bail_out(
+        rec: &Recorder,
+        tray: &TrayIcon,
+        app: &AppHandle,
+        job_id_opt: Option<u64>,
+        call_finish_guarded: bool,
+    ) {
+        if call_finish_guarded {
+            rec.finish_guarded();
+        }
+        let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+        if let Some(job_id) = job_id_opt {
+            emit_stage(app, job_id, "ready");
+        }
+    }
+
+    /// Paste the final transcript text into the focused app and tear down
+    /// the lifecycle. Shared by the normal and salvaged completion paths.
+    /// Callers must gate on empty-text and post-cleanup cancel windows
+    /// before calling.
+    fn paste_and_teardown(
+        rec: &Recorder,
+        tray: &TrayIcon,
+        app: &AppHandle,
+        final_text: &str,
+        cancel_epoch_at_stop: u64,
+        job_id_opt: Option<u64>,
+        focus_at_start: &Option<String>,
+    ) {
+        emit_critical(app, "transcript", final_text.to_string());
+
+        // Cleaning → Pasting
+        if rec.begin_pasting().is_err() {
+            bail_out(rec, tray, app, job_id_opt, true);
+            return;
+        }
+        if let Some(job_id) = job_id_opt {
+            emit_stage(app, job_id, "pasting");
+        }
+        if job_cancelled_since(cancel_epoch_at_stop) {
+            tracing::info!(
+                "[hotkey job_id={:?}] cancel observed before paste — suppressing paste",
+                job_id_opt
+            );
+            bail_out(rec, tray, app, job_id_opt, true);
+            return;
+        }
+
+        // Focus policy (TASK-16): paste into whatever app is frontmost *now*.
+        let focus_at_paste = crate::paste::frontmost_app();
+        tracing::info!(
+            "[paste job_id={:?}] focus_at_start={:?} focus_at_paste={:?}",
+            job_id_opt,
+            focus_at_start,
+            focus_at_paste
+        );
+        if let (Some(job_id), Some(start), Some(now)) =
+            (job_id_opt, focus_at_start.as_ref(), focus_at_paste.as_ref())
+        {
+            if start != now {
+                tracing::warn!(
+                    "[paste job_id={}] focus changed before paste: {:?} → {:?}",
+                    job_id,
+                    start,
+                    now
+                );
+                emit_critical(
+                    app,
+                    "focus-changed-before-paste",
+                    FocusChangedBeforePaste {
+                        job_id,
+                        focus_at_start: Some(start.clone()),
+                        focus_at_paste: Some(now.clone()),
+                    },
+                );
+            }
+        }
+        // Defense-in-depth: verify the recorder is still in Pasting state.
+        if !matches!(rec.state(), crate::recorder::State::Pasting) {
+            tracing::info!(
+                "[hotkey job_id={:?}] paste suppressed — recorder is {:?}, \
+                 expected Pasting",
+                job_id_opt,
+                rec.state()
+            );
+            bail_out(rec, tray, app, job_id_opt, true);
+            return;
+        }
+        let paste_text = format!("{} ", final_text);
+        match crate::paste::paste(&paste_text) {
+            Ok(_) => {
+                play_chime(ChimeEvent::Finish);
+            }
+            Err(e) => {
+                tracing::error!("[paste job_id={:?}] {:?}", job_id_opt, e);
+                emit_critical(
+                    app,
+                    "paste-error",
+                    "Couldn't paste — check Accessibility permission".to_string(),
+                );
+            }
+        }
+
+        // End of lifecycle.
+        bail_out(rec, tray, app, job_id_opt, true);
+    }
+
     pub(super) fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
         let rec = recorder.clone();
         let tray = tray_icon.clone();
@@ -909,11 +1021,7 @@ pub(crate) mod common {
                                         job_id_opt
                                     );
                                     emit_critical(&app, "recording-discarded", "empty-final-text");
-                                    rec.finish_guarded();
-                                    let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                                    if let Some(job_id) = job_id_opt {
-                                        emit_stage(&app, job_id, "ready");
-                                    }
+                                    bail_out(&rec, &tray, &app, job_id_opt, true);
                                     play_chime(ChimeEvent::Finish);
                                     return;
                                 }
@@ -922,104 +1030,13 @@ pub(crate) mod common {
                                         "[hotkey job_id={:?}] cancel observed after cleanup/hold window — suppressing transcript/paste",
                                         job_id_opt
                                     );
-                                    rec.finish_guarded();
-                                    let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                                    if let Some(job_id) = job_id_opt {
-                                        emit_stage(&app, job_id, "ready");
-                                    }
+                                    bail_out(&rec, &tray, &app, job_id_opt, true);
                                     return;
                                 }
-                                emit_critical(&app, "transcript", final_text.clone());
-
-                                // Cleaning → Pasting
-                                if rec.begin_pasting().is_err() {
-                                    rec.finish_guarded();
-                                    let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                                    if let Some(job_id) = job_id_opt {
-                                        emit_stage(&app, job_id, "ready");
-                                    }
-                                    return;
-                                }
-                                if let Some(job_id) = job_id_opt {
-                                    emit_stage(&app, job_id, "pasting");
-                                }
-                                if job_cancelled_since(cancel_epoch_at_stop) {
-                                    tracing::info!(
-                                        "[hotkey job_id={:?}] cancel observed before paste — suppressing paste",
-                                        job_id_opt
-                                    );
-                                    rec.finish_guarded();
-                                    let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                                    if let Some(job_id) = job_id_opt {
-                                        emit_stage(&app, job_id, "ready");
-                                    }
-                                    return;
-                                }
-
-                                let focus_at_paste = crate::paste::frontmost_app();
-                                tracing::info!(
-                                    "[paste job_id={:?}] focus_at_start={:?} focus_at_paste={:?}",
-                                    job_id_opt,
-                                    focus_at_start,
-                                    focus_at_paste
+                                paste_and_teardown(
+                                    &rec, &tray, &app, &final_text,
+                                    cancel_epoch_at_stop, job_id_opt, &focus_at_start,
                                 );
-                                if let (Some(job_id), Some(start), Some(now)) =
-                                    (job_id_opt, focus_at_start.as_ref(), focus_at_paste.as_ref())
-                                {
-                                    if start != now {
-                                        tracing::warn!(
-                                            "[paste job_id={}] focus changed before paste: {:?} → {:?}",
-                                            job_id,
-                                            start,
-                                            now
-                                        );
-                                        emit_critical(
-                                            &app,
-                                            "focus-changed-before-paste",
-                                            FocusChangedBeforePaste {
-                                                job_id,
-                                                focus_at_start: Some(start.clone()),
-                                                focus_at_paste: Some(now.clone()),
-                                            },
-                                        );
-                                    }
-                                }
-                                // Defense-in-depth: verify the recorder is still
-                                // in Pasting state before pasting (salvaged path).
-                                if !matches!(rec.state(), crate::recorder::State::Pasting) {
-                                    tracing::info!(
-                                        "[hotkey job_id={:?}] paste suppressed (salvaged) — recorder is {:?}, expected Pasting",
-                                        job_id_opt,
-                                        rec.state()
-                                    );
-                                    rec.finish_guarded();
-                                    let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                                    if let Some(job_id) = job_id_opt {
-                                        emit_stage(&app, job_id, "ready");
-                                    }
-                                    return;
-                                }
-                                let paste_text = format!("{} ", final_text);
-                                match crate::paste::paste(&paste_text) {
-                                    Ok(_) => {
-                                        play_chime(ChimeEvent::Finish);
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("[paste job_id={:?}] {:?}", job_id_opt, e);
-                                        emit_critical(
-                                            &app,
-                                            "paste-error",
-                                            "Couldn't paste — check Accessibility permission"
-                                                .to_string(),
-                                        );
-                                    }
-                                }
-                                // End of lifecycle — the salvaged path ends here.
-                                rec.finish_guarded();
-                                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                                if let Some(job_id) = job_id_opt {
-                                    emit_stage(&app, job_id, "ready");
-                                }
                                 return;
                             }
 
@@ -1066,11 +1083,7 @@ pub(crate) mod common {
                                     job_id_opt
                                 );
                                 emit_critical(&app, "recording-discarded", "empty-final-text");
-                                rec.finish_guarded();
-                                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                                if let Some(job_id) = job_id_opt {
-                                    emit_stage(&app, job_id, "ready");
-                                }
+                                bail_out(&rec, &tray, &app, job_id_opt, true);
                                 play_chime(ChimeEvent::Finish);
                                 return;
                             }
@@ -1079,106 +1092,13 @@ pub(crate) mod common {
                                     "[hotkey job_id={:?}] cancel observed after cleanup/hold window — suppressing transcript/paste",
                                     job_id_opt
                                 );
-                                rec.finish_guarded();
-                                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                                if let Some(job_id) = job_id_opt {
-                                    emit_stage(&app, job_id, "ready");
-                                }
+                                bail_out(&rec, &tray, &app, job_id_opt, true);
                                 return;
                             }
-                            emit_critical(&app, "transcript", final_text.clone());
-
-                            // Cleaning → Pasting
-                            if rec.begin_pasting().is_err() {
-                                rec.finish_guarded();
-                                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                                if let Some(job_id) = job_id_opt {
-                                    emit_stage(&app, job_id, "ready");
-                                }
-                                return;
-                            }
-                            if let Some(job_id) = job_id_opt {
-                                emit_stage(&app, job_id, "pasting");
-                            }
-                            if job_cancelled_since(cancel_epoch_at_stop) {
-                                tracing::info!(
-                                    "[hotkey job_id={:?}] cancel observed before paste — suppressing paste",
-                                    job_id_opt
-                                );
-                                rec.finish_guarded();
-                                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                                if let Some(job_id) = job_id_opt {
-                                    emit_stage(&app, job_id, "ready");
-                                }
-                                return;
-                            }
-
-                            // Stage 3: paste into the focused app.
-                            //
-                            // Focus policy (TASK-16): we paste into whatever app
-                            // is frontmost *at this moment*, not at recording
-                            // start. Capture the current frontmost app first so
-                            // we can log and surface focus changes to the UI
-                            // without blocking the paste itself. See
-                            // ARCHITECTURE.md → "Paste Target Policy".
-                            let focus_at_paste = crate::paste::frontmost_app();
-                            tracing::info!(
-                                "[paste job_id={:?}] focus_at_start={:?} focus_at_paste={:?}",
-                                job_id_opt,
-                                focus_at_start,
-                                focus_at_paste
+                            paste_and_teardown(
+                                &rec, &tray, &app, &final_text,
+                                cancel_epoch_at_stop, job_id_opt, &focus_at_start,
                             );
-                            if let (Some(job_id), Some(start), Some(now)) =
-                                (job_id_opt, focus_at_start.as_ref(), focus_at_paste.as_ref())
-                            {
-                                if start != now {
-                                    tracing::warn!(
-                                        "[paste job_id={}] focus changed before paste: {:?} → {:?}",
-                                        job_id,
-                                        start,
-                                        now
-                                    );
-                                    emit_critical(
-                                        &app,
-                                        "focus-changed-before-paste",
-                                        FocusChangedBeforePaste {
-                                            job_id,
-                                            focus_at_start: Some(start.clone()),
-                                            focus_at_paste: Some(now.clone()),
-                                        },
-                                    );
-                                }
-                            }
-                            // Defense-in-depth: verify the recorder is still
-                            // in Pasting state before pasting (normal path).
-                            if !matches!(rec.state(), crate::recorder::State::Pasting) {
-                                tracing::info!(
-                                    "[hotkey job_id={:?}] paste suppressed (normal) — recorder is {:?}, expected Pasting",
-                                    job_id_opt,
-                                    rec.state()
-                                );
-                                rec.finish_guarded();
-                                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                                if let Some(job_id) = job_id_opt {
-                                    emit_stage(&app, job_id, "ready");
-                                }
-                                return;
-                            }
-                            let paste_text = format!("{} ", final_text);
-                            match crate::paste::paste(&paste_text) {
-                                Ok(_) => {
-                                    play_chime(ChimeEvent::Finish);
-                                }
-                                Err(e) => {
-                                    tracing::error!("[paste job_id={:?}] {:?}", job_id_opt, e);
-                                    emit_critical(
-                                        &app,
-                                        "paste-error",
-                                        "Couldn't paste — check Accessibility permission"
-                                            .to_string(),
-                                    );
-                                }
-                            }
                         }
                         Err(e) => {
                             tracing::error!("[transcribe job_id={:?}] {:?}", job_id_opt, e);
@@ -1265,10 +1185,7 @@ pub(crate) mod common {
                                             "[hotkey job_id={:?}] seg-recovery: cancel observed after cleanup/hold window — suppressing paste",
                                             job_id_opt
                                         );
-                                        let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                                        if let Some(job_id) = job_id_opt {
-                                            emit_stage(&app, job_id, "ready");
-                                        }
+                                        bail_out(&rec, &tray, &app, job_id_opt, false);
                                         return;
                                     }
                                     // Segment recovery fires only when the tail
@@ -1290,10 +1207,7 @@ pub(crate) mod common {
                                             "[hotkey job_id={:?}] seg-recovery: cancel observed before paste — suppressing paste",
                                             job_id_opt
                                         );
-                                        let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                                        if let Some(job_id) = job_id_opt {
-                                            emit_stage(&app, job_id, "ready");
-                                        }
+                                        bail_out(&rec, &tray, &app, job_id_opt, false);
                                         return;
                                     }
                                     let focus_at_paste = crate::paste::frontmost_app();
@@ -1342,10 +1256,7 @@ pub(crate) mod common {
                                 // Segments produced no text — normal discard.
                                 emit_critical(&app, "recording-discarded", ());
                             }
-                            let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
-                            if let Some(job_id) = job_id_opt {
-                                emit_stage(&app, job_id, "ready");
-                            }
+                            bail_out(&rec, &tray, &app, job_id_opt, false);
                             return;
                         }
                     }
