@@ -1,7 +1,7 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-06-16  
-**Current state:** Hotkey.rs dictation-completion path simplified — extracted `bail_out()` and `paste_and_teardown()` helpers, refactored all three completion paths (normal, salvaged, segment-recovery). Net -89 lines, behavior-preserving.
+**Current state:** Frontend event dispatch refactored — 15 inline Tauri event listeners in `App.svelte` `onMount` replaced with one-liners that call a centralized `applyBackendEvent(name, payload)` function owning all state mutations. Behavior-preserving refactor.
 
 ## Open backlog
 
