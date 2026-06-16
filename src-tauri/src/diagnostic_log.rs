@@ -254,6 +254,7 @@ pub async fn build_report_text(note: Option<&str>) -> String {
 
     let readiness = crate::permissions::check_readiness();
     let diagnostics = crate::diagnostics::run_diagnostics().await;
+    let session_metrics = crate::session_metrics::snapshot();
     let cfg = crate::settings::load();
     let client_events: Vec<String> = client_events().lock().iter().cloned().collect();
     let log_body = read_recent_logs(MAIN_LOG_PREFIX, MAX_LOG_TAIL_BYTES);
@@ -323,20 +324,17 @@ pub async fn build_report_text(note: Option<&str>) -> String {
     let backend_bundles_json =
         serde_json::to_string_pretty(&backend_bundles).unwrap_or_else(|_| "[]".into());
     let _ = writeln!(out, "backend_model_bundles: {backend_bundles_json}");
-    #[cfg(target_os = "macos")]
-    {
-        let sw_vers = std::process::Command::new("sw_vers").output();
-        let sw_vers = sw_vers
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "(unavailable)".into());
-        let _ = writeln!(out, "sw_vers: {}", sw_vers.replace('\n', " | "));
+
+    // ── Collected by diagnostics.rs (platform-aware) ─────────────────────────
+    let _ = writeln!(out, "os_version: {}", diagnostics.os_version);
+    if !diagnostics.keyboard_layout.is_empty() {
+        let _ = writeln!(out, "keyboard_layout: {}", diagnostics.keyboard_layout);
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = writeln!(out, "os_version: (not collected on this platform yet)");
-    }
+    let _ = writeln!(out, "audio_device: {}", diagnostics.default_input_device);
+    let _ = writeln!(out, "audio_channels: {}", diagnostics.default_input_channels);
+    let _ = writeln!(out, "audio_sample_rate: {}", diagnostics.default_input_sample_rate);
+    let _ = writeln!(out, "paste_method: {}", diagnostics.paste_method);
+    let _ = writeln!(out, "whisper_server: {}", diagnostics.whisper_server_running);
     let _ = writeln!(out);
 
     let _ = writeln!(out, "=== Readiness ===");
@@ -357,15 +355,18 @@ pub async fn build_report_text(note: Option<&str>) -> String {
     let _ = writeln!(out, "{cfg_json}");
     let _ = writeln!(out);
 
-    #[cfg(target_os = "windows")]
-    {
-        let _ = writeln!(out, "=== Hotkey probe ===");
-        let probe = crate::hotkey::diagnostic_probe();
-        let probe_json =
-            serde_json::to_string_pretty(&probe).unwrap_or_else(|_| "(serialize failed)".into());
-        let _ = writeln!(out, "{probe_json}");
-        let _ = writeln!(out);
-    }
+    let _ = writeln!(out, "=== Hotkey probe ===");
+    let probe = crate::hotkey::diagnostic_probe();
+    let probe_json =
+        serde_json::to_string_pretty(&probe).unwrap_or_else(|_| "(serialize failed)".into());
+    let _ = writeln!(out, "{probe_json}");
+    let _ = writeln!(out);
+
+    let _ = writeln!(out, "=== Session metrics ===");
+    let metrics_json =
+        serde_json::to_string_pretty(&session_metrics).unwrap_or_else(|_| "(serialize failed)".into());
+    let _ = writeln!(out, "{metrics_json}");
+    let _ = writeln!(out);
 
     let _ = writeln!(out, "=== UI events ({} lines) ===", client_events.len());
     for line in &client_events {

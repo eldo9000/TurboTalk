@@ -1730,7 +1730,7 @@ Reply with only the single word, lowercase, no punctuation.
                 onclick={() => { resetOpen = true; resetClosing = false; resetError = ''; }}
                 class="tt-btn tt-btn-danger-hover flex-1 justify-center"
               >
-                Reset TurboTalk
+                Reset / Clear Caches
               </button>
               <div class="flex-1">
                 <UpdateManager />
@@ -1856,10 +1856,18 @@ Reply with only the single word, lowercase, no punctuation.
         aria-modal="true"
         tabindex="-1"
       >
+        <button
+          onclick={closeReset}
+          class="reset-close-x"
+          aria-label="Close"
+        >✕</button>
         <div class="flex flex-col items-center gap-1 pb-3">
           <span class="text-[18px] font-semibold tracking-tight text-[var(--text-primary)]">Reset TurboTalk</span>
           <p class="text-[var(--text-secondary)] text-[11px] leading-snug mt-1.5 text-center">
             Clear local settings and transcript history, disable Launch at Login, and return to setup.
+          </p>
+          <p class="text-[var(--text-secondary)] text-[11px] leading-snug text-center">
+            macOS privacy permissions stay in System Settings.
           </p>
         </div>
         <div class="flex flex-col gap-2 pt-2.5">
@@ -1870,6 +1878,7 @@ Reply with only the single word, lowercase, no punctuation.
           >
             Reset, Keep Models
           </button>
+          <p class="text-[10px] text-[var(--text-muted)] leading-snug text-center -mt-0.5">Clears settings, transcript history, and warm-up. Keeps downloaded transcription models.</p>
           <button
             onclick={() => resetTurboTalk(true)}
             disabled={resetBusy}
@@ -1877,6 +1886,7 @@ Reply with only the single word, lowercase, no punctuation.
           >
             Reset Everything
           </button>
+          <p class="text-[10px] text-[var(--text-muted)] leading-snug text-center -mt-0.5">Clears everything including downloaded models. You'll need to download them again.</p>
           <button
             onclick={() => { commands.resetOnboarding(); recheckReadiness(); closeReset(); }}
             disabled={resetBusy}
@@ -1884,6 +1894,7 @@ Reply with only the single word, lowercase, no punctuation.
           >
             Re-run Welcome Screen
           </button>
+          <p class="text-[10px] text-[var(--text-muted)] leading-snug text-center -mt-0.5">Shows the setup wizard again without clearing any settings or models.</p>
           <button
             onclick={clearWarmupCache}
             disabled={resetBusy || warmupResetBusy}
@@ -1891,16 +1902,8 @@ Reply with only the single word, lowercase, no punctuation.
           >
             {warmupResetBusy ? 'Clearing…' : 'Clear warmup cache'}
           </button>
-          <button
-            onclick={closeReset}
-            disabled={resetBusy}
-            class="tt-btn w-full justify-center opacity-70"
-          >
-            Cancel
-          </button>
-          <p class="text-[10px] text-[var(--text-muted)] leading-snug text-center">
-            macOS privacy permissions stay in System Settings.
-          </p>
+          <p class="text-[10px] text-[var(--text-muted)] leading-snug text-center -mt-0.5">Clears the transcription model warm-up so it reloads next time.</p>
+
           {#if warmupResetMsg}
             <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug text-center">{warmupResetMsg}</p>
           {/if}

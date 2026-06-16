@@ -392,6 +392,32 @@ export type DiagnosticsResult = {
 	ollama_status: string,
 	// "supported" on macOS; "unsupported" on other platforms.
 	paste_capability: string,
+	/**
+	 *  OS version string (e.g. "macOS 15.4", "Windows 11 23H2", "Linux 6.8.0").
+	 *  Collected via platform-specific commands at diagnostic time.
+	 */
+	os_version: string,
+	/**
+	 *  Keyboard layout identifier. Windows: locale name from GetKeyboardLayout.
+	 *  macOS/Linux: empty string (not collected).
+	 */
+	keyboard_layout: string,
+	// Default input device name as reported by cpal, or "none" / "error: …".
+	default_input_device: string,
+	// Number of input channels on the default device ("1", "2", "unknown").
+	default_input_channels: string,
+	// Preferred sample rate of the default device ("16000", "44100", "unknown").
+	default_input_sample_rate: string,
+	/**
+	 *  Whether the whisper-server sidecar process is currently running.
+	 *  "running", "not running", or "unknown (prewarm in flight)".
+	 */
+	whisper_server_running: string,
+	/**
+	 *  Paste injection method: "CGEventPost Cmd+V", "enigo Ctrl+V",
+	 *  "unsupported (wayland)".
+	 */
+	paste_method: string,
 };
 
 export type ExportDiagnosticResult = {

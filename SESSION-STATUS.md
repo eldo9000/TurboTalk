@@ -36,11 +36,11 @@
 
 ## This session
 
-**Event:** Re-checked the terminal launch path and then closed the loop on the refactor work. The dev server bind issue was fixed by moving the local dev server to `127.0.0.1:1431` and updating the Tauri dev URL to match, which let `npm run tauri dev` reach the Rust binary and keep running instead of dying during startup.
+**Event:** Built out the cross-platform diagnostics system for the Windows testing loop. Created `docs/CROSS-PLATFORM.md` as a living reference for every platform-specific split. Added `session_metrics.rs` with zero-allocation atomic counters tracking dictation lifecycle (hotkey_downs, dictation_starts/completed/discarded, errors by stage, paste success/fail). Extended `diagnostics.rs` with per-platform OS version collection, keyboard layout detection (Windows), audio device details, whisper-server running probe, and paste method identification. Added `HotkeyProbe` diagnostic probes to macOS (CGEventTap status) and Linux (rdev listener status) for parity with the existing Windows probe. Updated `diagnostic_log::build_report_text` to include session metrics and hotkey probes on all platforms, and replaced the stale macOS-only `sw_vers` block with the cross-platform OS version field.
 
-**Event:** Finished the UI extraction pass far enough to restore launchability cleanly: `App.svelte` now delegates History, Models, and Modes to standalone components, with the remaining shell/settings work left for the next slice.
+**Proof:** `cargo check` clean. 135/138 tests pass (2 pre-existing garbage detection failures unrelated). `npm run typecheck` passes. New session_metrics unit tests confirm counters increment and snapshot correctly.
 
-**Checks:** `npm run tauri dev` started Vite, launched `target/debug/turbotalk`, and the process stayed alive. I also exercised both toggle and hold hotkey modes successfully. `npm run build` and `npm run typecheck` both passed. The remaining startup log line is a recoverable macOS hotkey warning: `CGEventTap failed (accessibility_trusted=false, retry=0)`.
+**Checks:** All code compiles and typechecks. Bindings regenerated with new `DiagnosticsResult` fields. The diagnostic report now contains everything needed for a single-round-trip Windows test: OS version, keyboard layout, audio device, whisker-server status, hotkey probe, session metrics (dictation attempts/completions/failures), paste method, plus the existing readiness/config/UI events/log tails.
 
 ## Next action
-Keep TASK-70 moving with the remaining shell/settings split, and separately verify the hotkey permission flow on a machine with Accessibility enabled. After that, the work left is mostly polish rather than correctness.
+Windows real-hardware test: install packaged build, run through a dictation session, export diagnostic report. The report will tell us whether the hotkey polling fires, whether audio capture works, whether whisper-server starts, and exactly how many dictations succeeded vs. failed at each stage — all in one file. If the report shows problems, iterate with targeted fixes rather than speculation.

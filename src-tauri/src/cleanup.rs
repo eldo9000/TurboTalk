@@ -100,6 +100,7 @@ pub fn process(raw: &str, app: &tauri::AppHandle) -> String {
             Ok(mode) => route(trimmed, mode, &cfg.cleanup),
             Err(e) => {
                 tracing::warn!("[chaperone] classify failed, falling back to raw transcript: {e}");
+                crate::session_metrics::record_cleanup_error();
                 if should_emit_ui_error("chaperone-fallback") {
                     let _ = app.emit("ui-error", serde_json::json!({
                         "kind": "chaperone-fallback",

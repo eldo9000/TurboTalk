@@ -147,11 +147,48 @@ html, body, #app {
   padding: 16px 16px 12px;
   box-shadow: 0 24px 48px rgba(0,0,0,0.6), 0 4px 12px rgba(0,0,0,0.4);
 }
-.reset-card { width: 280px; }
+.reset-card {
+  position: fixed;
+  top: 50px;
+  left: 50px;
+  right: 50px;
+  bottom: 50px;
+  width: auto;
+  height: auto;
+  padding: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 16px;
+}
+.reset-card::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .reset-card-sep {
   height: 1px;
   margin: 6px 0 2px;
   background: var(--border, color-mix(in srgb, var(--text-primary) 12%, transparent));
+}
+.reset-close-x {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: #cc5555;
+  font-size: 14px;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+.reset-close-x:hover {
+  background: rgba(204,85,85,0.12);
+  color: #e06666;
 }
 /* Bug-note: keep the fixed little box, let text overflow/scroll, never show a scrollbar. */
 #bug-note { overflow-y: auto; scrollbar-width: none; }

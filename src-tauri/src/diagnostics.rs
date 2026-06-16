@@ -42,6 +42,33 @@ pub struct DiagnosticsResult {
 
     /// "supported" on macOS; "unsupported" on other platforms.
     pub paste_capability: String,
+
+    // ── Added 2026-06-16 for cross-platform testing ───────────────────────────
+
+    /// OS version string (e.g. "macOS 15.4", "Windows 11 23H2", "Linux 6.8.0").
+    /// Collected via platform-specific commands at diagnostic time.
+    pub os_version: String,
+
+    /// Keyboard layout identifier. Windows: locale name from GetKeyboardLayout.
+    /// macOS/Linux: empty string (not collected).
+    pub keyboard_layout: String,
+
+    /// Default input device name as reported by cpal, or "none" / "error: …".
+    pub default_input_device: String,
+
+    /// Number of input channels on the default device ("1", "2", "unknown").
+    pub default_input_channels: String,
+
+    /// Preferred sample rate of the default device ("16000", "44100", "unknown").
+    pub default_input_sample_rate: String,
+
+    /// Whether the whisper-server sidecar process is currently running.
+    /// "running", "not running", or "unknown (prewarm in flight)".
+    pub whisper_server_running: String,
+
+    /// Paste injection method: "CGEventPost Cmd+V", "enigo Ctrl+V",
+    /// "unsupported (wayland)".
+    pub paste_method: String,
 }
 
 /// Locate the whisper-cli sidecar using the same priority order as
@@ -138,6 +165,175 @@ async fn check_ollama_status(raw_url: &str) -> String {
     }
 }
 
+// ── Platform-aware OS version collection ────────────────────────────────────
+
+/// Collect the OS version string using platform-specific commands.
+/// Never panics — returns a best-effort description or "unavailable".
+fn collect_os_version() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        match std::process::Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+        {
+            Ok(o) => {
+                let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if v.is_empty() {
+                    "macOS (version unavailable)".into()
+                } else {
+                    format!("macOS {v}")
+                }
+            }
+            Err(_) => "macOS (sw_vers unavailable)".into(),
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        match std::process::Command::new("cmd")
+            .args(["/c", "ver"])
+            .output()
+        {
+            Ok(o) => {
+                let s = String::from_utf8_lossy(&o.stdout);
+                let s = s.trim();
+                if s.is_empty() { "Windows (ver command empty)".into() } else { s.to_string() }
+            }
+            Err(_) => "Windows (ver unavailable)".into(),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(contents) = std::fs::read_to_string("/etc/os-release") {
+            let mut pretty = None;
+            for line in contents.lines() {
+                if let Some(val) = line.strip_prefix("PRETTY_NAME=") {
+                    let val = val.trim_matches('"');
+                    pretty = Some(val.to_string());
+                    break;
+                }
+            }
+            if let Some(name) = pretty {
+                if let Ok(o) = std::process::Command::new("uname").arg("-r").output() {
+                    let kernel = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    return format!("{name} ({kernel})");
+                }
+                return name;
+            }
+        }
+        match std::process::Command::new("uname").arg("-r").output() {
+            Ok(o) => {
+                let k = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if k.is_empty() { "Linux (uname empty)".into() } else { format!("Linux {k}") }
+            }
+            Err(_) => "Linux (version unavailable)".into(),
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        format!("{} (unknown OS)", std::env::consts::OS)
+    }
+}
+
+// ── Keyboard layout (Windows only) ──────────────────────────────────────────
+
+fn collect_keyboard_layout() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        let ps_script = r#"
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class KB {
+    [DllImport("user32.dll")] public static extern IntPtr GetKeyboardLayout(uint id);
+}
+"@
+[KB]::GetKeyboardLayout(0).ToString()
+"#;
+        match std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", ps_script])
+            .output()
+        {
+            Ok(o) => {
+                let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if s.is_empty() { "unavailable".into() } else { s }
+            }
+            Err(_) => "unavailable".into(),
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        String::new()
+    }
+}
+
+// ── Audio device details ────────────────────────────────────────────────────
+
+fn collect_audio_device_details() -> (String, String, String) {
+    use cpal::traits::{DeviceTrait, HostTrait};
+
+    let host = cpal::default_host();
+
+    let device_name = match host.default_input_device() {
+        Some(d) => d.name().unwrap_or_else(|_| "unknown".into()),
+        None => "none".to_string(),
+    };
+
+    let device = host.default_input_device();
+
+    let (channels, sample_rate) = match device.and_then(|d| d.default_input_config().ok()) {
+        Some(cfg) => (
+            cfg.channels().to_string(),
+            cfg.sample_rate().0.to_string(),
+        ),
+        None => ("unknown".to_string(), "unknown".to_string()),
+    };
+
+    (device_name, channels, sample_rate)
+}
+
+// ── Whisper-server running probe ────────────────────────────────────────────
+
+fn check_whisper_server_running() -> String {
+    if crate::transcribe::prewarm_in_flight() {
+        return "unknown (prewarm in flight)".into();
+    }
+    if crate::transcribe::is_ready() {
+        return "running".into();
+    }
+    let server_path = crate::transcribe::find_whisper_server("whisper-server");
+    match server_path {
+        Ok(_) => "not running".into(),
+        Err(e) => format!("sidecar unavailable: {e}"),
+    }
+}
+
+// ── Paste method ────────────────────────────────────────────────────────────
+
+fn collect_paste_method() -> String {
+    #[cfg(target_os = "macos")]
+    { "CGEventPost Cmd+V".into() }
+
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var("XDG_SESSION_TYPE")
+            .map(|v| v.eq_ignore_ascii_case("wayland"))
+            .unwrap_or(false)
+        { "unsupported (wayland)".into() }
+        else
+        { "enigo Ctrl+V".into() }
+    }
+
+    #[cfg(target_os = "windows")]
+    { "enigo Ctrl+V".into() }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    { "unknown".into() }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn run_diagnostics() -> DiagnosticsResult {
@@ -184,6 +380,14 @@ pub async fn run_diagnostics() -> DiagnosticsResult {
     }
     .to_string();
 
+    // ── Platform details (added 2026-06-16) ───────────────────────────────────
+    let os_version = collect_os_version();
+    let keyboard_layout = collect_keyboard_layout();
+    let (default_input_device, default_input_channels, default_input_sample_rate) =
+        collect_audio_device_details();
+    let whisper_server_running = check_whisper_server_running();
+    let paste_method = collect_paste_method();
+
     DiagnosticsResult {
         platform,
         audio_input_available,
@@ -194,6 +398,13 @@ pub async fn run_diagnostics() -> DiagnosticsResult {
         cleanup_mode,
         ollama_status,
         paste_capability,
+        os_version,
+        keyboard_layout,
+        default_input_device,
+        default_input_channels,
+        default_input_sample_rate,
+        whisper_server_running,
+        paste_method,
     }
 }
 

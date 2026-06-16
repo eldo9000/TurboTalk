@@ -15,6 +15,7 @@
 pub(crate) mod common {
     use crate::audio::{DiscardReason, StopOutcome};
     use crate::recorder::{Recorder, RecorderError};
+    use crate::session_metrics;
     use crate::tray::{self, TrayState};
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
     use std::sync::Arc;
@@ -542,12 +543,15 @@ pub(crate) mod common {
                 }
             }
 
+            session_metrics::record_hotkey_down();
+
             if let Err(e) = rec.start() {
                 // Race: state moved out of Ready between our snapshot and the
                 // start() call (e.g. another press won the lock first), or audio
                 // backend failed. Do NOT emit ptt-down, do NOT change tray icon.
                 tracing::warn!("[hotkey] start ignored: {}", e);
                 emit_critical(&app, "dictation-busy", rec.state().to_string());
+                session_metrics::record_audio_error();
                 return;
             }
             // Recording was accepted. Check if key-up already arrived while
@@ -557,8 +561,11 @@ pub(crate) mod common {
                 rec.cancel();
                 let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
                 emit_critical(&app, "recording-cancelled", ());
+                session_metrics::record_dictation_discarded();
                 return;
             }
+
+            session_metrics::record_dictation_started();
 
             // Start the segment transcriber now so concurrent mid-recording
             // segment transcriptions can run while the user is still speaking.
@@ -753,10 +760,13 @@ pub(crate) mod common {
         let paste_text = format!("{} ", final_text);
         match crate::paste::paste(&paste_text) {
             Ok(_) => {
+                session_metrics::record_paste_success();
+                session_metrics::record_dictation_completed();
                 play_chime(ChimeEvent::Finish);
             }
             Err(e) => {
                 tracing::error!("[paste job_id={:?}] {:?}", job_id_opt, e);
+                session_metrics::record_paste_failure();
                 emit_critical(
                     app,
                     "paste-error",
@@ -835,6 +845,7 @@ pub(crate) mod common {
                         );
                         rec.finish_guarded();
                         let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                        session_metrics::record_dictation_discarded();
                         // Must emit recording-discarded so the frontend clears
                         // transcribing=true (set by ptt-up above). Without this
                         // the overlay hangs until the next ptt-down resets it.
@@ -910,6 +921,7 @@ pub(crate) mod common {
                                 );
                                 Ok((seg_text, None, String::new(), String::new()))
                             } else {
+                                session_metrics::record_transcribe_error();
                                 Err(e)
                             }
                         }
@@ -922,6 +934,7 @@ pub(crate) mod common {
                         // A new job may have already started (Recording state).
                         rec.finish_guarded();
                         let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                        session_metrics::record_dictation_discarded();
                         emit_critical(&app, "recording-discarded", ());
                         if let Some(job_id) = job_id_opt {
                             emit_stage(&app, job_id, "ready");
@@ -1018,6 +1031,7 @@ pub(crate) mod common {
                                         "[cleanup   job_id={:?}] empty final transcript — skipping paste",
                                         job_id_opt
                                     );
+                                    session_metrics::record_dictation_discarded();
                                     emit_critical(&app, "recording-discarded", "empty-final-text");
                                     bail_out(&rec, &tray, &app, job_id_opt, true);
                                     play_chime(ChimeEvent::Finish);
@@ -1080,6 +1094,7 @@ pub(crate) mod common {
                                     "[cleanup   job_id={:?}] empty final transcript — skipping paste",
                                     job_id_opt
                                 );
+                                session_metrics::record_dictation_discarded();
                                 emit_critical(&app, "recording-discarded", "empty-final-text");
                                 bail_out(&rec, &tray, &app, job_id_opt, true);
                                 play_chime(ChimeEvent::Finish);
@@ -1233,6 +1248,8 @@ pub(crate) mod common {
                                     let paste_text = format!("{} ", final_text);
                                     match crate::paste::paste(&paste_text) {
                                         Ok(_) => {
+                                            session_metrics::record_paste_success();
+                                            session_metrics::record_dictation_completed();
                                             play_chime(ChimeEvent::Finish);
                                         }
                                         Err(e) => {
@@ -1241,6 +1258,7 @@ pub(crate) mod common {
                                                 job_id_opt,
                                                 e
                                             );
+                                            session_metrics::record_paste_failure();
                                             emit_critical(
                                                 &app,
                                                 "paste-error",
@@ -1252,6 +1270,7 @@ pub(crate) mod common {
                                 }
                             } else {
                                 // Segments produced no text — normal discard.
+                                session_metrics::record_dictation_discarded();
                                 emit_critical(&app, "recording-discarded", ());
                             }
                             bail_out(&rec, &tray, &app, job_id_opt, false);
@@ -1262,6 +1281,7 @@ pub(crate) mod common {
                     // the overlay listens to; `recording-too-short` is the more
                     // specific subtype the main window uses to show a toast.
                     let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                    session_metrics::record_dictation_discarded();
                     if let DiscardReason::TooShort { duration_ms } = reason {
                         emit_critical(&app, "recording-too-short", duration_ms);
                     }
@@ -1986,6 +2006,19 @@ mod imp {
             }
         });
     }
+
+    #[derive(Debug, Clone, serde::Serialize, specta::Type)]
+    pub struct HotkeyProbe {
+        pub method: String,
+        pub accessibility_trusted: bool,
+    }
+
+    pub fn diagnostic_probe() -> HotkeyProbe {
+        HotkeyProbe {
+            method: "CGEventTap + IOHIDManager".into(),
+            accessibility_trusted: accessibility_trusted(),
+        }
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -2009,6 +2042,9 @@ mod imp {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use tauri::{tray::TrayIcon, AppHandle};
+
+    /// True once the rdev listener thread has started; cleared if it exits.
+    static LISTENER_ALIVE: AtomicBool = AtomicBool::new(false);
 
     pub fn accessibility_trusted() -> bool {
         // Windows: no equivalent permission gate — global hooks just work.
@@ -2111,6 +2147,7 @@ mod imp {
                     hk.key,
                     hk.mode
                 );
+                LISTENER_ALIVE.store(true, Ordering::Release);
             }
 
             // Track the current logical hotkey state so we don't double-fire on
@@ -2202,6 +2239,7 @@ mod imp {
             });
 
             if let Err(e) = result {
+                LISTENER_ALIVE.store(false, Ordering::Release);
                 tracing::error!("[hotkey] rdev::listen failed: {:?}", e);
                 let _ = down; // closure consumed `down_for_cb`; avoid unused warning
                               // Surface to UI via the cloned-outside-thread `app_for_error`.
@@ -2223,6 +2261,31 @@ mod imp {
             }
         });
     }
+
+    #[derive(Debug, Clone, serde::Serialize, specta::Type)]
+    pub struct HotkeyProbe {
+        pub method: String,
+        pub listener_alive: bool,
+        #[cfg(target_os = "linux")]
+        pub wayland_detected: bool,
+        pub accessibility_trusted: bool,
+    }
+
+    pub fn diagnostic_probe() -> HotkeyProbe {
+        let method = "rdev XRecord".to_string();
+        #[cfg(target_os = "linux")]
+        let wayland_detected = std::env::var("XDG_SESSION_TYPE")
+            .map(|v| v.eq_ignore_ascii_case("wayland"))
+            .unwrap_or(false);
+
+        HotkeyProbe {
+            method,
+            listener_alive: LISTENER_ALIVE.load(Ordering::Acquire),
+            #[cfg(target_os = "linux")]
+            wayland_detected,
+            accessibility_trusted: accessibility_trusted(),
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -2232,9 +2295,9 @@ mod hotkey_win32;
 #[cfg(target_os = "windows")]
 pub use hotkey_win32::{accessibility_trusted, diagnostic_probe, spawn, HotkeyProbe};
 #[cfg(target_os = "macos")]
-pub use imp::{accessibility_trusted, spawn};
+pub use imp::{accessibility_trusted, diagnostic_probe, spawn, HotkeyProbe};
 #[cfg(target_os = "linux")]
-pub use imp::{accessibility_trusted, spawn};
+pub use imp::{accessibility_trusted, diagnostic_probe, spawn, HotkeyProbe};
 
 #[cfg(test)]
 mod tests {

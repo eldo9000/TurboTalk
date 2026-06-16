@@ -20,6 +20,7 @@ pub mod ollama;
 pub mod paste;
 pub mod permissions;
 pub mod recorder;
+pub mod session_metrics;
 pub mod settings;
 pub mod theme;
 pub mod transcribe;
