@@ -822,7 +822,21 @@ fn get_launch_at_login(app: tauri::AppHandle) -> bool {
 fn set_launch_at_login(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     use tauri_plugin_autostart::ManagerExt;
     let al = app.autolaunch();
-    if enabled { al.enable() } else { al.disable() }.map_err(|e| e.to_string())
+    if enabled { al.enable() } else { al.disable() }.map_err(|e| e.to_string())?;
+
+    // Sync the tray menu item text.
+    let label = if enabled {
+        "\u{2713} Launch at Login"
+    } else {
+        "  Launch at Login"
+    };
+    if let Some(slot) = LAUNCH_MENU_ITEM.get() {
+        if let Some(item) = slot.lock().unwrap().as_ref() {
+            let _ = item.set_text(label);
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -835,6 +849,12 @@ fn reset_turbotalk(
     use tauri_plugin_autostart::ManagerExt;
 
     let _ = app.autolaunch().disable();
+    // Sync the tray menu item text.
+    if let Some(slot) = LAUNCH_MENU_ITEM.get() {
+        if let Some(item) = slot.lock().unwrap().as_ref() {
+            let _ = item.set_text("  Launch at Login");
+        }
+    }
 
     for path in [settings::config_path(), settings::history_path()] {
         match std::fs::remove_file(&path) {
@@ -2210,6 +2230,12 @@ use tauri::{
     Emitter, Manager, RunEvent, WindowEvent,
 };
 
+/// Global handle to the tray's "Launch at Login" menu item. Populated once
+/// during tray construction in `run()`. `set_launch_at_login` reads this to
+/// keep the tray menu in sync when toggled from Settings.
+static LAUNCH_MENU_ITEM: std::sync::OnceLock<std::sync::Mutex<Option<MenuItem<tauri::Wry>>>> =
+    std::sync::OnceLock::new();
+
 /// Build the tauri-specta type-export descriptor. Lives in its own function
 /// so the `#[test]` regenerator below can call it without standing up the
 /// full Tauri runtime.
@@ -2467,6 +2493,12 @@ pub fn run() {
                 "  Launch at Login"
             };
             let launch_item = MenuItem::with_id(app, "launch", launch_label, true, None::<&str>)?;
+            // Store in global so set_launch_at_login (Settings toggle) can
+            // sync the tray menu item text.
+            {
+                let slot = LAUNCH_MENU_ITEM.get_or_init(|| std::sync::Mutex::new(None));
+                *slot.lock().unwrap() = Some(launch_item.clone());
+            }
             let show_item = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;
             let reset_warmup_item =
                 MenuItem::with_id(app, "reset-warmup", "Clear Warmup Cache", true, None::<&str>)?;

@@ -94,7 +94,6 @@
       && permissionSatisfied(nextReadiness.input_monitoring)
       && permissionSatisfied(nextReadiness.microphone)
       && modelReady
-      && launchAtLogin
       && !nextReadiness.force_onboarding
     ) {
       stopPolling();

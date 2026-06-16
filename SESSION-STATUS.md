@@ -1,12 +1,13 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-06-15  
-**Current state:** Removed auto-punctuation from the cleanup pipeline. Whisper naturally adds trailing periods to every utterance/segment, and `strip_whisper_artifacts` wasn't stripping bare `.` — only ` .` (space+dots) and `...`. Combined with the segment transcription pipeline, this produced periods at every silence-boundary pause, breaking sentences apart. Fix: `strip_whisper_artifacts` now also strips bare trailing `.`, and `join_segments` strips trailing periods from each segment before assembly.
+**Last updated:** 2026-06-16  
+**Current state:** Onboarding welcome-screen logic tightened — no longer shows when all gates are green (regardless of launch-at-login setting), and launch-at-login is no longer a hard gate for auto-close.
 
 ## Open backlog
 
 | Item | Status |
 |------|--------|
+| **Onboarding welcome-screen cleanup** | **Fixed** — `recheckReadiness()` now dismisses onboarding immediately when all gates green (no longer depends on launch-at-login), and `Onboarding.svelte` auto-close no longer requires `launchAtLogin`. Two changes: `src/App.svelte` (initial-mount gate) and `src/Onboarding.svelte` (removed hard requirement from auto-close condition). |
 | **Status window (new)** | **Built** — `src/Status.svelte` handles `ptt-armed`, `ptt-arm-failed`, `transcription-rejected` (flaky/blocked), and `recording-discarded` (empty-final-text). Yellow pulsing border for arming, red pulsing border for rejections, dismiss button on rejections. Window is clickable (no `set_ignore_cursor_events`). |
 | **Arming removed from overlay** | **Done** — `Overlay.svelte` no longer listens for `ptt-armed` / `ptt-arm-failed`, no arming CSS classes or template blocks. |
 | **Filtered-dictation overlay feedback** | **Superseded** by status window — `transcription-rejected` feedback now lives in `Status.svelte`. |
@@ -35,6 +36,10 @@
 
 ## This session
 
+**Event:** User asked for a subjective technical-design/code simplification pass: identify parts that look overcomplicated or over-designed after the app's first full release.
+
+**Review notes:** `recorder.rs` is a good small core state machine. Complexity clusters around hotkey lifecycle orchestration, duplicated paste/finalization branches, repeated monitor geometry math, monolithic Tauri bootstrap, and frontend event listeners doing direct state mutation. Recommended first simplification is a behavior-preserving extraction/refactor of the dictation completion path in `src-tauri/src/hotkey.rs`.
+
 **Event:** User reported a "strange crash" in TurboTalk. Investigation of logs and macOS crash reports revealed two distinct issues.
 
 ### Issue 1: Silent tracing pipeline death (today's crash)
@@ -55,4 +60,4 @@ All crashes were identical: `SIGABRT` (abort trap) on the main thread, preceded 
 
 ## Next action
 
-Restart the TurboTalk dev session (`npm run tauri dev`) to pick up the changes, then run through a few dictation rounds to confirm the panic hook and watchdog are working correctly. To test the watchdog: manually kill the tracing writer thread or use `SIGSTOP` on it to simulate a stall, then wait 120s for the toast.
+If proceeding with simplification, first extract shared "finish transcript and paste" helpers from `src-tauri/src/hotkey.rs` without changing behavior; success signal is `cargo test --manifest-path src-tauri/Cargo.toml recorder transcribe cleanup` plus one manual dictation into TextEdit that still pastes and records history.

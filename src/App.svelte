@@ -123,10 +123,16 @@
       altModels = await commands.listModelsForFamily(cfgBackend).catch(() => []);
     }
 
-    // Onboarding owns its own exit path (onComplete / onUnsupportedContinue).
-    // Focus events during a window drag were dismissing onboarding mid-download
-    // because `downloading === true` made `(!ready && !downloading)` false.
-    if (showOnboarding) return;
+    if (showOnboarding) {
+      // Initial mount with the default `showOnboarding = true`. If no gate is
+      // actually missing, dismiss onboarding immediately without flashing the
+      // wizard. Otherwise let Onboarding.svelte own the exit path.
+      const needsOnboarding = r.force_onboarding || !r.ready;
+      if (!needsOnboarding && !(unsupportedPlatform && unsupportedPlatformDismissed)) {
+        showOnboarding = false;
+      }
+      return;
+    }
 
     // Don't bounce back to onboarding while a model download is in flight in
     // the main Models tab — model_present() is false until the file lands.
