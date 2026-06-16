@@ -1861,69 +1861,72 @@ Reply with only the single word, lowercase, no punctuation.
           class="reset-close-x"
           aria-label="Close"
         >✕</button>
-        <div class="flex flex-col items-center gap-1 pb-3">
+        <div class="reset-inner">
+        <div class="flex flex-col items-start gap-1 pb-3">
           <span class="text-[18px] font-semibold tracking-tight text-[var(--text-primary)]">Reset TurboTalk</span>
-          <p class="text-[var(--text-secondary)] text-[11px] leading-snug mt-1.5 text-center">
-            Clear local settings and transcript history, disable Launch at Login, and return to setup.
+          <p class="text-[var(--text-secondary)] text-[11px] leading-snug mt-1.5 w-full">
+            Clear local settings and transcript history,<br>disable Launch at Login, and return to setup.
           </p>
-          <p class="text-[var(--text-secondary)] text-[11px] leading-snug text-center">
-            macOS privacy permissions stay in System Settings.
-          </p>
+          <div class="reset-platform-note">
+            <span class="reset-platform-icon">⚠</span>
+            <span>
+              {#if platform === 'windows'}
+                Microphone permissions stay in Settings › Privacy & security › Microphone.
+              {:else if platform === 'linux'}
+                Microphone permissions are managed through your system's portal or audio settings.
+              {:else}
+                Microphone permissions stay in macOS System Settings.
+              {/if}
+            </span>
+          </div>
         </div>
-        <div class="flex flex-col gap-2 pt-2.5">
-          <button
-            onclick={() => resetTurboTalk(false)}
-            disabled={resetBusy}
-            class="tt-btn w-full justify-center"
-          >
-            Reset, Keep Models
-          </button>
-          <p class="text-[10px] text-[var(--text-muted)] leading-snug text-center -mt-0.5">Clears settings, transcript history, and warm-up. Keeps downloaded transcription models.</p>
-          <button
-            onclick={() => resetTurboTalk(true)}
-            disabled={resetBusy}
-            class="tt-btn tt-btn-danger-hover w-full justify-center"
-          >
-            Reset Everything
-          </button>
-          <p class="text-[10px] text-[var(--text-muted)] leading-snug text-center -mt-0.5">Clears everything including downloaded models. You'll need to download them again.</p>
-          <button
-            onclick={() => { commands.resetOnboarding(); recheckReadiness(); closeReset(); }}
-            disabled={resetBusy}
-            class="tt-btn w-full justify-center"
-          >
-            Re-run Welcome Screen
-          </button>
-          <p class="text-[10px] text-[var(--text-muted)] leading-snug text-center -mt-0.5">Shows the setup wizard again without clearing any settings or models.</p>
-          <button
-            onclick={clearWarmupCache}
-            disabled={resetBusy || warmupResetBusy}
-            class="tt-btn w-full justify-center"
-          >
-            {warmupResetBusy ? 'Clearing…' : 'Clear warmup cache'}
-          </button>
-          <p class="text-[10px] text-[var(--text-muted)] leading-snug text-center -mt-0.5">Clears the transcription model warm-up so it reloads next time.</p>
+        <div class="flex flex-col gap-1 pt-2.5">
+          <div class="reset-action-row">
+            <button onclick={() => resetTurboTalk(false)} disabled={resetBusy} class="tt-btn reset-action-btn justify-center">
+              Reset, Keep Models
+            </button>
+            <p class="reset-action-desc">Clears settings, transcript history, and warm-up. Keeps downloaded transcription models.</p>
+          </div>
+          <div class="reset-action-row">
+            <button onclick={() => resetTurboTalk(true)} disabled={resetBusy} class="tt-btn tt-btn-danger-hover reset-action-btn justify-center">
+              Reset Everything
+            </button>
+            <p class="reset-action-desc">Clears everything including downloaded models. You'll need to download them again.</p>
+          </div>
+          <div class="reset-action-row">
+            <button onclick={() => { commands.resetOnboarding(); recheckReadiness(); closeReset(); }} disabled={resetBusy} class="tt-btn reset-action-btn justify-center">
+              Re-run Welcome Screen
+            </button>
+            <p class="reset-action-desc">Shows the setup wizard again without clearing any settings or models.</p>
+          </div>
+          <div class="reset-action-row">
+            <button onclick={clearWarmupCache} disabled={resetBusy || warmupResetBusy} class="tt-btn reset-action-btn justify-center">
+              {warmupResetBusy ? 'Clearing…' : 'Clear warmup cache'}
+            </button>
+            <p class="reset-action-desc">Clears the transcription model warm-up so it reloads next time.</p>
+          </div>
 
           {#if warmupResetMsg}
-            <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug text-center">{warmupResetMsg}</p>
+            <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug">{warmupResetMsg}</p>
           {/if}
           {#if resetError}
-            <p class="text-[10px] text-red-400 leading-snug text-center">{resetError}</p>
+            <p class="text-[10px] text-red-400 leading-snug">{resetError}</p>
           {/if}
 
-          <div class="reset-card-sep"></div>
-          <label for="bug-note" class="tt-lbl tt-lbl-fixed">Report a bug</label>
-          <textarea
-            id="bug-note"
-            bind:value={bugNote}
-            rows="2"
-            placeholder="Optional — what happened? The report gathers the technical details."
-            class="tt-input"
-          ></textarea>
-          <button onclick={createBugReport} class="tt-btn w-full justify-center">Create Bug Report</button>
+          <div class="reset-action-row mt-1">
+            <button onclick={createBugReport} class="tt-btn reset-action-btn justify-center">Create Bug Report</button>
+            <textarea
+              id="bug-note"
+              bind:value={bugNote}
+              rows="2"
+              placeholder={"Optional — what happened?\nThe report gathers the technical details."}
+              class="tt-input reset-action-desc"
+            ></textarea>
+          </div>
           {#if diagnosticMsg}
-            <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug text-center">{diagnosticMsg}</p>
+            <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug">{diagnosticMsg}</p>
           {/if}
+        </div>
         </div>
       </div>
     </div>
