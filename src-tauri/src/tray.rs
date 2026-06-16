@@ -1,4 +1,11 @@
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tauri::image::Image;
+use tauri::{
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
+    Emitter, Manager,
+};
 
 pub enum TrayState {
     Idle,
@@ -41,6 +48,132 @@ pub fn make_icon(state: TrayState) -> Image<'static> {
     }
 
     Image::new_owned(px, size, size)
+}
+
+// ── Tray builder ──────────────────────────────────────────────────────────
+
+/// Build the tray icon and its context menu.  Populates `LAUNCH_MENU_ITEM` for
+/// live sync from the Settings toggle.  The returned `TrayIcon` is also managed
+/// as app state so commands (`cancel_recording`, tray click handlers) can reach
+/// it.
+pub fn build(app: &tauri::App) -> tauri::Result<TrayIcon> {
+    let launch_enabled = {
+        use tauri_plugin_autostart::ManagerExt;
+        app.autolaunch().is_enabled().unwrap_or(false)
+    };
+    // Build the "Launch at Login" menu item as a plain MenuItem with a
+    // visual indicator in the label (✓ when enabled). Tauri 2's
+    // CheckMenuItem has a macOS tray bug where clicks don't fire menu
+    // events and set_checked doesn't update the native menu — so we
+    // manage the state ourselves via set_text.
+    let launch_label = if launch_enabled {
+        "\u{2713} Launch at Login"
+    } else {
+        "  Launch at Login"
+    };
+    let launch_item = MenuItem::with_id(app, "launch", launch_label, true, None::<&str>)?;
+    // Store in global so set_launch_at_login (Settings toggle) can
+    // sync the tray menu item text.
+    {
+        let slot = crate::LAUNCH_MENU_ITEM
+            .get_or_init(|| std::sync::Mutex::new(None));
+        *slot.lock().unwrap() = Some(launch_item.clone());
+    }
+    let show_item = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;
+    let reset_warmup_item =
+        MenuItem::with_id(app, "reset-warmup", "Clear Warmup Cache", true, None::<&str>)?;
+    let restart_item = MenuItem::with_id(app, "restart", "Restart", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let sep1 = PredefinedMenuItem::separator(app)?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
+    let sep3 = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &launch_item,
+            &sep1,
+            &show_item,
+            &sep2,
+            &reset_warmup_item,
+            &sep3,
+            &restart_item,
+            &quit_item,
+        ],
+    )?;
+
+    let launch_item_ref = launch_item.clone();
+    let first_manual_main_show = Arc::new(AtomicBool::new(false));
+    let tray_first_manual_main_show = first_manual_main_show.clone();
+    let menu_first_manual_main_show = first_manual_main_show.clone();
+    let tray_icon: TrayIcon = TrayIconBuilder::new()
+        .icon(make_icon(TrayState::Idle))
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip("TurboTalk")
+        .on_tray_icon_event(move |tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let app = tray.app_handle();
+                // If recording is active, cancel it instead of opening the window.
+                let rec = app.state::<crate::RecorderState>();
+                if matches!(rec.inner().state(), crate::recorder::State::Recording) {
+                    let hk = app.state::<crate::HotkeyState>();
+                    let hold_mode = hk.read().mode == "hold";
+                    if hold_mode {
+                        crate::hotkey::arm_ptt_up_suppression();
+                    }
+                    crate::hotkey::trigger_cancel(rec.inner(), tray, &app);
+                    return;
+                }
+                crate::show_main_window(&app, &tray_first_manual_main_show);
+                let _ = app.emit("open-history", ());
+            }
+        })
+        .on_menu_event(move |app, event| match event.id.as_ref() {
+            "launch" => {
+                use tauri_plugin_autostart::ManagerExt;
+                let mgr = app.autolaunch();
+                let new_state = !mgr.is_enabled().unwrap_or(false);
+                if new_state {
+                    let _ = mgr.enable();
+                } else {
+                    let _ = mgr.disable();
+                }
+                let label = if new_state {
+                    "\u{2713} Launch at Login"
+                } else {
+                    "  Launch at Login"
+                };
+                let _ = launch_item_ref.set_text(label);
+            }
+            "show" => {
+                crate::show_main_window(app, &menu_first_manual_main_show);
+            }
+            "reset-warmup" => {
+                let recorder = app.state::<crate::RecorderState>();
+                match crate::reset_warmup_cache_inner(recorder.inner()) {
+                    Ok(()) => {
+                        tracing::info!("[transcribe] warmup cache cleared from tray menu");
+                    }
+                    Err(message) => {
+                        crate::emit_ui_error(app, "warmup-cache", message, true);
+                    }
+                }
+            }
+            "restart" => app.restart(),
+            "quit" => {
+                crate::transcribe::abort_active();
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .build(app)?;
+
+    Ok(tray_icon)
 }
 
 // ── Pixel helpers ─────────────────────────────────────────────────────────────

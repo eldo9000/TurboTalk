@@ -27,6 +27,8 @@ pub mod transcribe_backends;
 pub mod tray;
 pub mod vad;
 pub mod windowing;
+pub mod startup_logging;
+pub mod macos_input_monitoring;
 
 pub use theme::{get_accent, get_theme};
 
@@ -101,7 +103,7 @@ fn prewarm_model(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn reset_warmup_cache_inner(recorder: &recorder::Recorder) -> Result<(), String> {
+pub(crate) fn reset_warmup_cache_inner(recorder: &recorder::Recorder) -> Result<(), String> {
     let state = recorder.state();
     if state.is_busy() {
         return Err(format!(
@@ -158,7 +160,7 @@ fn apply_alt_backend_after_download(
     Ok(())
 }
 
-fn show_main_window(app: &tauri::AppHandle, first_manual_show: &std::sync::atomic::AtomicBool) {
+pub(crate) fn show_main_window(app: &tauri::AppHandle, first_manual_show: &std::sync::atomic::AtomicBool) {
     use std::sync::atomic::Ordering;
     if let Some(win) = app.get_webview_window("main") {
         let visible = win.is_visible().unwrap_or(false);
@@ -1602,21 +1604,17 @@ use std::sync::Arc;
 
 // Shared hotkey config — hotkey thread reads this on every event so
 // settings changes take effect without restarting the app.
-type HotkeyState = Arc<RwLock<settings::HotkeyConfig>>;
-type RecorderState = Arc<recorder::Recorder>;
-type TrayIconState = tauri::tray::TrayIcon;
+pub(crate) type HotkeyState = Arc<RwLock<settings::HotkeyConfig>>;
+pub(crate) type RecorderState = Arc<recorder::Recorder>;
+pub(crate) type TrayIconState = tauri::tray::TrayIcon;
 type DownloadCancelSet = parking_lot::Mutex<std::collections::HashSet<String>>;
 
-use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager, RunEvent, WindowEvent,
-};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 
 /// Global handle to the tray's "Launch at Login" menu item. Populated once
 /// during tray construction in `run()`. `set_launch_at_login` reads this to
 /// keep the tray menu in sync when toggled from Settings.
-static LAUNCH_MENU_ITEM: std::sync::OnceLock<std::sync::Mutex<Option<MenuItem<tauri::Wry>>>> =
+pub(crate) static LAUNCH_MENU_ITEM: std::sync::OnceLock<std::sync::Mutex<Option<tauri::menu::MenuItem<tauri::Wry>>>> =
     std::sync::OnceLock::new();
 
 /// Build the tauri-specta type-export descriptor. Lives in its own function
@@ -1676,98 +1674,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     ])
 }
 
-/// Cached log directory path, set once at startup so the tracing health
-/// watchdog (spawned in `.setup()`) can stat files without going through
-/// the Settings RwLock.
-static LOG_DIR_CELL: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let data_dir = crate::settings::data_dir();
-    shared::logging::init(env!("CARGO_PKG_NAME"), &data_dir);
-    let _ = diagnostic_log::ensure_log_dir();
-    let log_dir = diagnostic_log::log_dir();
-
-    use tracing_appender::rolling::{RollingFileAppender, Rotation};
-    // Full session log: one file per day (`turbotalk.YYYY-MM-DD.log`), keeping
-    // ~2 weeks so the directory can't grow without bound on a daily driver.
-    let main_appender = RollingFileAppender::builder()
-        .rotation(Rotation::DAILY)
-        .filename_prefix(diagnostic_log::MAIN_LOG_PREFIX)
-        .filename_suffix(diagnostic_log::LOG_SUFFIX)
-        .max_log_files(14)
-        .build(&log_dir)
-        .expect("init main log appender");
-    let (main_nb, main_guard) = tracing_appender::non_blocking(main_appender);
-
-    // Errors-only log: WARN+ERROR across all targets, retained longer so a
-    // "what broke over the last week/month" query reads one short file.
-    let error_appender = RollingFileAppender::builder()
-        .rotation(Rotation::DAILY)
-        .filename_prefix(diagnostic_log::ERROR_LOG_PREFIX)
-        .filename_suffix(diagnostic_log::LOG_SUFFIX)
-        .max_log_files(60)
-        .build(&log_dir)
-        .expect("init error log appender");
-    let (error_nb, error_guard) = tracing_appender::non_blocking(error_appender);
-
-    // Keep all non-blocking writers alive for the process lifetime so logs flush.
-    static LOG_GUARDS: std::sync::OnceLock<Vec<tracing_appender::non_blocking::WorkerGuard>> =
-        std::sync::OnceLock::new();
-    #[cfg(debug_assertions)]
-    let mut log_guards = vec![main_guard, error_guard];
-    #[cfg(not(debug_assertions))]
-    let log_guards = vec![main_guard, error_guard];
-
-    #[cfg(debug_assertions)]
-    {
-        // Transcript debug log: a dedicated, local-only sink kept off the
-        // tracing pipeline entirely (see diagnostic_log::TRANSCRIPT_LOG_PREFIX).
-        // TEMPORARY — used to chase transcription quirks in dev builds; never
-        // included in uploaded reports.
-        let transcript_appender = RollingFileAppender::builder()
-            .rotation(Rotation::DAILY)
-            .filename_prefix(diagnostic_log::TRANSCRIPT_LOG_PREFIX)
-            .filename_suffix(diagnostic_log::LOG_SUFFIX)
-            .max_log_files(14)
-            .build(&log_dir)
-            .expect("init transcript log appender");
-        let (transcript_nb, transcript_guard) = tracing_appender::non_blocking(transcript_appender);
-        diagnostic_log::init_transcript_writer(transcript_nb);
-        log_guards.push(transcript_guard);
-    }
-
-    let _ = LOG_GUARDS.set(log_guards);
-
-    use tracing_subscriber::{
-        filter::LevelFilter, layer::SubscriberExt, util::SubscriberInitExt, Layer,
-    };
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("turbotalk_lib=debug,warn"));
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(main_nb)
-                .with_ansi(false),
-        )
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(error_nb)
-                .with_ansi(false)
-                .with_filter(LevelFilter::WARN),
-        )
-        .init();
-
-    // Cache the main log dir path for the tracing health watchdog.
-    let _ = LOG_DIR_CELL.set(log_dir.clone());
-
-    tracing::info!(
-        "[startup] TurboTalk v{} logging to {}",
-        env!("CARGO_PKG_VERSION"),
-        log_dir.display()
-    );
+    startup_logging::init();
 
     // ── Typed Rust↔TS contract ─────────────────────────────────────────────
     // Every command crossing the IPC boundary that the frontend talks to is
@@ -1861,129 +1770,7 @@ pub fn run() {
             }
 
             // ── Tray icon ──────────────────────────────────────────────────
-            let launch_enabled = {
-                use tauri_plugin_autostart::ManagerExt;
-                app.autolaunch().is_enabled().unwrap_or(false)
-            };
-            // Build the "Launch at Login" menu item as a plain MenuItem with a
-            // visual indicator in the label (✓ when enabled). Tauri 2's
-            // CheckMenuItem has a macOS tray bug where clicks don't fire menu
-            // events and set_checked doesn't update the native menu — so we
-            // manage the state ourselves via set_text.
-            let launch_label = if launch_enabled {
-                "\u{2713} Launch at Login"
-            } else {
-                "  Launch at Login"
-            };
-            let launch_item = MenuItem::with_id(app, "launch", launch_label, true, None::<&str>)?;
-            // Store in global so set_launch_at_login (Settings toggle) can
-            // sync the tray menu item text.
-            {
-                let slot = LAUNCH_MENU_ITEM.get_or_init(|| std::sync::Mutex::new(None));
-                *slot.lock().unwrap() = Some(launch_item.clone());
-            }
-            let show_item = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;
-            let reset_warmup_item =
-                MenuItem::with_id(app, "reset-warmup", "Clear Warmup Cache", true, None::<&str>)?;
-            let restart_item = MenuItem::with_id(app, "restart", "Restart", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let sep1 = PredefinedMenuItem::separator(app)?;
-            let sep2 = PredefinedMenuItem::separator(app)?;
-            let sep3 = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(
-                app,
-                &[
-                    &launch_item,
-                    &sep1,
-                    &show_item,
-                    &sep2,
-                    &reset_warmup_item,
-                    &sep3,
-                    &restart_item,
-                    &quit_item,
-                ],
-            )?;
-
-            let launch_item_ref = launch_item.clone();
-            let first_manual_main_show = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let tray_first_manual_main_show = first_manual_main_show.clone();
-            let menu_first_manual_main_show = first_manual_main_show.clone();
-            let tray_icon: TrayIcon = TrayIconBuilder::new()
-                .icon(tray::make_icon(tray::TrayState::Idle))
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .tooltip("TurboTalk")
-                .on_tray_icon_event(move |tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app = tray.app_handle();
-                        // If recording is active, cancel it instead of opening the window.
-                        // trigger_cancel joins the feeder thread off the main thread
-                        // internally. Arm ptt_up suppression first when the user might
-                        // still be holding the record key (hold mode), so the eventual
-                        // key release no-ops instead of poisoning CANCEL_PENDING.
-                        let rec = app.state::<RecorderState>();
-                        if matches!(rec.inner().state(), recorder::State::Recording) {
-                            let hk = app.state::<HotkeyState>();
-                            let hold_mode = hk.read().mode == "hold";
-                            if hold_mode {
-                                hotkey::arm_ptt_up_suppression();
-                            }
-                            hotkey::trigger_cancel(rec.inner(), tray, app);
-                            return;
-                        }
-                        show_main_window(app, &tray_first_manual_main_show);
-                        let _ = app.emit("open-history", ());
-                    }
-                })
-                .on_menu_event(move |app, event| match event.id.as_ref() {
-                    "launch" => {
-                        use tauri_plugin_autostart::ManagerExt;
-                        let mgr = app.autolaunch();
-                        let new_state = !mgr.is_enabled().unwrap_or(false);
-                        if new_state {
-                            let _ = mgr.enable();
-                        } else {
-                            let _ = mgr.disable();
-                        }
-                        let label = if new_state {
-                            "\u{2713} Launch at Login"
-                        } else {
-                            "  Launch at Login"
-                        };
-                        let _ = launch_item_ref.set_text(label);
-                    }
-                    "show" => {
-                        show_main_window(app, &menu_first_manual_main_show);
-                    }
-                    "reset-warmup" => {
-                        let recorder = app.state::<RecorderState>();
-                        match reset_warmup_cache_inner(recorder.inner()) {
-                            Ok(()) => {
-                                tracing::info!("[transcribe] warmup cache cleared from tray menu");
-                            }
-                            Err(message) => {
-                                emit_ui_error(app, "warmup-cache", message, true);
-                            }
-                        }
-                    }
-                    "restart" => app.restart(),
-                    "quit" => {
-                        // Release the warmed transcription backend before the
-                        // process starts tearing down. `RunEvent::Exit` also
-                        // handles this, but doing it here makes tray Quit
-                        // deterministic and avoids carrying model-sized memory
-                        // until the final event-loop tick.
-                        transcribe::abort_active();
-                        app.exit(0);
-                    }
-                    _ => {}
-                })
-                .build(app)?;
+            let tray_icon = crate::tray::build(app)?;
 
             // ── Config (write defaults on first run) ───────────────────────
             let cfg_result = settings::load_detailed();
@@ -2174,80 +1961,7 @@ pub fn run() {
 
             // Pre-register in the Input Monitoring list so the app appears
             // there before the user opens System Settings during onboarding.
-            //
-            // On macOS 26+ the bare "request access" APIs (IOHIDRequestAccess,
-            // CGRequestListenEventAccess) don't reliably register an ad-hoc
-            // signed bundle with TCC. What does register it is actually
-            // attempting to open an IOHIDManager — the same path Karabiner,
-            // Logi Options+, etc. use to appear in the list.
-            //
-            // We create the manager, schedule it on the main run loop, and
-            // call Open. Even when TCC blocks the open, the *attempt* is
-            // what causes the bundle to be added to Privacy & Security →
-            // Input Monitoring. The manager is intentionally leaked so the
-            // registration persists for the process lifetime.
-            #[cfg(target_os = "macos")]
-            {
-                use std::os::raw::c_void;
-                type CFAllocatorRef = *const c_void;
-                type CFDictionaryRef = *const c_void;
-                type CFRunLoopRef = *const c_void;
-                type CFStringRef = *const c_void;
-                type IOHIDManagerRef = *mut c_void;
-                const K_IO_HID_OPTIONS_TYPE_NONE: u32 = 0;
-
-                #[link(name = "CoreFoundation", kind = "framework")]
-                extern "C" {
-                    static kCFAllocatorDefault: CFAllocatorRef;
-                    static kCFRunLoopDefaultMode: CFStringRef;
-                    fn CFRunLoopGetMain() -> CFRunLoopRef;
-                }
-                #[link(name = "CoreGraphics", kind = "framework")]
-                extern "C" {
-                    fn CGRequestListenEventAccess() -> bool;
-                }
-                #[link(name = "IOKit", kind = "framework")]
-                extern "C" {
-                    fn IOHIDManagerCreate(
-                        allocator: CFAllocatorRef,
-                        options: u32,
-                    ) -> IOHIDManagerRef;
-                    fn IOHIDManagerSetDeviceMatching(
-                        manager: IOHIDManagerRef,
-                        matching: CFDictionaryRef,
-                    );
-                    fn IOHIDManagerScheduleWithRunLoop(
-                        manager: IOHIDManagerRef,
-                        runloop: CFRunLoopRef,
-                        mode: CFStringRef,
-                    );
-                    fn IOHIDManagerOpen(manager: IOHIDManagerRef, options: u32) -> i32;
-                }
-
-                unsafe {
-                    // Belt-and-suspenders: the CG request also nudges TCC.
-                    CGRequestListenEventAccess();
-
-                    let manager =
-                        IOHIDManagerCreate(kCFAllocatorDefault, K_IO_HID_OPTIONS_TYPE_NONE);
-                    if !manager.is_null() {
-                        // NULL matching dict = match all devices, including keyboards.
-                        IOHIDManagerSetDeviceMatching(manager, std::ptr::null());
-                        IOHIDManagerScheduleWithRunLoop(
-                            manager,
-                            CFRunLoopGetMain(),
-                            kCFRunLoopDefaultMode,
-                        );
-                        // The Open attempt is what causes TCC to add the
-                        // bundle to the Input Monitoring list. Return value
-                        // is ignored — we expect kIOReturnNotPermitted until
-                        // the user enables the toggle.
-                        let _ = IOHIDManagerOpen(manager, K_IO_HID_OPTIONS_TYPE_NONE);
-                        // Manager intentionally leaked: keeping it alive
-                        // preserves the TCC registration for this process.
-                    }
-                }
-            }
+            macos_input_monitoring::register();
 
             hotkey::spawn(recorder, tray_icon, app.handle().clone(), hotkey_state);
 
@@ -2323,7 +2037,7 @@ fn spawn_tracing_watchdog(app: tauri::AppHandle) {
     let already_fired = Arc::new(AtomicBool::new(false));
 
     std::thread::spawn(move || {
-        let log_dir = match LOG_DIR_CELL.get() {
+        let log_dir = match startup_logging::LOG_DIR_CELL.get() {
             Some(d) => d.clone(),
             None => {
                 eprintln!("[tracing-watchdog] LOG_DIR_CELL not set — watchdog disabled");
@@ -2387,7 +2101,8 @@ fn spawn_tracing_watchdog(app: tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_window_position_to_work_area, intersection_area, specta_builder};
+    use super::{specta_builder};
+    use super::windowing::{clamp_window_position_to_work_area, intersection_area};
 
     #[test]
     fn clamp_window_position_keeps_window_inside_work_area_when_it_fits() {

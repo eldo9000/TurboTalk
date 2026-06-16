@@ -602,7 +602,7 @@ fn main_window_visible_geometry(
     ))
 }
 
-fn intersection_area(
+pub(crate) fn intersection_area(
     ax: i32,
     ay: i32,
     aw: i32,
@@ -621,7 +621,7 @@ fn intersection_area(
     w * h
 }
 
-fn clamp_window_position_to_work_area(
+pub(crate) fn clamp_window_position_to_work_area(
     x: i32,
     y: i32,
     w: i32,
