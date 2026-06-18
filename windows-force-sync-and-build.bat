@@ -74,7 +74,7 @@ REM Step 3: Build
 echo Step 3: Building TurboTalk...
 echo.
 
-echo  [1/4] npm install...
+echo  [1/6] npm install...
 call npm install
 if errorlevel 1 (
   echo npm install failed
@@ -83,7 +83,7 @@ if errorlevel 1 (
 )
 echo.
 
-echo  [2/4] Fetching whisper sidecars...
+echo  [2/6] Fetching whisper sidecars...
 call npm run fetch-sidecars
 if errorlevel 1 (
   echo fetch-sidecars failed
@@ -92,7 +92,7 @@ if errorlevel 1 (
 )
 echo.
 
-echo  [3/4] Fetching ONNX Runtime...
+echo  [3/6] Fetching ONNX Runtime...
 call npm run fetch-onnxruntime
 if errorlevel 1 (
   echo fetch-onnxruntime failed
@@ -101,10 +101,38 @@ if errorlevel 1 (
 )
 echo.
 
-echo  [4/4] tauri build...
-call npm run package
+echo  [4/6] Fetching VAD model...
+call npm run fetch-vad-model
+if errorlevel 1 (
+  echo fetch-vad-model failed
+  pause
+  exit /b 1
+)
+echo.
+
+echo  [5/6] Running preflight check...
+call npm run preflight
+if errorlevel 1 (
+  echo preflight check failed
+  pause
+  exit /b 1
+)
+echo.
+
+echo  [6/6] Building TurboTalk (tauri build)...
+call npx tauri build
 if errorlevel 1 (
   echo Build failed
+  pause
+  exit /b 1
+)
+echo.
+
+REM Rename artifact (works on all platforms)
+echo  Renaming artifact...
+call node scripts/rename-artifact.mjs
+if errorlevel 1 (
+  echo Artifact rename failed
   pause
   exit /b 1
 )
