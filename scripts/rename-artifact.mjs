@@ -138,13 +138,13 @@ if (!best) {
   process.exit(1);
 }
 
-const outDir = resolve(repoRoot, 'dist-artifacts');
+const outDir = resolve(repoRoot, 'build', 'artifacts');
 const outPath = resolve(outDir, cfg.outName);
 
 mkdirSync(outDir, { recursive: true });
 copyFileSync(best.path, outPath);
 
-console.log(`[rename-artifact] copied ${best.name} -> dist-artifacts/${cfg.outName}`);
+console.log(`[rename-artifact] copied ${best.name} -> build/artifacts/${cfg.outName}`);
 
 // SHA-256 checksum: format is `<hex><two spaces><filename><newline>`,
 // the canonical layout `shasum -a 256 -c` accepts.

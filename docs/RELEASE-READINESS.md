@@ -46,7 +46,7 @@ Each item is a hard gate for cutting a peer-share release. Items map back to "th
 ### 1. Repo hygiene
 
 - [ ] `git status` clean on `main`; no stray WIP files.
-- [ ] `dist-artifacts/` is in `.gitignore` (it currently is *not* — add it). Tracked count is zero today, but a casual `git add .` would commit packaged binaries.
+- [ ] `build/artifacts/` is in `.gitignore` (it currently is *not* — add it). Tracked count is zero today, but a casual `git add .` would commit packaged binaries.
 - [ ] No `.env`, `.env.local`, or other dotfiles in the working tree that aren't ignored.
 - [ ] No fingerprintable absolute paths committed in code or docs (search for `/Users/`, `C:\Users\`, your username, your machine name).
 - [ ] No vendored binaries that aren't sidecars (the bundled Whisper binaries are intentional; anything else is suspect).

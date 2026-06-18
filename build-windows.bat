@@ -54,18 +54,18 @@ call npm run package
 if %errorlevel% neq 0 ( echo [FAIL] build failed. Check output above. & pause & exit /b 1 )
 echo.
 echo [5/5] Collecting artifacts...
-if exist "dist-artifacts" (
-    dir /b "dist-artifacts\*.exe" 2>nul && (
+if exist "build\artifacts" (
+    dir /b "build\artifacts\*.exe" 2>nul && (
         echo.
         echo ============================================
         echo  Build complete!
-        echo  Installer: %CD%\dist-artifacts\
+        echo  Installer: %CD%\build\artifacts\
         echo ============================================
     ) || (
-        echo [WARN] dist-artifacts folder is empty. Check build logs.
+        echo [WARN] build\artifacts folder is empty. Check build logs.
     )
 ) else (
-    echo [WARN] dist-artifacts folder not found.
+    echo [WARN] build\artifacts folder not found.
 )
 echo.
 echo Done.

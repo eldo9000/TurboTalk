@@ -39,7 +39,7 @@ models/
 *.dmg
 *.app
 *.pkg
-dist-artifacts/
+build/artifacts/
 
 # Fetched Windows sidecars (run `npm run fetch-sidecars` on a Windows host
 # to repopulate). The macOS arm64 binary + dylibs stay committed.

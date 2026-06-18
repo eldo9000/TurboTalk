@@ -18,7 +18,7 @@ npm ci
 npm run package
 ```
 
-Installer appears in `dist-artifacts/`. No GitHub runner minutes consumed.
+Installer appears in `build/artifacts/`. No GitHub runner minutes consumed.
 
 For the full suite (Rust lint, frontend tests), run:
 ```powershell

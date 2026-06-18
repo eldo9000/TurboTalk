@@ -186,9 +186,9 @@ echo ====================================================================
 echo.
 echo                     ***  BUILD COMPLETE  ***
 echo.
-echo  Output folder: %CD%\dist-artifacts\
+echo  Output folder: %CD%\build\artifacts\
 echo.
-dir /b "dist-artifacts\*.exe" 2>nul
+dir /b "build\artifacts\*.exe" 2>nul
 echo.
 echo ====================================================================
 echo.
