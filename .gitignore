@@ -1,51 +1,15 @@
-# Rust
-target/
-Cargo.lock.bak
-**/*.rs.bk
-
-# Node
-node_modules/
-dist/
-.vite/
-*.log
-npm-debug.log*
-
-# Tauri
-src-tauri/target/
-src-tauri/gen/schemas/
-src-tauri/WixTools/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Editor
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Local config / secrets
-.env
-.env.*
-!.env.example
-
-# Whisper models (downloaded at runtime, never commit)
-models/
-*.ggml
-*.bin
-
 # Build artifacts
+target/
+dist/
+node_modules/
 *.dmg
 *.app
 *.pkg
-build/artifacts/
+build/TurboTalk-*
+.build-dmg/
 
-# Fetched Windows sidecars (run `npm run fetch-sidecars` on a Windows host
-# to repopulate). The macOS arm64 binary + dylibs stay committed.
-src-tauri/binaries/whisper-cli-x86_64-pc-windows-msvc.exe
-src-tauri/binaries/whisper.dll
-src-tauri/binaries/ggml.dll
-src-tauri/binaries/ggml-base.dll
-src-tauri/binaries/ggml-cpu.dll
+# Pre-built binaries — download with `npm run fetch-binaries`
+# (or copy from a previous build). Not tracked in git.
+src-tauri/binaries/
+src-tauri/resources/silero_vad.onnx
 .claude/
