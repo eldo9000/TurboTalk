@@ -208,39 +208,8 @@ pub fn detect_garbage(text: &str) -> Option<RejectReason> {
     // catches shorter bursts of 3+ where the repeated token is a strict prefix
     // of the next distinct word. Minimum fragment length of 2 skips
     // single-letter false positives ("a a a about").
-    {
-        let words: Vec<&str> = text.split_whitespace().collect();
-        if words.len() >= 4 {
-            let mut i = 0;
-            while i < words.len() {
-                let fragment = words[i];
-                if fragment.len() < 2 {
-                    i += 1;
-                    continue;
-                }
-                let frag_lower = fragment.to_lowercase();
-                let mut run_end = i + 1;
-                while run_end < words.len() && words[run_end].to_lowercase() == frag_lower {
-                    run_end += 1;
-                }
-                let run_len = run_end - i;
-                if run_len >= 3 && run_end < words.len() {
-                    let next_lower = words[run_end].to_lowercase();
-                    if next_lower.starts_with(frag_lower.as_str())
-                        && next_lower.len() > frag_lower.len()
-                    {
-                        tracing::debug!(
-                            "[detect_garbage] prefix-fragment {:?} ×{} before {:?}",
-                            fragment,
-                            run_len,
-                            words[run_end]
-                        );
-                        return Some(RejectReason::PrefixFragmentRepetition);
-                    }
-                }
-                i = if run_end > i + 1 { run_end } else { i + 1 };
-            }
-        }
+    if let Some(reason) = detect_prefix_fragment(text) {
+        return Some(reason);
     }
 
     // ── Signal 2d: Shannon entropy (word-level) ──────────────────────────────
@@ -297,6 +266,50 @@ pub fn detect_garbage(text: &str) -> Option<RejectReason> {
         }
     }
 
+    None
+}
+
+/// Standalone prefix-fragment repetition detection. Parakeet-specific:
+/// CTC/TDT models can emit the first syllable of a word repeatedly before
+/// resolving to the full word (e.g. "war war war warm-up"). This is the only
+/// artifact Parakeet produces — it does NOT hallucinate on silence (structural
+/// CTC guarantee), so the other 4 garbage signals do not apply.
+///
+/// Exported separately so ParakeetBackend can run only this check.
+pub fn detect_prefix_fragment(text: &str) -> Option<RejectReason> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() < 4 {
+        return None;
+    }
+    let mut i = 0;
+    while i < words.len() {
+        let fragment = words[i];
+        if fragment.len() < 2 {
+            i += 1;
+            continue;
+        }
+        let frag_lower = fragment.to_lowercase();
+        let mut run_end = i + 1;
+        while run_end < words.len() && words[run_end].to_lowercase() == frag_lower {
+            run_end += 1;
+        }
+        let run_len = run_end - i;
+        if run_len >= 3 && run_end < words.len() {
+            let next_lower = words[run_end].to_lowercase();
+            if next_lower.starts_with(frag_lower.as_str())
+                && next_lower.len() > frag_lower.len()
+            {
+                tracing::debug!(
+                    "[detect_garbage] prefix-fragment {:?} ×{} before {:?}",
+                    fragment,
+                    run_len,
+                    words[run_end]
+                );
+                return Some(RejectReason::PrefixFragmentRepetition);
+            }
+        }
+        i = if run_end > i + 1 { run_end } else { i + 1 };
+    }
     None
 }
 
@@ -710,6 +723,12 @@ impl WhisperBackend {
             &port.to_string(),
             "--inference-path",
             "/inference",
+            // Model-level quality gates — prevents low-confidence output
+            // without a post-hoc heuristic filter.
+            "--entropy-thold",
+            "2.4",
+            "--logprob-thold",
+            "-1.0",
         ])
         .env_clear()
         .stdout(std::process::Stdio::null())

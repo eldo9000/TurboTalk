@@ -96,14 +96,15 @@ pub fn parse_variant(s: &str) -> Option<ParakeetVariant> {
 // ── Model path helpers ────────────────────────────────────────────────────────
 
 /// Base directory for Parakeet model bundles.
-/// Returns `~/.config/turbotalk/models/parakeet/`.
+/// Uses `data_dir()` so this path matches `scan_models_dir` and Whisper model
+/// storage (all under `data_dir().join("models/")`).
+///
+/// Returns `~/Library/Application Support/turbotalk/models/parakeet/` on macOS.
 ///
 /// Does NOT require the directory to exist — callers that need it to exist
 /// (e.g. the download command) create it themselves.
 pub fn parakeet_models_dir() -> Option<PathBuf> {
-    let mut p = dirs::home_dir()?;
-    p.push(".config/turbotalk/models/parakeet");
-    Some(p)
+    Some(crate::settings::data_dir().join("models/parakeet"))
 }
 
 /// Path to the ONNX bundle directory for a specific variant.
@@ -292,10 +293,13 @@ impl TranscriptionBackend for ParakeetBackend {
             .transcribe_with(&samples, &params)
             .map_err(|e| anyhow::anyhow!("Parakeet transcription failed: {e}"))?;
 
-        // Parakeet CTC output is typically lowercase/unpunctuated — pass through
-        // Chaperone cleanup which normalizes it. detect_garbage still applies.
+        // Parakeet is CTC/TDT — structural guarantee: no hallucination on
+        // silence (unlike autoregressive models). The only artifact is syllable
+        // fragment repetition ("war war war warm-up") from ambiguous CTC
+        // emissions in low-signal regions. Check only that — the other 4
+        // garbage signals apply to Whisper's failure modes only.
         let text = result.text.trim().to_string();
-        let rejection = crate::transcribe::detect_garbage(&text);
+        let rejection = crate::transcribe::detect_prefix_fragment(&text);
 
         tracing::info!(
             "[parakeet] transcribed ({} chars, rejection={:?})",

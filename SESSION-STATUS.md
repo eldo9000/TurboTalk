@@ -89,6 +89,24 @@
 
 **Tray fix (2026-06-21):** Added `.title("TT")` back to the `TrayIconBuilder`. The pixel-drawn 44×44 icon may render at wrong logical size on macOS (44pt in a 22pt menu bar); the text title is the reliable visible element.
 
+## Past fix session (2026-06-21)
+
+**"Half paste" bug fixed:** When the Parakeet/Whisper transcript trips hallucination
+detection (`detect_garbage`), the salvage code path in `hotkey.rs:1104-1160` was
+pasting only the "clean" segment part and discarding the tail (or vice versa),
+resulting in ~50% of the dictated text being pasted. This was confirmed in the
+emergency trace: `partial_rejection — used clean 67 chars` (job 9), `chars=15`
+(job 31), `chars=44` (job 32).
+
+**Fix:** Removed the truncation in the salvage path. Garbage detection is now
+advisory-only — it controls the UI badge/flag but never truncates what gets pasted.
+The full `raw_text` always reaches the user. If one part tests clean individually,
+the flag is `flaky=false` (partial rejection — mild). If both parts are garbage,
+the flag is `flaky=true` (full rejection — still pasted with stronger warning).
+
+This matches the existing "flaky" philosophy at the original lines 1163-1191:
+"the garbage text is still more useful than appearing to have done nothing."
+
 ## Outstanding
 - Tray icon may still not be visible on user's display — needs user confirmation. Check both monitors and any Bartender/Ice/Hidden Bar software.
 - Tray icon pixel size for macOS should be 22×22 (not 44×44) — low priority now that title text is visible.

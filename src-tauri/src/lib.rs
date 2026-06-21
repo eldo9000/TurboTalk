@@ -555,9 +555,10 @@ async fn download_model(
     validate_catalog_url(spec.url)?;
 
     // Build the destination path — create the directory if it doesn't exist yet.
-    // (canonical_models_dir() requires the dir to already exist, so we build manually.)
-    let mut dir = dirs::home_dir().ok_or_else(|| "Could not locate home directory".to_string())?;
-    dir.push(".config/turbotalk/models");
+    // NOTE: must match data_dir() (which returns ~/Library/Application Support/turbotalk/
+    // on macOS), NOT ~/.config/turbotalk. The scan_models_dir and WhisperBackend both
+    // use data_dir().join("models"), so the download must land in the same tree.
+    let dir = crate::settings::data_dir().join("models");
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| e.to_string())?;

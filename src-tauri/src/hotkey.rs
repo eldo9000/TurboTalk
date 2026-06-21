@@ -1056,138 +1056,55 @@ pub(crate) mod common {
                                 raw_text.chars().count()
                             );
 
-                            // If the assembled transcript tripped a hallucination
-                            // filter, check individual parts (segments + tail)
-                            // rather than blocking everything. If any part is
-                            // clean, use only that; block only when both parts
-                            // are individually garbage or the only available part
-                            // is garbage.
-                            let usable_parts: Option<String> = if let Some(ref _reason) = rejection
-                            {
-                                let seg_garbage = !seg_part.is_empty()
-                                    && crate::transcribe::detect_garbage(&seg_part).is_some();
-                                let tail_garbage = !tail_part.is_empty()
-                                    && crate::transcribe::detect_garbage(&tail_part).is_some();
-
-                                if !seg_garbage && !tail_garbage {
-                                    // Both parts clean individually — reassemble.
-                                    let clean_parts: Vec<&str> =
-                                        [seg_part.as_str(), tail_part.as_str()]
-                                            .into_iter()
-                                            .filter(|s| !s.is_empty())
-                                            .collect();
-                                    if clean_parts.is_empty() {
-                                        None
-                                    } else {
-                                        let reassembled = clean_parts.join(" ");
-                                        // Re-check reassembled text — individual parts may each
-                                        // have too few repetitions to trip the filter, but
-                                        // together they form a repetition loop.
-                                        if crate::transcribe::detect_garbage(&reassembled).is_some()
-                                        {
-                                            None
-                                        } else {
-                                            Some(reassembled)
-                                        }
-                                    }
-                                } else if !seg_garbage && !seg_part.is_empty() {
-                                    Some(seg_part)
-                                } else if !tail_garbage && !tail_part.is_empty() {
-                                    Some(tail_part)
+                            // Garbage detection is advisory — paste the full text
+                            // regardless, with an appropriate UI flag. Never
+                            // truncate: partially clean text is still more useful
+                            // than nor pasting anything.
+                            if let Some(ref reason) = rejection {
+                                // Check if either individual part is clean on its
+                                // own — if so this is a partial rejection (mild
+                                // flag) rather than a full flaky rejection.
+                                let seg_garbage = if seg_part.is_empty() {
+                                    false
                                 } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            };
+                                    crate::transcribe::detect_garbage(&seg_part).is_some()
+                                };
+                                let tail_garbage = if tail_part.is_empty() {
+                                    false
+                                } else {
+                                    crate::transcribe::detect_garbage(&tail_part).is_some()
+                                };
+                                let is_partial = !seg_garbage || !tail_garbage;
 
-                            if let Some(salvaged_text) = usable_parts {
-                                tracing::warn!(
-                                    "[cleanup job_id={:?}] transcript partially rejected — \
-                                     using {} chars of clean text from individual parts",
-                                    job_id_opt,
-                                    salvaged_text.chars().count()
-                                );
-                                // Emit the rejected badge for observability, then
-                                // proceed with the salvaged clean text.
-                                emit_critical(
-                                    &app,
-                                    "transcription-rejected",
-                                    serde_json::json!({
-                                        "text": raw_text,
-                                        "reason": format!("partial_rejection — used clean {} chars", salvaged_text.chars().count()),
-                                        "pasted": true,
-                                    }),
-                                );
-                                play_chime(ChimeEvent::Error);
-                                open_main_history(&app);
-                                // Fall through to the normal cleanup path using
-                                // `salvaged_text` instead of `raw_text`.
-                                let final_text = crate::cleanup::process(&salvaged_text, &app);
-                                tracing::info!(
-                                    "[cleanup   job_id={:?}] final transcript ready ({} chars)",
-                                    job_id_opt,
-                                    final_text.chars().count()
-                                );
-                                if final_text.is_empty() {
-                                    tracing::info!(
-                                        "[cleanup   job_id={:?}] empty final transcript — skipping paste",
-                                        job_id_opt
-                                    );
-                                    session_metrics::record_dictation_discarded();
-                                    emit_critical(&app, "recording-discarded", "empty-final-text");
-                                    bail_out(&rec, &tray, &app, job_id_opt, true);
-                                    play_chime(ChimeEvent::Finish);
-                                    return;
-                                }
-                                if wait_for_hold_cancel_window(cancel_epoch_at_stop, job_id_opt) {
-                                    tracing::info!(
-                                        "[hotkey job_id={:?}] cancel observed after cleanup/hold window — suppressing transcript/paste",
-                                        job_id_opt
-                                    );
-                                    bail_out(&rec, &tray, &app, job_id_opt, true);
-                                    return;
-                                }
-                                paste_and_teardown(
-                                    &rec,
-                                    &tray,
-                                    &app,
-                                    &final_text,
-                                    cancel_epoch_at_stop,
-                                    job_id_opt,
-                                    &focus_at_start,
-                                );
-                                return;
-                            }
+                                let reason_str = if is_partial {
+                                    format!("partial_rejection — {:?}", reason)
+                                } else {
+                                    reason.description().to_string()
+                                };
 
-                            // If the transcript tripped a hallucination filter with
-                            // no salvageable clean parts, paste the text anyway but
-                            // tell the user — the garbage text is still more useful
-                            // than appearing to have done nothing.
-                            if let Some(reason) = rejection {
                                 tracing::warn!(
-                                    "[cleanup job_id={:?}] transcript rejected ({:?}) — pasting anyway with flaky flag",
+                                    "[cleanup job_id={:?}] transcript rejected ({:?}) — \
+                                     pasting full text with {} flag",
                                     job_id_opt,
-                                    reason
+                                    reason,
+                                    if is_partial { "partial" } else { "flaky" },
                                 );
                                 emit_critical(
                                     &app,
                                     "transcription-rejected",
                                     serde_json::json!({
                                         "text": raw_text,
-                                        "reason": reason.description(),
+                                        "reason": reason_str,
                                         "label": reason.label(),
                                         "pasted": true,
-                                        "flaky": true,
+                                        "flaky": !is_partial,
                                     }),
                                 );
                                 play_chime(ChimeEvent::Error);
                                 open_main_history(&app);
                                 // Fall through to the normal cleanup + paste path
                                 // below — the same code that runs when there is
-                                // no rejection at all. The `transcription-rejected`
-                                // event already informed the UI; the paste itself
-                                // proceeds identically.
+                                // no rejection at all.
                             }
 
                             // Stage 2: cleanup as its own explicit call site.
@@ -1651,6 +1568,16 @@ mod imp {
     /// recording 162µs after it started.
     static CGEVENTTAP_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+    /// Set to true the moment the IOHIDManager listener thread is running.
+    /// Used by `permissions.rs` to report Input Monitoring as effectively
+    /// granted even when `IOHIDCheckAccess` returns Unknown (TCC can lag
+    /// briefly after a binary update while it re-verifies the code signature).
+    static IOHID_LISTENER_RUNNING: AtomicBool = AtomicBool::new(false);
+
+    pub fn iohid_listener_running() -> bool {
+        IOHID_LISTENER_RUNNING.load(Ordering::Acquire)
+    }
+
     fn hid_usage_bit(usage: u32) -> u32 {
         1u32 << usage
     }
@@ -1921,6 +1848,7 @@ mod imp {
                 IOHIDManagerOpen(manager, 0);
             }
 
+            IOHID_LISTENER_RUNNING.store(true, Ordering::Release);
             tracing::info!("[hotkey] IOHIDManager mouse listener running");
 
             // Block the thread forever — the IOHIDManager delivers callbacks
@@ -2577,11 +2505,11 @@ mod imp {
 mod hotkey_win32;
 
 #[cfg(target_os = "windows")]
-pub use hotkey_win32::{accessibility_trusted, diagnostic_probe, spawn, HotkeyProbe};
+pub use hotkey_win32::{accessibility_trusted, diagnostic_probe, iohid_listener_running, spawn, HotkeyProbe};
 #[cfg(target_os = "macos")]
-pub use imp::{accessibility_trusted, diagnostic_probe, spawn, HotkeyProbe};
+pub use imp::{accessibility_trusted, diagnostic_probe, iohid_listener_running, spawn, HotkeyProbe};
 #[cfg(target_os = "linux")]
-pub use imp::{accessibility_trusted, diagnostic_probe, spawn, HotkeyProbe};
+pub use imp::{accessibility_trusted, diagnostic_probe, iohid_listener_running, spawn, HotkeyProbe};
 
 #[cfg(test)]
 mod tests {

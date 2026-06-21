@@ -128,11 +128,11 @@
 
     if (showOnboarding) {
       // Initial mount with the default `showOnboarding = true`. If no gate is
-      // actually missing, dismiss onboarding immediately without flashing the
-      // wizard. Otherwise let Onboarding.svelte own the exit path.
+      // actually missing, call completeOnboarding() directly so ONBOARDING_ACTIVE
+      // is cleared and the model prewarm fires — without ever showing the wizard.
       const needsOnboarding = r.force_onboarding || !r.ready;
       if (!needsOnboarding && !(unsupportedPlatform && unsupportedPlatformDismissed)) {
-        showOnboarding = false;
+        await completeOnboarding();
       }
       return;
     }
@@ -828,7 +828,12 @@ Reply with only the single word, lowercase, no punctuation.
     const res = await commands.downloadModel(m.name);
     const { [m.name]: _removed, ...rest } = downloadProgress;
     downloadProgress = rest;
-    if (res.status === 'error') return;
+    if (res.status === 'error') {
+      const id = ++uiErrorId;
+      uiErrors = [...uiErrors, { id, kind: 'download-error', message: res.error, recoverable: true }];
+      setTimeout(() => { uiErrors = uiErrors.filter(x => x.id !== id); }, 5000);
+      return;
+    }
     const path = res.data;
     if (!cfgModels.includes(path)) {
       cfgModels = [...cfgModels, path];
@@ -1221,17 +1226,19 @@ Reply with only the single word, lowercase, no punctuation.
         logUi('transcription-rejected', p.reason || 'filtered');
         filteredEntry = { text: p.text || '', reason: p.reason || 'Hallucination detected' };
         if (p.text) {
-          history = [{ text: p.text, ts: Date.now(), flaky: true }, ...history];
+          history = [{ text: p.text, ts: Date.now(), flaky: p.flaky ?? true }, ...history];
           commands.saveHistory(history);
         }
-        const id = ++uiErrorId;
-        uiErrors = [...uiErrors, {
-          id,
-          kind: 'transcription-rejected',
-          message: `⚠ Filtered: ${p.reason || 'Hallucination detected'} — nothing was pasted.`,
-          recoverable: true,
-        }];
-        setTimeout(() => { uiErrors = uiErrors.filter(x => x.id !== id); }, 8000);
+        if (p.flaky) {
+          const id = ++uiErrorId;
+          uiErrors = [...uiErrors, {
+            id,
+            kind: 'transcription-rejected',
+            message: `⚠ Flaky: ${p.reason || 'Hallucination detected'} — pasted with warning.`,
+            recoverable: true,
+          }];
+          setTimeout(() => { uiErrors = uiErrors.filter(x => x.id !== id); }, 8000);
+        }
         break;
       }
 
