@@ -251,6 +251,7 @@
   let history         = $state([]);
   let copiedTs        = $state(null);
   let transcriptError = $state('');
+  let transcriptNotice = $state('');
 
   // Hallucination-rejected transcript. When the backend detects a
   // garbage transcript and emits `transcription-rejected`, we show the text
@@ -1042,6 +1043,7 @@ Reply with only the single word, lowercase, no punctuation.
       history,
       copiedTs,
       transcriptError,
+      transcriptNotice,
       filteredEntry,
       recording,
       transcribing,
@@ -1059,6 +1061,7 @@ Reply with only the single word, lowercase, no punctuation.
       clearHistory,
       copyHistoryItem,
       dismissTranscriptError: () => { transcriptError = ''; },
+      dismissTranscriptNotice: () => { transcriptNotice = ''; },
       dismissFilteredEntry: () => { filteredEntry = null; },
     };
   }
@@ -1248,6 +1251,14 @@ Reply with only the single word, lowercase, no punctuation.
         break;
       }
 
+      case 'paste-copied': {
+        recording = false;
+        transcribing = false;
+        transcriptNotice = payload || 'Auto-paste blocked. Copied to clipboard; press Command-V.';
+        setTimeout(() => { transcriptNotice = ''; }, 5000);
+        break;
+      }
+
       case 'focus-changed-before-paste': {
         const p = payload || {};
         const start = p.focus_at_start ?? 'unknown';
@@ -1357,6 +1368,7 @@ Reply with only the single word, lowercase, no punctuation.
       listenTracked('transcription-rejected',   (e) => applyBackendEvent('transcription-rejected', e.payload));
       listenTracked('transcript-error',         (e) => applyBackendEvent('transcript-error', e.payload));
       listenTracked('paste-error',              (e) => applyBackendEvent('paste-error', e.payload));
+      listenTracked('paste-copied',             (e) => applyBackendEvent('paste-copied', e.payload));
       listenTracked('focus-changed-before-paste', (e) => applyBackendEvent('focus-changed-before-paste', e.payload));
       listenTracked('recording-discarded',      (e) => applyBackendEvent('recording-discarded', e.payload));
       listenTracked('recording-cancelled',      () => applyBackendEvent('recording-cancelled'));

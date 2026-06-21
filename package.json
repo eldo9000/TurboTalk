@@ -15,6 +15,9 @@
     "fetch-vad-model": "node scripts/fetch-vad-model.mjs",
     "refresh-whisper-server": "node scripts/refresh-whisper-server.mjs",
     "package": "npm run fetch-vad-model && npm run gen-icons && npm run preflight && npm run fetch-onnxruntime && tauri build && node scripts/verify-macos-bundle.mjs && node scripts/rename-artifact.mjs",
+    "package:app": "npm run fetch-vad-model && npm run gen-icons && npm run preflight && npm run fetch-onnxruntime && tauri build --bundles app && node scripts/verify-macos-bundle.mjs",
+    "install:app": "node scripts/install-macos-app.mjs",
+    "local-install": "npm run package:app && npm run install:app",
     "bump-version": "node scripts/bump-version.mjs",
     "typecheck": "tsc --noEmit"
   },

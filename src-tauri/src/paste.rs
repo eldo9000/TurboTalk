@@ -1,6 +1,6 @@
 // Active-application text injection.
-// macOS: write to clipboard (arboard), send Cmd+V via CGEventPost (native,
-// sub-millisecond), restore prior clipboard. `frontmost_app()` uses
+// macOS: write to clipboard (arboard), send Cmd+V via CGEventPost when
+// Accessibility trust is available, restore prior clipboard. `frontmost_app()` uses
 // NSWorkspace via objc2 instead of osascript (also sub-millisecond).
 // Other platforms: not supported — both entry points return a clear
 // "unsupported platform" signal so the caller (and the UI banner) can react.
@@ -29,12 +29,63 @@
 // focused element at all. A pre-paste AX role check therefore produces
 // constant false "paste miss" reports even when injection succeeded.
 //
-// Cmd+V is sent via CGEventPost (sub-millisecond native keystroke injection);
-// the prior clipboard is always restored afterward (same policy as the
-// Windows branch).
+// Cmd+V is sent via CGEventPost (sub-millisecond native keystroke injection).
+// If macOS does not trust this process for Accessibility, keyboard injection
+// can be silently dropped; in that case we leave the transcript on the
+// clipboard and return Ok(false) so the caller can surface an honest message.
 
 #[cfg(target_os = "macos")]
 use arboard::Clipboard;
+
+#[cfg(target_os = "macos")]
+fn set_clipboard_text_verified(cb: &mut Clipboard, text: &str) -> anyhow::Result<usize> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    cb.set_text(text)?;
+    let readback_len = cb.get_text().ok().map(|s| s.len()).unwrap_or(0);
+    if readback_len > 0 {
+        tracing::info!("[paste] clipboard write verified via arboard ({} bytes)", readback_len);
+        return Ok(readback_len);
+    }
+
+    tracing::warn!("[paste] arboard clipboard readback was empty; retrying with pbcopy");
+    let mut child = Command::new("/usr/bin/pbcopy")
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("pbcopy spawn failed: {e}"))?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|e| anyhow::anyhow!("pbcopy write failed: {e}"))?;
+    }
+    let status = child
+        .wait()
+        .map_err(|e| anyhow::anyhow!("pbcopy wait failed: {e}"))?;
+    if !status.success() {
+        anyhow::bail!("pbcopy failed with status {status}");
+    }
+
+    let readback_len = cb.get_text().ok().map(|s| s.len()).unwrap_or(0);
+    tracing::info!(
+        "[paste] clipboard write verified after pbcopy fallback ({} bytes)",
+        readback_len
+    );
+    if readback_len == 0 {
+        anyhow::bail!("clipboard write readback is still empty after pbcopy fallback");
+    }
+    Ok(readback_len)
+}
+
+#[cfg(target_os = "macos")]
+fn accessibility_trusted() -> bool {
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXIsProcessTrusted() -> bool;
+    }
+
+    unsafe { AXIsProcessTrusted() }
+}
 
 /// Best-effort frontmost application identifier on macOS. Returns `None` if
 /// the native NSWorkspace query fails for any reason. Callers must treat
@@ -144,8 +195,10 @@ fn focused_ax_role() -> Option<String> {
 /// `CGEventPost` (sub-millisecond native keystroke injection), then restores
 /// the prior clipboard.
 ///
-/// Returns `Ok(true)` when the keystroke is posted successfully. AX role is
-/// logged at debug level for diagnostics only.
+/// Returns `Ok(true)` when the keystroke is posted, or `Ok(false)` when
+/// macOS is expected to block keystroke injection and the text was copied
+/// for a manual Cmd+V instead. AX role is logged at debug level for
+/// diagnostics only.
 #[cfg(target_os = "macos")]
 pub fn paste(text: &str) -> anyhow::Result<bool> {
     use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
@@ -157,7 +210,8 @@ pub fn paste(text: &str) -> anyhow::Result<bool> {
     let ax_role = focused_ax_role();
     tracing::debug!("[paste] AX focused role before paste: {:?}", ax_role);
 
-    cb.set_text(text)?;
+    let clipboard_len = set_clipboard_text_verified(&mut cb, text)?;
+    let ax_trusted = accessibility_trusted();
 
     // kVK_ANSI_V from Carbon/HIToolbox/Events.h
     const V_KEYCODE: u16 = 0x09;
@@ -165,15 +219,33 @@ pub fn paste(text: &str) -> anyhow::Result<bool> {
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
         .map_err(|()| anyhow::anyhow!("CGEventSource creation failed"))?;
 
-    // Key down with command modifier
+    // When AX is trusted, post at the HID level (hardware-level injection).
+    // When AX is false, try the Session tap as a best-effort path — it does
+    // not require Accessibility trust on all macOS builds. If the OS drops
+    // the event silently, the caller's Ok(false) path will show the clipboard
+    // banner and Cmd+V still works.
+    let tap = if ax_trusted {
+        CGEventTapLocation::HID
+    } else {
+        CGEventTapLocation::Session
+    };
+
     if let Ok(key_down) = CGEvent::new_keyboard_event(source.clone(), V_KEYCODE, true) {
         key_down.set_flags(CGEventFlags::CGEventFlagCommand);
-        key_down.post(CGEventTapLocation::HID);
+        key_down.post(tap);
+    }
+    if let Ok(key_up) = CGEvent::new_keyboard_event(source, V_KEYCODE, false) {
+        key_up.post(tap);
     }
 
-    // Key up
-    if let Ok(key_up) = CGEvent::new_keyboard_event(source, V_KEYCODE, false) {
-        key_up.post(CGEventTapLocation::HID);
+    if !ax_trusted {
+        tracing::info!(
+            "[paste] AX trust false; tried Session-tap Cmd+V, transcript also in clipboard ({} bytes)",
+            clipboard_len
+        );
+        // Leave prior clipboard unrestored so manual Cmd+V still works if the
+        // Session-tap event was dropped by the OS.
+        return Ok(false);
     }
 
     // Delay to let the paste land before restoring clipboard.

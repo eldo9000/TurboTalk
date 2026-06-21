@@ -33,13 +33,15 @@ reqwest's blocking-client default 30 s timeout. Now set to an explicit 120 s.
 
 **Hallucination detection filter — landed 2026-05-23 (TASK-55):** three post-hoc signals (gzip compression ratio < 0.35, trigram repetition > 3×, non-letter ratio > 0.30) suppress Whisper garbage on silence; rejected transcripts shown with "⚠ filtered" badge, paste skipped.
 
-**Mouse-back/forward/middle hotkeys — landed 2026-06-09:** IOHIDManager reads raw HID Button usage values at the IOKit level, bypassing CGEventTap entirely for mouse buttons. This works even when Logi Options+ (or similar driver software) intercepts the button — IOKit delivers HID reports to ALL registered IOHIDManager clients, so Logi cannot block TurboTalk from seeing the raw report. F13–F19 function keys added as an alternative PTT path for users who prefer mapping buttons to keystrokes in their mouse software.
+**IOHID hotkey fallback — user-proven 2026-06-20:** IOHIDManager reads raw HID Button usage values at the IOKit level, bypassing CGEventTap entirely for mouse buttons. This works even when Logi Options+ (or similar driver software) intercepts the button — IOKit delivers HID reports to ALL registered IOHIDManager clients, so Logi cannot block TurboTalk from seeing the raw report. The same IOHIDManager callback now also handles Keyboard usage page 0x07 for Right Option/Control/Command/Shift and F13-F19 so ad-hoc macOS builds can use Input Monitoring instead of Accessibility. User-launched `/Applications/Turbo Talk.app` proof exists: two Right Option dictations started and stopped through IOHID keyboard events after restart, produced transcripts, and reached paste fallback.
+
+**Ad-hoc macOS auto-paste via Session tap — user-proven 2026-06-21:** `CGEventPost(kCGSessionEventTap, Cmd+V)` works without `AXIsProcessTrusted()` on macOS Sequoia ad-hoc builds. When AX trust is false, TurboTalk now posts the keystroke at the Session tap level instead of the HID level, and leaves the transcript on the clipboard as a Cmd+V backup in case the OS drops the event. User confirmed auto-paste fires into Zed without any manual Cmd+V.
 
 **Hotkey modes — both hold and toggle confirmed 2026-06-16:** terminal launch now stays up, and the current hotkey flow works in real use with both press-and-hold and toggle-style operation.
 
 **Terminal launch path — confirmed 2026-06-16:** `npm run tauri dev` now starts on `127.0.0.1:1431`, launches the Rust app, and stays alive. The earlier `::1:1428` bind failure was a localhost port conflict, not a broken app.
 
-**Current hotkey startup warning:** if Accessibility is not granted, the app logs `CGEventTap failed (accessibility_trusted=false, retry=0)` and keeps running. That is a permission warning, not a launch failure.
+**Current hotkey startup state:** on the current macOS/ad-hoc build, `AXIsProcessTrusted()` returns false even when the app appears in Accessibility. The app treats Accessibility as granted for onboarding and relies on the IOHID/Input Monitoring keyboard fallback. Codex-launched tests are not authoritative for Input Monitoring because TCC attributes the request to responsible process `com.openai.codex` with requester `com.turbotalk.dictation`.
 
 **Main window placement safeguards — patched 2026-06-13:** Main window minimum size is now 420×420 instead of 550×560. The frontend restores the preferred 550×560 utility size only when it fits the current monitor work area, and native code clamps the main window back into the visible work area on startup, first tray/menu show, focus, move, resize, and display-scale changes. Verified by `npm run typecheck`, `cargo check --manifest-path src-tauri/Cargo.toml`, and focused geometry unit tests. Runtime proof on the smaller laptop display is still pending.
 
@@ -57,6 +59,8 @@ were emitted (short recordings, no silence boundary hit), path is identical to t
 pre-TASK-54 whole-file POST.
 
 Previously confirmed 2026-05-01 / 2026-05-03 with per-call `whisper-cli` spawn (M0–M5).
+
+**Log-appender crash-on-init — fixed 2026-06-17:** `startup_logging::init()` no longer aborts when the filesystem denies creating rolling log files at `~/.config/turbotalk/logs/`. On macOS 26+, sandbox policy can return `EPERM` even when the directory exists (14 crashes on 2026-06-13 alone). The logging init is now best-effort: if any file appender fails, the app logs a warning to stderr and continues with console-only tracing. The dictation loop does not depend on file logging so this fallback is transparent. Transcript debug logging (`#[cfg(debug_assertions)]`) is also best-effort and never fatal.
 
 ## Pre-release scan sweep — 2026-06-02
 
@@ -154,6 +158,7 @@ longer macOS-only assumptions in source:
 - Linux Whisper sidecar — upstream ships no Linux binary; Linux excluded from release matrix.
 - Linux hotkey + paste — not validated on real X11 hardware; Linux is deferred to the 2.0 track.
 - Developer ID codesigning / notarization and Windows Authenticode signing are intentionally deferred for 1.0.
+- Developer ID codesigning / notarization and Windows Authenticode signing are intentionally deferred for 1.0 (separate from auto-paste, which now works via Session tap).
 
 ## Sidecar bundling — confirmed 2026-05-05
 
@@ -176,12 +181,19 @@ longer macOS-only assumptions in source:
 - **rdev dropped** — macOS 26 enforces `dispatch_assert_queue` on TSM APIs; rdev crashes
   on its background thread. Replaced with direct `CGEventTap` via `core-graphics 0.24`.
   Right Option detected by keycode 0x3D + `CGEventFlagAlternate` only — no TSM call.
-- **IOHIDManager for mouse buttons** — Mouse back/forward/middle hotkeys are handled
-  by a second background thread running `IOHIDManager` with an input-value callback,
-  rather than the CGEventTap. This reads raw HID Button usage reports at the IOKit
-  level, which bypasses driver software (Logi Options+, etc.) that intercepts at the
-  same layer — IOKit delivers HID reports to ALL registered IOHIDManager clients.
-  CGEventTap (Session level) is still used for keyboard hotkeys (modifiers, F-keys).
+- **IOHIDManager for hotkeys** — Mouse back/forward/middle hotkeys and the macOS
+  ad-hoc keyboard fallback are handled by a second background thread running
+  `IOHIDManager` with an input-value callback, rather than relying only on the
+  CGEventTap. Mouse buttons use HID Button page 0x09; keyboard fallback uses HID
+  Keyboard page 0x07. CGEventTap remains best-effort/legacy for signed builds where
+  Accessibility trust is reliable.
+- **Paste on ad-hoc macOS via Session tap** — Input Monitoring is enough to
+  receive the Right Option hotkey through IOHID. When `AXIsProcessTrusted()` is
+  false, TurboTalk posts Cmd+V at `kCGSessionEventTap` (below the Accessibility
+  gate) rather than `kCGHIDEventTap`. The transcript is also left on the
+  clipboard so a manual Cmd+V works if the OS drops the event. Auto-paste proven
+  working on Sequoia ad-hoc build 2026-06-21. When AX trust is available (signed
+  builds), HID-level injection is used instead.
 - **Bundled whisper.cpp sidecar** — macOS arm64 sidecar is committed; Windows x64 sidecar is fetched in packaging from pinned upstream whisper.cpp v1.8.4; Linux sidecar is still absent.
 - **Default model: ggml-large-v3-turbo** — 1.6 GB, multilingual, fast. Onboarding downloads it on first run; surfaced as "Recommended" in the Models tab. Earlier M0/M1 work used ggml-base.en (141 MB, ~130 ms on M4); the tiny model was rejected outright (stub weights in brew bundle).
 

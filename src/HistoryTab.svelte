@@ -9,6 +9,12 @@
       <button onclick={actions.dismissTranscriptError} class="tt-banner-close">×</button>
     </div>
   {/if}
+  {#if state.transcriptNotice}
+    <div class="tt-banner-notice">
+      <span class="tt-banner-notice-msg">{state.transcriptNotice}</span>
+      <button onclick={actions.dismissTranscriptNotice} class="tt-banner-notice-close">×</button>
+    </div>
+  {/if}
   {#if state.filteredEntry}
     <div class="tt-banner-error" style="border-color: var(--warning, #c97d00); background: var(--warning-bg, #fff8e0);">
       <span style="font-size: 0.72rem; font-weight: 600; color: var(--warning, #c97d00);">⚠ Filtered: {state.filteredEntry.reason}</span>

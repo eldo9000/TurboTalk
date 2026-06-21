@@ -33,7 +33,7 @@ npm install
 npm run tauri dev
 ```
 
-Dev port: **1428**. For a packaged DMG: `npm run package` (produces `build/artifacts/TurboTalk-<version>-macos-arm64.dmg`).
+Dev port: **1428**. For a packaged DMG: `npm run package` (produces `build/TurboTalk-<version>-macos-arm64.dmg`).
 
 ## Architecture
 

@@ -39,14 +39,8 @@ pub fn register() {
         }
         #[link(name = "IOKit", kind = "framework")]
         extern "C" {
-            fn IOHIDManagerCreate(
-                allocator: CFAllocatorRef,
-                options: u32,
-            ) -> IOHIDManagerRef;
-            fn IOHIDManagerSetDeviceMatching(
-                manager: IOHIDManagerRef,
-                matching: CFDictionaryRef,
-            );
+            fn IOHIDManagerCreate(allocator: CFAllocatorRef, options: u32) -> IOHIDManagerRef;
+            fn IOHIDManagerSetDeviceMatching(manager: IOHIDManagerRef, matching: CFDictionaryRef);
             fn IOHIDManagerScheduleWithRunLoop(
                 manager: IOHIDManagerRef,
                 runloop: CFRunLoopRef,
@@ -59,16 +53,11 @@ pub fn register() {
             // Belt-and-suspenders: the CG request also nudges TCC.
             CGRequestListenEventAccess();
 
-            let manager =
-                IOHIDManagerCreate(kCFAllocatorDefault, K_IO_HID_OPTIONS_TYPE_NONE);
+            let manager = IOHIDManagerCreate(kCFAllocatorDefault, K_IO_HID_OPTIONS_TYPE_NONE);
             if !manager.is_null() {
                 // NULL matching dict = match all devices, including keyboards.
                 IOHIDManagerSetDeviceMatching(manager, std::ptr::null());
-                IOHIDManagerScheduleWithRunLoop(
-                    manager,
-                    CFRunLoopGetMain(),
-                    kCFRunLoopDefaultMode,
-                );
+                IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
                 // The Open attempt is what causes TCC to add the
                 // bundle to the Input Monitoring list. Return value
                 // is ignored — we expect kIOReturnNotPermitted until

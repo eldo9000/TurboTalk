@@ -1,11 +1,12 @@
 name: Cleanup Actions artifacts
 
 # Artifact storage accrues hourly (GB-hours). Sweeps artifacts older than 1 day.
-# Runs daily at 06:30 UTC. Use workflow_dispatch + dry_run to preview.
+# Runs after each Dev Build. Use workflow_dispatch + dry_run to preview.
 
 on:
-  schedule:
-    - cron: '30 6 * * *'
+  workflow_run:
+    workflows: [Dev Build (All Platforms)]
+    types: [completed]
   workflow_dispatch:
     inputs:
       dry_run:

@@ -727,7 +727,9 @@ pub fn load_detailed() -> LoadConfigResult {
             if let Some(raw) = raw_value.as_ref() {
                 if migrate_legacy_backend(&mut cfg, raw) {
                     if let Err(e) = save(&cfg) {
-                        tracing::warn!("[settings] failed to persist legacy backend migration: {e}");
+                        tracing::warn!(
+                            "[settings] failed to persist legacy backend migration: {e}"
+                        );
                     }
                 }
             }

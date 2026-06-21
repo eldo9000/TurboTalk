@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use tauri::image::Image;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -39,7 +39,10 @@ pub fn make_icon(state: TrayState) -> Image<'static> {
     fill_opaque(&mut px, size, 17, 17, 17);
 
     match state {
-        TrayState::Idle => draw_tt(&mut px, size),
+        TrayState::Idle => {
+            fill_circle(&mut px, size, 17, 17, 17);
+            draw_tt(&mut px, size);
+        }
         TrayState::Recording => {
             fill_circle(&mut px, size, 248, 68, 68);
             draw_x(&mut px, size);
@@ -75,13 +78,17 @@ pub fn build(app: &tauri::App) -> tauri::Result<TrayIcon> {
     // Store in global so set_launch_at_login (Settings toggle) can
     // sync the tray menu item text.
     {
-        let slot = crate::LAUNCH_MENU_ITEM
-            .get_or_init(|| std::sync::Mutex::new(None));
+        let slot = crate::LAUNCH_MENU_ITEM.get_or_init(|| std::sync::Mutex::new(None));
         *slot.lock().unwrap() = Some(launch_item.clone());
     }
     let show_item = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;
-    let reset_warmup_item =
-        MenuItem::with_id(app, "reset-warmup", "Clear Warmup Cache", true, None::<&str>)?;
+    let reset_warmup_item = MenuItem::with_id(
+        app,
+        "reset-warmup",
+        "Clear Warmup Cache",
+        true,
+        None::<&str>,
+    )?;
     let restart_item = MenuItem::with_id(app, "restart", "Restart", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
@@ -107,6 +114,7 @@ pub fn build(app: &tauri::App) -> tauri::Result<TrayIcon> {
     let menu_first_manual_main_show = first_manual_main_show.clone();
     let tray_icon: TrayIcon = TrayIconBuilder::new()
         .icon(make_icon(TrayState::Idle))
+        .title("TT")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .tooltip("TurboTalk")
@@ -172,6 +180,8 @@ pub fn build(app: &tauri::App) -> tauri::Result<TrayIcon> {
             _ => {}
         })
         .build(app)?;
+
+    tracing::info!("[tray] tray icon created");
 
     Ok(tray_icon)
 }

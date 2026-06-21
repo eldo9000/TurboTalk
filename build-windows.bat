@@ -53,19 +53,19 @@ echo [4/5] Building TurboTalk...
 call npm run package
 if %errorlevel% neq 0 ( echo [FAIL] build failed. Check output above. & pause & exit /b 1 )
 echo.
-echo [5/5] Collecting artifacts...
-if exist "build\artifacts" (
-    dir /b "build\artifacts\*.exe" 2>nul && (
+echo [5/5] Checking build output...
+if exist "build" (
+    dir /b "build\*.exe" 2>nul && (
         echo.
         echo ============================================
         echo  Build complete!
-        echo  Installer: %CD%\build\artifacts\
+        echo  Installer: %CD%\build\
         echo ============================================
     ) || (
-        echo [WARN] build\artifacts folder is empty. Check build logs.
+        echo [WARN] build folder is empty. Check build logs.
     )
 ) else (
-    echo [WARN] build\artifacts folder not found.
+    echo [WARN] build folder not found.
 )
 echo.
 echo Done.

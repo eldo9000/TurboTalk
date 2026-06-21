@@ -57,7 +57,7 @@ git commit -m "chore(release): bump to <new-version>"
 
 ## Step 2 — Build artifacts on each host
 
-Run the per-platform build section that matches your build host. Each section below produces an unsigned artifact and its `.sha256` companion file in `build/artifacts/`.
+Run the per-platform build section that matches your build host. Each section below produces an unsigned artifact and its `.sha256` companion file in `build/`.
 
 ### Build procedure — macOS
 
@@ -73,14 +73,14 @@ For 1.0, do **not** set the `APPLE_*` environment variables described in `BUILD.
 When it finishes, confirm both files exist:
 
 ```
-build/artifacts/TurboTalk-<new-version>-macos-arm64.dmg
-build/artifacts/TurboTalk-<new-version>-macos-arm64.dmg.sha256
+build/TurboTalk-<new-version>-macos-arm64.dmg
+build/TurboTalk-<new-version>-macos-arm64.dmg.sha256
 ```
 
 Verify the DMG is not Developer ID signed/notarized with:
 
 ```bash
-codesign -dv build/artifacts/TurboTalk-<new-version>-macos-arm64.dmg
+codesign -dv build/TurboTalk-<new-version>-macos-arm64.dmg
 ```
 
 The `Authority` line may be absent, or the command may report that the code object is not signed at all. That is acceptable for this unsigned 1.0 release. A `Notarized Developer ID` source means somebody set the `APPLE_*` env vars; back out and rebuild without them.
@@ -106,8 +106,8 @@ npm run package
 Expected artifacts:
 
 ```
-build/artifacts/TurboTalk-<new-version>-windows-x64-setup.exe
-build/artifacts/TurboTalk-<new-version>-windows-x64-setup.exe.sha256
+build/TurboTalk-<new-version>-windows-x64-setup.exe
+build/TurboTalk-<new-version>-windows-x64-setup.exe.sha256
 ```
 
 The `.exe` is an NSIS installer. **It is unsigned.** End users will see SmartScreen "Windows protected your PC" on first run; that is documented in `README.md`. Do **not** sign the installer for 1.0. Do not publish it until the Windows installed-artifact smoke test passes.
@@ -147,8 +147,8 @@ npm run package
 Expected artifacts:
 
 ```
-build/artifacts/TurboTalk-<new-version>-linux-x64.AppImage
-build/artifacts/TurboTalk-<new-version>-linux-x64.AppImage.sha256
+build/TurboTalk-<new-version>-linux-x64.AppImage
+build/TurboTalk-<new-version>-linux-x64.AppImage.sha256
 ```
 
 The AppImage is **unsigned**. Users `chmod +x` and run it directly. There is no `.deb` or `.rpm` for this future Linux release; one AppImage covers all distros that have FUSE installed.
@@ -180,10 +180,10 @@ For a 1.0 release, attach the macOS and Windows artifacts plus their checksums:
 gh release create v<new-version> \
   --title "TurboTalk <new-version>" \
   --notes-file RELEASE_NOTES.md \
-  build/artifacts/TurboTalk-<new-version>-macos-arm64.dmg \
-  build/artifacts/TurboTalk-<new-version>-macos-arm64.dmg.sha256 \
-  build/artifacts/TurboTalk-<new-version>-windows-x64-setup.exe \
-  build/artifacts/TurboTalk-<new-version>-windows-x64-setup.exe.sha256
+  build/TurboTalk-<new-version>-macos-arm64.dmg \
+  build/TurboTalk-<new-version>-macos-arm64.dmg.sha256 \
+  build/TurboTalk-<new-version>-windows-x64-setup.exe \
+  build/TurboTalk-<new-version>-windows-x64-setup.exe.sha256
 ```
 
 Linux artifacts are not part of the 1.0 release. Add them only after the 2.0 Linux smoke path is proven.
@@ -284,7 +284,7 @@ For local signed builds (not CI):
 4. The notarization upload + scan typically takes 5–15 minutes; the build will appear to hang during that window.
 5. Verify with:
    ```
-   spctl -a -t open --context context:primary-signature -v build/artifacts/TurboTalk-<version>-macos-arm64.dmg
+   spctl -a -t open --context context:primary-signature -v build/TurboTalk-<version>-macos-arm64.dmg
    ```
    Expect `accepted` and `source=Notarized Developer ID`.
 
@@ -294,7 +294,7 @@ For signed Windows installers, configure `WINDOWS_SIGNING_CERTIFICATE` and `WIND
 
 For local Windows signing, use:
 ```powershell
-signtool sign /fd SHA256 /a /f <path-to.pfx> /p <password> build/artifacts/TurboTalk-<version>-windows-x64-setup.exe
+signtool sign /fd SHA256 /a /f <path-to.pfx> /p <password> build/TurboTalk-<version>-windows-x64-setup.exe
 ```
 
 ### Linux

@@ -16,20 +16,20 @@ pub mod cleanup;
 pub mod diagnostic_log;
 pub mod diagnostics;
 pub mod hotkey;
+pub mod macos_input_monitoring;
 pub mod ollama;
 pub mod paste;
 pub mod permissions;
 pub mod recorder;
 pub mod session_metrics;
 pub mod settings;
+pub mod startup_logging;
 pub mod theme;
 pub mod transcribe;
 pub mod transcribe_backends;
 pub mod tray;
 pub mod vad;
 pub mod windowing;
-pub mod startup_logging;
-pub mod macos_input_monitoring;
 
 pub use theme::{get_accent, get_theme};
 
@@ -125,6 +125,22 @@ fn reset_warmup_cache(recorder_state: tauri::State<'_, RecorderState>) -> Result
 /// Debug: simulate a hallucination-rejection event so the user can test the
 /// error UX in the overlay without waiting for a real false-positive. Emits
 /// the exact same `transcription-rejected` event as the hotkey pipeline.
+/// Log a structured overlay lifecycle event to the tracing system.
+/// Called by the overlay frontend on every mode transition, event
+/// arrival, timer operation, and guard decision so we can reconstruct
+/// what caused the overlay to disappear.
+///
+/// `event` is a short snake_case name (e.g. "mode_transition",
+/// "event_arrived", "guard_rejected").  `detail` is a JSON object with
+/// the relevant fields (mode, job_id, trigger, from, to, etc.).
+///
+/// This is fire-and-forget with no error return — logging should never
+/// block or perturb the UI.
+#[tauri::command]
+fn log_overlay_event(event: String, detail: serde_json::Value) {
+    tracing::info!("[overlay] {event} detail={}", detail);
+}
+
 #[tauri::command]
 #[specta::specta]
 fn simulate_rejection(app: tauri::AppHandle) {
@@ -161,7 +177,10 @@ fn apply_alt_backend_after_download(
     Ok(())
 }
 
-pub(crate) fn show_main_window(app: &tauri::AppHandle, first_manual_show: &std::sync::atomic::AtomicBool) {
+pub(crate) fn show_main_window(
+    app: &tauri::AppHandle,
+    first_manual_show: &std::sync::atomic::AtomicBool,
+) {
     use std::sync::atomic::Ordering;
     if let Some(win) = app.get_webview_window("main") {
         let visible = win.is_visible().unwrap_or(false);
@@ -1264,8 +1283,9 @@ use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 /// Global handle to the tray's "Launch at Login" menu item. Populated once
 /// during tray construction in `run()`. `set_launch_at_login` reads this to
 /// keep the tray menu in sync when toggled from Settings.
-pub(crate) static LAUNCH_MENU_ITEM: std::sync::OnceLock<std::sync::Mutex<Option<tauri::menu::MenuItem<tauri::Wry>>>> =
-    std::sync::OnceLock::new();
+pub(crate) static LAUNCH_MENU_ITEM: std::sync::OnceLock<
+    std::sync::Mutex<Option<tauri::menu::MenuItem<tauri::Wry>>>,
+> = std::sync::OnceLock::new();
 
 /// Build the tauri-specta type-export descriptor. Lives in its own function
 /// so the `#[test]` regenerator below can call it without standing up the
@@ -1362,6 +1382,7 @@ pub fn run() {
             prewarm_model,
             reset_warmup_cache,
             simulate_rejection,
+            log_overlay_event,
             scan_models_dir,
             list_models_for_family,
             get_launch_at_login,
@@ -1406,17 +1427,6 @@ pub fn run() {
             permissions::reset_tcc_entry,
         ])
         .setup(|app| {
-            // ── macOS: hide from Dock and Cmd-Tab. The tray icon is the only
-            // persistent affordance; the main window is opened on demand.
-            // Runtime call (rather than Info.plist LSUIElement alone) so it
-            // also applies to `tauri dev` runs, which don't go through the
-            // bundle's plist.
-            #[cfg(target_os = "macos")]
-            {
-                use tauri::ActivationPolicy;
-                app.set_activation_policy(ActivationPolicy::Accessory);
-            }
-
             // ── Tray icon ──────────────────────────────────────────────────
             let tray_icon = crate::tray::build(app)?;
 
@@ -1459,21 +1469,24 @@ pub fn run() {
                     windowing::MAIN_WINDOW_MIN_H,
                 )));
                 windowing::ensure_main_webview_window_visible(&win);
-                // First-run / regression gate: if Accessibility, Microphone,
-                // or a model are missing, show the window so the onboarding
-                // wizard can guide the user. Otherwise leave it hidden (tray-
-                // resident agent behaviour).
+                // Keep the main window visible while tray/status-item
+                // visibility is unreliable on this macOS setup. The close
+                // handler still hides instead of quitting, and the Dock icon
+                // is now the reliable way back in.
                 let readiness = crate::permissions::check_readiness();
-                if !readiness.ready {
-                    let _ = win.set_size(tauri::LogicalSize::new(
-                        windowing::MAIN_WINDOW_DEFAULT_W,
-                        windowing::MAIN_WINDOW_MIN_H,
-                    ));
-                    let _ = win.center();
-                    windowing::ensure_main_webview_window_visible(&win);
-                    let _ = win.show();
-                    let _ = win.set_focus();
-                }
+                let height = if readiness.ready {
+                    windowing::MAIN_WINDOW_DEFAULT_H
+                } else {
+                    windowing::MAIN_WINDOW_MIN_H
+                };
+                let _ = win.set_size(tauri::LogicalSize::new(
+                    windowing::MAIN_WINDOW_DEFAULT_W,
+                    height,
+                ));
+                let _ = win.center();
+                windowing::ensure_main_webview_window_visible(&win);
+                let _ = win.show();
+                let _ = win.set_focus();
             }
 
             // ── Overlay — cursor-transparent so clicks always pass through ──
@@ -1513,9 +1526,9 @@ pub fn run() {
             // When that happens every `tracing::info!()` / `warn!()` etc.
             // becomes a no-op and we lose all observability — no errors log,
             // no session log, nothing. This watchdog stats the main log file
-            // every 60 s; if the mtime is > 120 s stale AND the owner flag has
-            // not already been set, it logs a warning to stderr and emits a
-            // one-shot ui-error toast so the user knows to restart.
+            // every 60 s; if the mtime is stale, it writes to stderr only.
+            // Idle apps naturally stop writing logs, so this must never raise
+            // a user-facing error toast.
             spawn_tracing_watchdog(app.handle().clone());
 
             // Emit live audio level to the overlay at 20 Hz while recording.
@@ -1534,68 +1547,68 @@ pub fn run() {
                 let mut dot_was_visible = false;
 
                 loop {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                if level_rec.device_lost() {
-                    tracing::warn!("[lib] observed device-lost flag — cancelling recorder");
-                    // Hold mode: the user is still holding the record key when the
-                    // device drops, so a `ptt_up` is still coming. Arm one
-                    // suppression slot before cancelling so that key-up no-ops in
-                    // `ptt_up` instead of calling `stop()` on the now-Ready recorder,
-                    // hitting IllegalTransition, and arming CANCEL_PENDING — which
-                    // would fake-cancel the user's *next* press. Mirrors the
-                    // `trigger_cancel` callers in `cancel_recording` and the tray
-                    // click handler. Toggle-mode releases are already no-ops.
-                    if matches!(level_rec.state(), recorder::State::Recording)
-                        && level_app.state::<HotkeyState>().read().mode == "hold"
-                    {
-                        hotkey::arm_ptt_up_suppression();
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    if level_rec.device_lost() {
+                        tracing::warn!("[lib] observed device-lost flag — cancelling recorder");
+                        // Hold mode: the user is still holding the record key when the
+                        // device drops, so a `ptt_up` is still coming. Arm one
+                        // suppression slot before cancelling so that key-up no-ops in
+                        // `ptt_up` instead of calling `stop()` on the now-Ready recorder,
+                        // hitting IllegalTransition, and arming CANCEL_PENDING — which
+                        // would fake-cancel the user's *next* press. Mirrors the
+                        // `trigger_cancel` callers in `cancel_recording` and the tray
+                        // click handler. Toggle-mode releases are already no-ops.
+                        if matches!(level_rec.state(), recorder::State::Recording)
+                            && level_app.state::<HotkeyState>().read().mode == "hold"
+                        {
+                            hotkey::arm_ptt_up_suppression();
+                        }
+                        level_rec.cancel_after_device_lost();
+                        let _ = level_tray.set_icon(Some(tray::make_icon(tray::TrayState::Idle)));
+                        let _ = level_app.emit("device-lost", ());
+                        // `recording-discarded` keeps the overlay's existing
+                        // catch-all listener happy without the frontend needing
+                        // to learn a new clear-overlay path.
+                        let _ = level_app.emit("recording-discarded", ());
                     }
-                    level_rec.cancel_after_device_lost();
-                    let _ = level_tray.set_icon(Some(tray::make_icon(tray::TrayState::Idle)));
-                    let _ = level_app.emit("device-lost", ());
-                    // `recording-discarded` keeps the overlay's existing
-                    // catch-all listener happy without the frontend needing
-                    // to learn a new clear-overlay path.
-                    let _ = level_app.emit("recording-discarded", ());
-                }
-                let is_recording = level_rec.is_recording();
-                if is_recording {
-                    let _ = level_app.emit("audio-level", level_rec.level());
-                }
+                    let is_recording = level_rec.is_recording();
+                    if is_recording {
+                        let _ = level_app.emit("audio-level", level_rec.level());
+                    }
 
-                // Cursor-dot indicator: follow mouse while recording or transcribing.
-                let is_busy = level_rec.state().is_busy();
-                if settings::cursor_dot_indicator_enabled() && is_busy {
-                    if let Ok(cursor) = level_app.cursor_position() {
-                        if let Some(dot) = level_app.get_webview_window("cursor-dot") {
-                            if !dot_was_visible {
-                                // Refresh scale factor on first show.
-                                cached_primary_scale = dot
-                                    .primary_monitor()
-                                    .ok()
-                                    .flatten()
-                                    .map(|m| m.scale_factor())
-                                    .unwrap_or(1.0);
-                            }
-                            windowing::position_cursor_dot(
-                                &dot,
-                                cursor,
-                                cached_primary_scale,
-                                DOT_OFFSET_X,
-                                DOT_OFFSET_Y,
-                            );
-                            if !dot_was_visible {
-                                let _ = dot.show();
-                                dot_was_visible = true;
+                    // Cursor-dot indicator: follow mouse while recording or transcribing.
+                    let is_busy = level_rec.state().is_busy();
+                    if settings::cursor_dot_indicator_enabled() && is_busy {
+                        if let Ok(cursor) = level_app.cursor_position() {
+                            if let Some(dot) = level_app.get_webview_window("cursor-dot") {
+                                if !dot_was_visible {
+                                    // Refresh scale factor on first show.
+                                    cached_primary_scale = dot
+                                        .primary_monitor()
+                                        .ok()
+                                        .flatten()
+                                        .map(|m| m.scale_factor())
+                                        .unwrap_or(1.0);
+                                }
+                                windowing::position_cursor_dot(
+                                    &dot,
+                                    cursor,
+                                    cached_primary_scale,
+                                    DOT_OFFSET_X,
+                                    DOT_OFFSET_Y,
+                                );
+                                if !dot_was_visible {
+                                    let _ = dot.show();
+                                    dot_was_visible = true;
+                                }
                             }
                         }
+                    } else if dot_was_visible && !is_busy {
+                        if let Some(dot) = level_app.get_webview_window("cursor-dot") {
+                            let _ = dot.hide();
+                        }
+                        dot_was_visible = false;
                     }
-                } else if dot_was_visible && !is_busy {
-                    if let Some(dot) = level_app.get_webview_window("cursor-dot") {
-                        let _ = dot.hide();
-                    }
-                    dot_was_visible = false;
-                }
                 } // end loop
             });
 
@@ -1603,9 +1616,10 @@ pub fn run() {
             // `cancel_recording` command can reach them from the invoke handler.
             app.manage(recorder.clone());
             app.manage(tray_icon.clone());
-            app.manage(parking_lot::Mutex::new(
-                std::collections::HashSet::<String>::new(),
-            ) as DownloadCancelSet);
+            app.manage(
+                parking_lot::Mutex::new(std::collections::HashSet::<String>::new())
+                    as DownloadCancelSet,
+            );
 
             // Pre-register in the Input Monitoring list so the app appears
             // there before the user opens System Settings during onboarding.
@@ -1632,16 +1646,14 @@ pub fn run() {
 
             Ok(())
         })
-        // Close button hides to tray instead of quitting
+        // Close button quits while the menu-bar item is not a reliable recovery
+        // surface on this macOS/Tauri combination.
         .on_window_event(|window, event| {
-            // Close button hides to tray instead of quitting. We deliberately do
-            // NOT clamp size/position on Moved/Resized/Focused — the frontend owns
-            // sizing (it knows the UI zoom), and the OS enforces the min size. The
-            // only off-screen rescue happens when the window is shown (see
-            // show_main_window → windowing::ensure_main_webview_window_visible).
             if let WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
-                api.prevent_close();
+                if window.label() != "main" {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
             }
         })
         .build(tauri::generate_context!())
@@ -1666,21 +1678,18 @@ pub fn run() {
 // `tracing::info!()` / `warn!()` / `error!()` becomes a silent no-op. This
 // watchdog stats the newest main session-log file every 60 s.  When the
 // file's mtime is more than TRACING_STALE_SECS old, the watchdog writes a
-// one-shot warning to stderr and emits a ui-error toast so the user sees
-// something broke rather than silently losing all observability.
+// one-shot warning to stderr. It deliberately does not emit a UI toast:
+// quiet/idle app sessions are normal and should not look like failures.
 //
-// One-shot semantics: the first stale detection fires the toast; subsequent
-// checks remain quiet until the app restarts. This avoids spamming the user
-// if they wait long enough between dictations that the log naturally goes
-// quiet.
+// One-shot semantics: the first stale detection writes stderr; subsequent
+// checks remain quiet until the app restarts.
 
 const TRACING_HEALTH_INTERVAL_SECS: u64 = 60;
-const TRACING_STALE_SECS: u64 = 120;
+const TRACING_STALE_SECS: u64 = 900;
 
-fn spawn_tracing_watchdog(app: tauri::AppHandle) {
+fn spawn_tracing_watchdog(_app: tauri::AppHandle) {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::UNIX_EPOCH;
-    use tauri::Emitter;
 
     let already_fired = Arc::new(AtomicBool::new(false));
 
@@ -1706,8 +1715,7 @@ fn spawn_tracing_watchdog(app: tauri::AppHandle) {
 
         loop {
             // Find the newest turbotalk.YYYY-MM-DD.log
-            let newest = diagnostic_log::log_files_for(diagnostic_log::MAIN_LOG_PREFIX)
-                .pop();
+            let newest = diagnostic_log::log_files_for(diagnostic_log::MAIN_LOG_PREFIX).pop();
             let age_secs = newest
                 .as_ref()
                 .and_then(|p| std::fs::metadata(p).ok())
@@ -1728,17 +1736,6 @@ fn spawn_tracing_watchdog(app: tauri::AppHandle) {
                          subsequent `tracing::info!()` calls are likely no-ops. \
                          Restart TurboTalk to restore full logging."
                     );
-                    let msg = format!(
-                        "TurboTalk's logging pipeline may have stopped. Restart the app to restore full logging (last log write was {age_secs}s ago)."
-                    );
-                    let _ = app.emit(
-                        "ui-error",
-                        serde_json::json!({
-                            "kind": "tracing-watchdog-dead",
-                            "message": msg,
-                            "recoverable": true,
-                        }),
-                    );
                 }
             }
 
@@ -1749,7 +1746,7 @@ fn spawn_tracing_watchdog(app: tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{specta_builder};
+    use super::specta_builder;
     use super::windowing::{clamp_window_position_to_work_area, intersection_area};
 
     #[test]

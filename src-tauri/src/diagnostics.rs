@@ -44,7 +44,6 @@ pub struct DiagnosticsResult {
     pub paste_capability: String,
 
     // ── Added 2026-06-16 for cross-platform testing ───────────────────────────
-
     /// OS version string (e.g. "macOS 15.4", "Windows 11 23H2", "Linux 6.8.0").
     /// Collected via platform-specific commands at diagnostic time.
     pub os_version: String,
@@ -197,7 +196,11 @@ fn collect_os_version() -> String {
             Ok(o) => {
                 let s = String::from_utf8_lossy(&o.stdout);
                 let s = s.trim();
-                if s.is_empty() { "Windows (ver command empty)".into() } else { s.to_string() }
+                if s.is_empty() {
+                    "Windows (ver command empty)".into()
+                } else {
+                    s.to_string()
+                }
             }
             Err(_) => "Windows (ver unavailable)".into(),
         }
@@ -225,7 +228,11 @@ fn collect_os_version() -> String {
         match std::process::Command::new("uname").arg("-r").output() {
             Ok(o) => {
                 let k = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                if k.is_empty() { "Linux (uname empty)".into() } else { format!("Linux {k}") }
+                if k.is_empty() {
+                    "Linux (uname empty)".into()
+                } else {
+                    format!("Linux {k}")
+                }
             }
             Err(_) => "Linux (version unavailable)".into(),
         }
@@ -258,7 +265,11 @@ public class KB {
         {
             Ok(o) => {
                 let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                if s.is_empty() { "unavailable".into() } else { s }
+                if s.is_empty() {
+                    "unavailable".into()
+                } else {
+                    s
+                }
             }
             Err(_) => "unavailable".into(),
         }
@@ -285,10 +296,7 @@ fn collect_audio_device_details() -> (String, String, String) {
     let device = host.default_input_device();
 
     let (channels, sample_rate) = match device.and_then(|d| d.default_input_config().ok()) {
-        Some(cfg) => (
-            cfg.channels().to_string(),
-            cfg.sample_rate().0.to_string(),
-        ),
+        Some(cfg) => (cfg.channels().to_string(), cfg.sample_rate().0.to_string()),
         None => ("unknown".to_string(), "unknown".to_string()),
     };
 
@@ -315,23 +323,31 @@ fn check_whisper_server_running() -> String {
 
 fn collect_paste_method() -> String {
     #[cfg(target_os = "macos")]
-    { "CGEventPost Cmd+V".into() }
+    {
+        "CGEventPost Cmd+V".into()
+    }
 
     #[cfg(target_os = "linux")]
     {
         if std::env::var("XDG_SESSION_TYPE")
             .map(|v| v.eq_ignore_ascii_case("wayland"))
             .unwrap_or(false)
-        { "unsupported (wayland)".into() }
-        else
-        { "enigo Ctrl+V".into() }
+        {
+            "unsupported (wayland)".into()
+        } else {
+            "enigo Ctrl+V".into()
+        }
     }
 
     #[cfg(target_os = "windows")]
-    { "enigo Ctrl+V".into() }
+    {
+        "enigo Ctrl+V".into()
+    }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    { "unknown".into() }
+    {
+        "unknown".into()
+    }
 }
 
 #[tauri::command]

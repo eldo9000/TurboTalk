@@ -710,6 +710,35 @@ html:not(.dark) .tt-warn { color: #dc2626; }
 }
 .tt-banner-close:hover { color: #f87171; }
 
+.tt-banner-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 12px 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, #22c55e 30%, var(--border));
+  background: color-mix(in srgb, #22c55e 10%, var(--surface));
+}
+.tt-banner-notice-msg {
+  flex: 1;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #4ade80;
+}
+.tt-banner-notice-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: color-mix(in srgb, #4ade80 70%, transparent);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.tt-banner-notice-close:hover { color: #4ade80; }
+
 .tt-history-empty {
   flex: 1;
   display: flex;

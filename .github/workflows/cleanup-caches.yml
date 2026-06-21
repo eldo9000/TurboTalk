@@ -1,11 +1,12 @@
 name: Cleanup Actions caches
 
 # Prunes GitHub Actions caches not accessed in the last 7 days.
-# Runs daily at 06:00 UTC. Use workflow_dispatch + dry_run to preview.
+# Runs after each Dev Build. Use workflow_dispatch + dry_run to preview.
 
 on:
-  schedule:
-    - cron: '0 6 * * *'
+  workflow_run:
+    workflows: [Dev Build (All Platforms)]
+    types: [completed]
   workflow_dispatch:
     inputs:
       dry_run:

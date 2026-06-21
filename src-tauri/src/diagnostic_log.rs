@@ -108,6 +108,31 @@ fn epoch_ms() -> u128 {
         .unwrap_or(0)
 }
 
+/// Append a tiny line to an emergency trace independent of `tracing`.
+///
+/// This is intentionally boring filesystem I/O. If the tracing subscriber,
+/// rolling appender, or frontend event bridge disappears, this file should
+/// still tell us which hotkey/UI branch fired. Do not write transcript text
+/// here; event names, state names, durations, and character counts are OK.
+pub fn emergency_trace(line: impl AsRef<str>) {
+    let line = format!("{} {}\n", epoch_ms(), line.as_ref());
+    eprint!("[tt-trace] {line}");
+
+    let paths = [log_dir().join("emergency.log"), PathBuf::from("/tmp/turbotalk-emergency.log")];
+    for path in paths {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            let _ = file.write_all(line.as_bytes());
+        }
+    }
+}
+
 /// Append a frontend-originated line to the in-memory ring buffer and mirror it
 /// into the tracing log so it lands in `turbotalk.log`.
 ///
@@ -123,6 +148,7 @@ pub fn record_client_event(event: &str, detail: &str) {
     while buf.len() > MAX_CLIENT_EVENTS {
         buf.pop_front();
     }
+    emergency_trace(format!("[ui] {event} {detail}"));
     tracing::info!("{line}");
 }
 
@@ -331,10 +357,22 @@ pub async fn build_report_text(note: Option<&str>) -> String {
         let _ = writeln!(out, "keyboard_layout: {}", diagnostics.keyboard_layout);
     }
     let _ = writeln!(out, "audio_device: {}", diagnostics.default_input_device);
-    let _ = writeln!(out, "audio_channels: {}", diagnostics.default_input_channels);
-    let _ = writeln!(out, "audio_sample_rate: {}", diagnostics.default_input_sample_rate);
+    let _ = writeln!(
+        out,
+        "audio_channels: {}",
+        diagnostics.default_input_channels
+    );
+    let _ = writeln!(
+        out,
+        "audio_sample_rate: {}",
+        diagnostics.default_input_sample_rate
+    );
     let _ = writeln!(out, "paste_method: {}", diagnostics.paste_method);
-    let _ = writeln!(out, "whisper_server: {}", diagnostics.whisper_server_running);
+    let _ = writeln!(
+        out,
+        "whisper_server: {}",
+        diagnostics.whisper_server_running
+    );
     let _ = writeln!(out);
 
     let _ = writeln!(out, "=== Readiness ===");
@@ -363,8 +401,8 @@ pub async fn build_report_text(note: Option<&str>) -> String {
     let _ = writeln!(out);
 
     let _ = writeln!(out, "=== Session metrics ===");
-    let metrics_json =
-        serde_json::to_string_pretty(&session_metrics).unwrap_or_else(|_| "(serialize failed)".into());
+    let metrics_json = serde_json::to_string_pretty(&session_metrics)
+        .unwrap_or_else(|_| "(serialize failed)".into());
     let _ = writeln!(out, "{metrics_json}");
     let _ = writeln!(out);
 

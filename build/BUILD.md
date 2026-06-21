@@ -1,30 +1,29 @@
 # TurboTalk — Build Convention
 
-This directory (and its `build/artifacts/` subdirectory) follows a uniform convention
-shared across all Libre repos. Every repo that produces an artifact writes its
-output to `build/`.
+This directory follows a uniform convention shared across all Libre repos. Every
+repo writes its build artifacts directly into `build/` — no subdirectories.
 
-## Output directory
+## Artifact location
 
-| Repo          | Artifacts path       | Contents                              |
-|---------------|----------------------|---------------------------------------|
-| TurboTalk     | `build/artifacts/`   | Installer (`*.exe`), checksum (`.sha256`) |
-| LibreWin OS   | `build/output/`      | ISO image (`*.iso`), build log        |
+| Repo          | Artifact                                 |
+|---------------|------------------------------------------|
+| TurboTalk     | `build/TurboTalk-{version}-windows-x64-setup.exe` (+ `.sha256`) |
+| LibreWin OS   | `build/librewin-os-0.8-{arch}.iso`       |
 
 The `build/` folder is the single entry point for anyone on the team:
 
-> **Clone → `git pull` → double-click `windows-force-sync-and-build.bat` → find the
-> artifact in `build/...`**
+> **Clone → `git pull` → double-click `windows-force-sync-and-build.bat` →
+> find the artifact in `build/`**
 
 ---
 
 ## Files in this directory
 
-| File / Dir        | Purpose                                          |
-|-------------------|--------------------------------------------------|
-| `artifacts/`      | Build output — the finished installer (`gitignored`) |
-| `windows-install-prereqs.bat` | One-time prerequisite installer (winget)  |
+| File / Dir                   | Purpose                                          |
+|------------------------------|--------------------------------------------------|
+| `windows-install-prereqs.bat` | One-time prerequisite installer (winget)        |
 | `windows-build-turbotalk.bat` | Legacy build script (clone + build from scratch) |
+| `BUILD.md`                    | This file — build convention documentation       |
 
 ---
 
@@ -39,7 +38,7 @@ The `build/` folder is the single entry point for anyone on the team:
 5. **tauri build** — compiles the Rust backend, bundles the Svelte frontend, and
    produces an NSIS installer.
 6. **rename-artifact** — copies and renames the installer to
-   `build/artifacts/TurboTalk-<version>-windows-x64-setup.exe` with a `.sha256`.
+   `build/TurboTalk-{version}-windows-x64-setup.exe` with a `.sha256`.
 
 ---
 

@@ -12,11 +12,6 @@ export const commands = {
 	saveConfig: (cfg: Config) => typedError<null, string>(__TAURI_INVOKE("save_config", { cfg })),
 	prewarmModel: () => typedError<null, string>(__TAURI_INVOKE("prewarm_model")),
 	resetWarmupCache: () => typedError<null, string>(__TAURI_INVOKE("reset_warmup_cache")),
-	/**
-	 *  Debug: simulate a hallucination-rejection event so the user can test the
-	 *  error UX in the overlay without waiting for a real false-positive. Emits
-	 *  the exact same `transcription-rejected` event as the hotkey pipeline.
-	 */
 	simulateRejection: () => __TAURI_INVOKE<void>("simulate_rejection"),
 	scanModelsDir: () => __TAURI_INVOKE<string[]>("scan_models_dir"),
 	/**
@@ -494,13 +489,14 @@ export type Reachable = {
 
 export type Readiness = {
 	accessibility: PermissionStatus,
+	automatic_paste: PermissionStatus,
 	input_monitoring: PermissionStatus,
 	microphone: PermissionStatus,
 	model_present: boolean,
 	// Host OS id (`macos`, `windows`, `linux`, …) for platform-aware onboarding UI.
 	platform: string,
 	/**
-	 *  True iff all four gates pass — frontend uses this as the
+	 *  True iff all dictation gates pass — frontend uses this as the
 	 *  "show onboarding vs. show main UI" switch.
 	 */
 	ready: boolean,
@@ -533,4 +529,3 @@ async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; dat
         return { status: "error", error: e as any };
     }
 }
-

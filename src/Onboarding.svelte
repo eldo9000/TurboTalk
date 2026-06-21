@@ -4,7 +4,7 @@
   // Polls `commands.checkReadiness()` every second while open so each row
   // flips green the moment the user grants permission in System Settings or
   // a model finishes downloading. Step 1 is Input Monitoring; Step 2 is
-  // Microphone; Step 3 is Accessibility; Step 4 is Model selection;
+  // Microphone; Step 3 is optional auto-paste; Step 4 is Model selection;
   // Step 5 is Launch at Login.
   //
   // Closes itself by calling `onComplete()` when readiness is fully green.
@@ -90,7 +90,6 @@
     const modelReady = nextReadiness.model_present || !!rec?.installed;
     if (
       !downloadingModel
-      && permissionSatisfied(nextReadiness.accessibility)
       && permissionSatisfied(nextReadiness.input_monitoring)
       && permissionSatisfied(nextReadiness.microphone)
       && modelReady
@@ -255,19 +254,26 @@
 
   let stepStates = $derived.by(() => {
     if (!readiness) return { accessibility: 'active', input_monitoring: 'pending', microphone: 'pending', model: 'pending', launch: 'pending' };
-    const a = permissionSatisfied(readiness.accessibility);
+    const autoPaste = permissionSatisfied(readiness.automatic_paste);
     const i = permissionSatisfied(readiness.input_monitoring);
     const m = permissionSatisfied(readiness.microphone);
     const p = selectedModelReady;
     // macOS TCC steps only gate model selection; Windows/Linux skip that wait.
-    const permissionsReady = readiness.platform === 'macos' ? (a && i && m) : readiness.platform !== 'linux';
+    const permissionsReady = readiness.platform === 'macos' ? (i && m) : readiness.platform !== 'linux';
     return {
       input_monitoring: i ? 'done' : 'active',
       microphone:    m ? 'done' : (i ? 'active' : 'pending'),
-      accessibility: a ? 'done' : (i && m ? 'active' : 'pending'),
+      accessibility: autoPaste ? 'done' : (i && m ? 'active' : 'pending'),
       model:         p ? 'done' : (permissionsReady ? 'active' : 'pending'),
-      launch:        (launchAtLogin || launchSkipped) ? 'done' : (a && i && m && p ? 'active' : 'pending'),
+      launch:        (launchAtLogin || launchSkipped) ? 'done' : (i && m && p ? 'active' : 'pending'),
     };
+  });
+
+  let dictationReady = $derived.by(() => {
+    if (!readiness || readiness.platform === 'linux') return false;
+    return permissionSatisfied(readiness.input_monitoring)
+      && permissionSatisfied(readiness.microphone)
+      && selectedModelReady;
   });
 
   // Linux beta is not fully supported (Wayland hotkey gap). Windows returns
@@ -420,18 +426,17 @@
         <!-- Connector 2 → 3 -->
         <div class="h-3.5 ml-[23px] w-1 rounded-full {connectorClass(stepStates.microphone === 'done')}"></div>
 
-        <!-- Step 3: Accessibility (restart required, surfaced after native prompts) -->
+        <!-- Step 3: Auto-paste (optional; ad-hoc builds fall back to clipboard) -->
         <div class="flex gap-3 {stepStates.accessibility === 'done' ? 'p-3' : 'p-3.5'} rounded-lg border {stepClass(stepStates.accessibility)}">
           <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.accessibility)}">
             {stepStates.accessibility === 'done' ? '✓' : '3'}
           </div>
           <div class="flex flex-col gap-2 min-w-0 flex-1">
             <div class="flex flex-col gap-0.5">
-              <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Allow Accessibility</h2>
+              <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Enable Auto-Paste</h2>
               {#if stepStates.accessibility !== 'done'}
                 <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-                  Turbo Talk needs Accessibility permission to read your push-to-talk hotkey globally.
-                  Granting this requires restarting the app once.
+                  Dictation works without this. Turbo Talk will copy text to the clipboard and ask you to press Command-V.
                 </p>
               {/if}
             </div>
@@ -439,7 +444,7 @@
               <div class="flex gap-2 flex-wrap">
                 <button onclick={openAccessibility}
                   class="px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 transition-opacity">
-                  Open System Settings
+                  Try Auto-Paste
                 </button>
                 {#if restartArmed}
                   <button onclick={restart}
@@ -450,7 +455,7 @@
               </div>
               {#if restartArmed}
                 <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-                  Toggle Turbo Talk on under Privacy &amp; Security → Accessibility, then click Restart.
+                  Toggle Turbo Talk on under Privacy &amp; Security → Accessibility, then restart to retry automatic paste.
                 </p>
               {/if}
               {#if axOpenedSettings}
@@ -566,8 +571,7 @@
       {/if}
 
       {#if readiness && !unsupportedPlatform && !readiness.force_onboarding}
-        {@const allDone = Object.values(stepStates).every(s => s === 'done')}
-        {#if allDone}
+        {#if dictationReady}
           <button
             onclick={() => { stopPolling(); onComplete?.(); }}
             class="mt-1 px-5 py-2 rounded-md bg-green-600 hover:bg-green-500 text-white text-[13px] font-semibold transition-colors"
@@ -581,15 +585,14 @@
     {/if}
 
     {#if readiness?.force_onboarding}
-      {@const allDone = Object.values(stepStates).every(s => s === 'done')}
       <div class="flex flex-col items-center gap-1.5 mt-1">
-        {#if allDone}
+        {#if dictationReady}
           <p class="text-[11px] font-medium text-green-400">All checks complete</p>
         {/if}
         <button
           onclick={() => { stopPolling(); onComplete?.(); }}
           class="px-5 py-2 rounded-md text-white text-[13px] font-semibold transition-colors
-                 {allDone ? 'bg-green-600 hover:bg-green-500' : 'bg-orange-500 hover:bg-orange-400'}">
+                 {dictationReady ? 'bg-green-600 hover:bg-green-500' : 'bg-orange-500 hover:bg-orange-400'}">
           Close ✓
         </button>
       </div>

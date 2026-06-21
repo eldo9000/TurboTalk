@@ -28,6 +28,11 @@ pub(crate) mod common {
     /// "quick tap → overlay stuck forever" bug.
     static CANCEL_PENDING: AtomicBool = AtomicBool::new(false);
 
+    /// Epoch millis when the current recording was accepted. Used as a short
+    /// toggle-mode debounce so duplicate HID/CG paths cannot immediately turn
+    /// one physical press into start→stop.
+    static LAST_RECORDING_START_MS: AtomicU64 = AtomicU64::new(0);
+
     /// True while a key-down worker is arming or starting a recording. A quick
     /// hold-mode key-up may arrive while this is true and request cancellation;
     /// a stray key-up while idle must not poison the next start.
@@ -97,6 +102,13 @@ pub(crate) mod common {
 
     fn cancel_epoch() -> u64 {
         CANCEL_EPOCH.load(Ordering::SeqCst)
+    }
+
+    fn now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
     }
 
     fn job_cancelled_since(epoch: u64) -> bool {
@@ -180,7 +192,9 @@ pub(crate) mod common {
         event: &str,
         payload: P,
     ) {
+        crate::diagnostic_log::emergency_trace(format!("[emit] {event}"));
         if let Err(e) = app.emit(event, payload) {
+            crate::diagnostic_log::emergency_trace(format!("[emit-failed] {event} {e:?}"));
             tracing::warn!("[hotkey] failed to emit {}: {:?}", event, e);
         }
     }
@@ -406,9 +420,18 @@ pub(crate) mod common {
     // therefore spawn a worker thread and return immediately.
 
     pub(super) fn ptt_down(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
+        crate::diagnostic_log::emergency_trace(format!(
+            "[ptt_down] enter onboarding={} recorder={} ready={} prewarm_in_flight={} prewarm_failed={}",
+            crate::permissions::onboarding_active(),
+            recorder.state(),
+            crate::transcribe::is_ready(),
+            crate::transcribe::prewarm_in_flight(),
+            crate::transcribe::prewarm_failed(),
+        ));
         // Suppress all hotkey activity while the welcome/onboarding screen is
         // visible — no model, no permissions, no reason to arm.
         if crate::permissions::onboarding_active() {
+            crate::diagnostic_log::emergency_trace("[ptt_down] ignored onboarding_active");
             return;
         }
 
@@ -423,6 +446,7 @@ pub(crate) mod common {
         // is blocked by the gate below and can't reach the inner
         // `prewarm_in_flight()` cancel branch. Signal the poll loop instead.
         if crate::transcribe::prewarm_in_flight() {
+            crate::diagnostic_log::emergency_trace("[ptt_down] cancel arming prewarm_in_flight");
             tracing::info!(
                 "[hotkey] arm cancelled — user pressed again during warmup (toggle mode)"
             );
@@ -431,6 +455,7 @@ pub(crate) mod common {
         }
 
         if START_IN_FLIGHT.swap(true, Ordering::AcqRel) {
+            crate::diagnostic_log::emergency_trace("[ptt_down] ignored start_in_flight");
             tracing::debug!("[hotkey] start ignored — start already in flight");
             return;
         }
@@ -446,6 +471,9 @@ pub(crate) mod common {
             // without us silently swallowing it.
             let snapshot = rec.state();
             if snapshot.is_busy() {
+                crate::diagnostic_log::emergency_trace(format!(
+                    "[ptt_down] ignored recorder_busy state={snapshot}"
+                ));
                 tracing::warn!("[hotkey] start ignored — recorder busy in {}", snapshot);
                 emit_critical(&app, "dictation-busy", snapshot.to_string());
                 return;
@@ -456,6 +484,7 @@ pub(crate) mod common {
             // doesn't sit on the yellow tile waiting for a model that will
             // never load this session.
             if crate::transcribe::prewarm_failed() {
+                crate::diagnostic_log::emergency_trace("[ptt_down] ptt-arm-failed prewarm_failed");
                 tracing::warn!("[hotkey] start ignored — whisper prewarm failed earlier");
                 emit_critical(
                     &app,
@@ -488,6 +517,7 @@ pub(crate) mod common {
                 }
 
                 crate::transcribe::prewarm(crate::settings::load(), app.clone());
+                crate::diagnostic_log::emergency_trace("[ptt_down] prewarm started; emit ptt-armed");
 
                 // Pin the overlay to the cursor's monitor up front so the
                 // arming tile never flashes on the wrong display.
@@ -528,11 +558,17 @@ pub(crate) mod common {
                 }
 
                 if cancelled {
+                    crate::diagnostic_log::emergency_trace("[ptt_down] arming cancelled");
                     tracing::info!("[hotkey] arm cancelled — user released key during wait");
                     emit_critical(&app, "recording-cancelled", ());
                     return;
                 }
                 if !ready {
+                    crate::diagnostic_log::emergency_trace(format!(
+                        "[ptt_down] ptt-arm-failed wait_ready ready={} prewarm_failed={}",
+                        ready,
+                        crate::transcribe::prewarm_failed()
+                    ));
                     tracing::warn!("[hotkey] arm timed out waiting for whisper-server");
                     emit_critical(
                         &app,
@@ -546,6 +582,10 @@ pub(crate) mod common {
             session_metrics::record_hotkey_down();
 
             if let Err(e) = rec.start() {
+                crate::diagnostic_log::emergency_trace(format!(
+                    "[ptt_down] rec.start failed state={} err={e}",
+                    rec.state()
+                ));
                 // Race: state moved out of Ready between our snapshot and the
                 // start() call (e.g. another press won the lock first), or audio
                 // backend failed. Do NOT emit ptt-down, do NOT change tray icon.
@@ -554,10 +594,12 @@ pub(crate) mod common {
                 session_metrics::record_audio_error();
                 return;
             }
+            LAST_RECORDING_START_MS.store(now_ms(), Ordering::Release);
             // Recording was accepted. Check if key-up already arrived while
             // this thread was waiting to be scheduled (quick-tap race in hold
             // mode). If so, cancel immediately — don't show the overlay.
             if CANCEL_PENDING.swap(false, Ordering::AcqRel) {
+                crate::diagnostic_log::emergency_trace("[ptt_down] cancel_pending after rec.start");
                 rec.cancel();
                 let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
                 emit_critical(&app, "recording-cancelled", ());
@@ -598,6 +640,7 @@ pub(crate) mod common {
                     crate::windowing::reposition_overlay_to_cursor_monitor(&app);
                     emit_critical(&app, "ptt-armed", ());
                 }
+                crate::diagnostic_log::emergency_trace("[ptt_down] waiting audio_live");
                 // Poll up to 2 s for the first callback. 5 ms tick keeps the
                 // red flash within a frame of true-live. Bail on:
                 //   - CANCEL_PENDING (key released during the wait → cancel),
@@ -610,12 +653,19 @@ pub(crate) mod common {
                         break;
                     }
                     if CANCEL_PENDING.swap(false, Ordering::AcqRel) {
+                        crate::diagnostic_log::emergency_trace(
+                            "[ptt_down] cancel_pending during audio_live",
+                        );
                         rec.cancel();
                         let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
                         emit_critical(&app, "recording-cancelled", ());
                         return;
                     }
                     if !rec.is_recording() {
+                        crate::diagnostic_log::emergency_trace(format!(
+                            "[ptt_down] recorder left recording during audio_live state={}",
+                            rec.state()
+                        ));
                         tracing::warn!(
                             "[hotkey job_id={}] recorder left Recording during audio-live \
                              wait — aborting ptt-down (device-lost handled elsewhere)",
@@ -624,6 +674,9 @@ pub(crate) mod common {
                         return;
                     }
                     if std::time::Instant::now() >= deadline {
+                        crate::diagnostic_log::emergency_trace(
+                            "[ptt_down] audio_live timeout; proceeding",
+                        );
                         tracing::warn!(
                             "[hotkey job_id={}] audio-live gate timed out after 2000 ms — \
                              flashing red anyway",
@@ -648,6 +701,7 @@ pub(crate) mod common {
             crate::windowing::reposition_overlay_to_cursor_monitor(&app);
             emit_critical(&app, "ptt-down", ());
             emit_stage(&app, job_id, "recording");
+            crate::diagnostic_log::emergency_trace(format!("[ptt_down] recording job_id={job_id}"));
             play_chime(ChimeEvent::Start);
 
             // Capture the frontmost app at recording start (best-effort; may be
@@ -758,13 +812,34 @@ pub(crate) mod common {
             return;
         }
         let paste_text = format!("{} ", final_text);
+        crate::diagnostic_log::emergency_trace(format!(
+            "[paste] start job_id={job_id_opt:?} chars={}",
+            final_text.chars().count()
+        ));
         match crate::paste::paste(&paste_text) {
-            Ok(_) => {
+            Ok(true) => {
+                crate::diagnostic_log::emergency_trace(format!(
+                    "[paste] ok job_id={job_id_opt:?}"
+                ));
                 session_metrics::record_paste_success();
                 session_metrics::record_dictation_completed();
                 play_chime(ChimeEvent::Finish);
             }
+            Ok(false) => {
+                crate::diagnostic_log::emergency_trace(format!(
+                    "[paste] copied-fallback job_id={job_id_opt:?}"
+                ));
+                session_metrics::record_paste_failure();
+                emit_critical(
+                    app,
+                    "paste-copied",
+                    "Auto-paste blocked. Copied to clipboard; press Command-V.".to_string(),
+                );
+            }
             Err(e) => {
+                crate::diagnostic_log::emergency_trace(format!(
+                    "[paste] error job_id={job_id_opt:?} err={e}"
+                ));
                 tracing::error!("[paste job_id={:?}] {:?}", job_id_opt, e);
                 session_metrics::record_paste_failure();
                 emit_critical(
@@ -784,6 +859,11 @@ pub(crate) mod common {
         let tray = tray_icon.clone();
         let app = app.clone();
         std::thread::spawn(move || {
+            crate::diagnostic_log::emergency_trace(format!(
+                "[ptt_up] enter recorder={} suppress_pending={}",
+                rec.state(),
+                SUPPRESS_PTT_UP_COUNT.load(Ordering::Acquire),
+            ));
             // Cancel-cascade suppression: any cancel path or tap-mash listener
             // that suppressed a record-key down dispatch armed one slot in
             // `SUPPRESS_PTT_UP_COUNT`. Each such pairing's key-up arrives here
@@ -791,7 +871,24 @@ pub(crate) mod common {
             // Drop on the floor so we don't fall into IllegalTransition and
             // arm CANCEL_PENDING for the next press.
             if try_consume_ptt_up_suppression() {
+                crate::diagnostic_log::emergency_trace("[ptt_up] suppressed");
                 return;
+            }
+
+            let mode = app.state::<crate::HotkeyState>().read().mode.clone();
+            if mode == "toggle" && matches!(rec.state(), crate::recorder::State::Recording) {
+                let elapsed_ms =
+                    now_ms().saturating_sub(LAST_RECORDING_START_MS.load(Ordering::Acquire));
+                if elapsed_ms < 300 {
+                    crate::diagnostic_log::emergency_trace(format!(
+                        "[ptt_up] ignored toggle debounce elapsed_ms={elapsed_ms}"
+                    ));
+                    tracing::warn!(
+                        "[hotkey] ignored toggle stop {} ms after start (duplicate event debounce)",
+                        elapsed_ms
+                    );
+                    return;
+                }
             }
 
             // Tray-state policy: Recording icon only during literal capture; the
@@ -815,6 +912,9 @@ pub(crate) mod common {
                     // upstroke arrives without a matching downstroke (no in-flight job),
                     // we still call `rec.stop()` defensively but skip stage emissions.
                     let job_id_opt = CURRENT_JOB_ID.lock().take();
+                    crate::diagnostic_log::emergency_trace(format!(
+                        "[ptt_up] stop=Wav job_id={job_id_opt:?} speech_detected={speech_detected}"
+                    ));
                     // Recover the focus identity captured at recording start. Outer
                     // `Option` = "was a recording in flight"; inner `Option<String>` =
                     // "did the macOS query succeed". We only compare-and-emit later if
@@ -838,6 +938,9 @@ pub(crate) mod common {
 
                     // FinalizingAudio → Transcribing
                     if let Err(e) = rec.begin_transcribing() {
+                        crate::diagnostic_log::emergency_trace(format!(
+                            "[ptt_up] begin_transcribing failed job_id={job_id_opt:?} err={e}"
+                        ));
                         tracing::error!(
                             "[hotkey job_id={:?}] begin_transcribing failed: {}",
                             job_id_opt,
@@ -1046,8 +1149,13 @@ pub(crate) mod common {
                                     return;
                                 }
                                 paste_and_teardown(
-                                    &rec, &tray, &app, &final_text,
-                                    cancel_epoch_at_stop, job_id_opt, &focus_at_start,
+                                    &rec,
+                                    &tray,
+                                    &app,
+                                    &final_text,
+                                    cancel_epoch_at_stop,
+                                    job_id_opt,
+                                    &focus_at_start,
                                 );
                                 return;
                             }
@@ -1109,11 +1217,19 @@ pub(crate) mod common {
                                 return;
                             }
                             paste_and_teardown(
-                                &rec, &tray, &app, &final_text,
-                                cancel_epoch_at_stop, job_id_opt, &focus_at_start,
+                                &rec,
+                                &tray,
+                                &app,
+                                &final_text,
+                                cancel_epoch_at_stop,
+                                job_id_opt,
+                                &focus_at_start,
                             );
                         }
                         Err(e) => {
+                            crate::diagnostic_log::emergency_trace(format!(
+                                "[ptt_up] transcript-error job_id={job_id_opt:?} err={e}"
+                            ));
                             tracing::error!("[transcribe job_id={:?}] {:?}", job_id_opt, e);
                             let msg = format!("{}", e);
                             emit_critical(&app, "transcript-error", msg);
@@ -1133,6 +1249,9 @@ pub(crate) mod common {
                     // Take statics only after rec.stop() succeeded, matching
                     // the Wav arm's post-stop read pattern.
                     let job_id_opt = CURRENT_JOB_ID.lock().take();
+                    crate::diagnostic_log::emergency_trace(format!(
+                        "[ptt_up] stop=Discard job_id={job_id_opt:?} reason={reason:?}"
+                    ));
                     let focus_at_start: Option<String> = FOCUS_AT_START.lock().take().flatten();
                     let seg_transcriber_opt = CURRENT_SEG_TRANSCRIBER.lock().take();
 
@@ -1193,7 +1312,8 @@ pub(crate) mod common {
                                     emit_critical(&app, "recording-discarded", "empty-final-text");
                                     play_chime(ChimeEvent::Finish);
                                 } else {
-                                    if wait_for_hold_cancel_window(cancel_epoch_at_stop, job_id_opt) {
+                                    if wait_for_hold_cancel_window(cancel_epoch_at_stop, job_id_opt)
+                                    {
                                         tracing::info!(
                                             "[hotkey job_id={:?}] seg-recovery: cancel observed after cleanup/hold window — suppressing paste",
                                             job_id_opt
@@ -1246,13 +1366,35 @@ pub(crate) mod common {
                                         }
                                     }
                                     let paste_text = format!("{} ", final_text);
+                                    crate::diagnostic_log::emergency_trace(format!(
+                                        "[paste] seg-recovery start job_id={job_id_opt:?} chars={}",
+                                        final_text.chars().count()
+                                    ));
                                     match crate::paste::paste(&paste_text) {
-                                        Ok(_) => {
+                                        Ok(true) => {
+                                            crate::diagnostic_log::emergency_trace(format!(
+                                                "[paste] seg-recovery ok job_id={job_id_opt:?}"
+                                            ));
                                             session_metrics::record_paste_success();
                                             session_metrics::record_dictation_completed();
                                             play_chime(ChimeEvent::Finish);
                                         }
+                                        Ok(false) => {
+                                            crate::diagnostic_log::emergency_trace(format!(
+                                                "[paste] seg-recovery copied-fallback job_id={job_id_opt:?}"
+                                            ));
+                                            session_metrics::record_paste_failure();
+                                            emit_critical(
+                                                &app,
+                                                "paste-copied",
+                                                "Auto-paste blocked. Copied to clipboard; press Command-V."
+                                                    .to_string(),
+                                            );
+                                        }
                                         Err(e) => {
+                                            crate::diagnostic_log::emergency_trace(format!(
+                                                "[paste] seg-recovery error job_id={job_id_opt:?} err={e}"
+                                            ));
                                             tracing::error!(
                                                 "[paste job_id={:?}] (seg-recovery) {:?}",
                                                 job_id_opt,
@@ -1283,6 +1425,9 @@ pub(crate) mod common {
                     let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
                     session_metrics::record_dictation_discarded();
                     if let DiscardReason::TooShort { duration_ms } = reason {
+                        crate::diagnostic_log::emergency_trace(format!(
+                            "[ptt_up] recording-too-short job_id={job_id_opt:?} duration_ms={duration_ms}"
+                        ));
                         emit_critical(&app, "recording-too-short", duration_ms);
                     }
                     emit_critical(&app, "recording-discarded", ());
@@ -1291,6 +1436,10 @@ pub(crate) mod common {
                     }
                 }
                 Err(e) => {
+                    crate::diagnostic_log::emergency_trace(format!(
+                        "[ptt_up] stop error state={} err={e}",
+                        rec.state()
+                    ));
                     // If stop() failed because the recorder wasn't in Recording
                     // state yet, this is the quick-tap race: our thread ran before
                     // ptt_down's thread called start(). Set CANCEL_PENDING so that
@@ -1307,7 +1456,13 @@ pub(crate) mod common {
                             || crate::transcribe::prewarm_in_flight()
                         {
                             CANCEL_PENDING.store(true, Ordering::Release);
+                            crate::diagnostic_log::emergency_trace(
+                                "[ptt_up] set cancel_pending for quick-tap race",
+                            );
                         } else {
+                            crate::diagnostic_log::emergency_trace(
+                                "[ptt_up] ignored idle key-up without pending start",
+                            );
                             tracing::debug!("idle key-up ignored without pending start");
                         }
                     }
@@ -1486,6 +1641,15 @@ mod imp {
     /// Only the IOHIDManager callback thread writes this; relaxed ordering
     /// is safe because the thread is serial (single CFRunLoop).
     static HID_BUTTON_STATE: AtomicU32 = AtomicU32::new(0);
+    static HID_KEYBOARD_DOWN: AtomicBool = AtomicBool::new(false);
+
+    /// True while the CGEventTap is active and handling keyboard events.
+    /// When set, the IOHID keyboard handler skips keyboard-page events to
+    /// prevent the dual-fire race: CGEventTap fires slightly after IOHID for
+    /// the same physical keypress, sees is_recording=true (IOHID already
+    /// started recording), and mistakenly issues ptt_up — stopping the
+    /// recording 162µs after it started.
+    static CGEVENTTAP_ACTIVE: AtomicBool = AtomicBool::new(false);
 
     fn hid_usage_bit(usage: u32) -> u32 {
         1u32 << usage
@@ -1550,9 +1714,10 @@ mod imp {
     }
 
     /// IOHIDManager input-value callback. Fires for every HID value change on
-    /// every matched device. We filter for Button usage page (0x09) and only
-    /// react to the user's configured mouse button. Runs on the IOHIDManager's
-    /// CFRunLoop thread — serial, so no concurrent invocations.
+    /// every matched device. Filters for Button usage page (0x09) for mouse
+    /// buttons and Keyboard usage page (0x07) for keyboard hotkeys.
+    /// Runs on the IOHIDManager's CFRunLoop thread — serial, so no concurrent
+    /// invocations.
     unsafe extern "C" fn hid_mouse_value_callback(
         ctx: *mut c_void,
         _result: i32,
@@ -1563,42 +1728,53 @@ mod imp {
 
         let element = IOHIDValueGetElement(value);
         let usage_page = IOHIDElementGetUsagePage(element);
-        // Only care about Button usage page — ignore x, y, wheel, etc.
-        if usage_page != K_HIDPAGE_BUTTON {
-            return;
-        }
 
-        let usage = IOHIDElementGetUsage(element);
-        // Only react to buttons 3, 4, 5 (middle, back, forward)
-        if !(3..=5).contains(&usage) {
-            return;
-        }
-
-        let int_value = IOHIDValueGetIntegerValue(value);
-        let pressed = int_value != 0;
-
-        // Read current config to check if this button is our trigger.
-        // Keep the read lock as short as possible.
-        let (controller, cancel_on_hold) = {
-            let hk = context.hotkey_state.read();
-            let target = hid_mouse_usage_for_name(&hk.key);
-            if target != Some(usage) {
-                return; // fast path: not the configured button
+        if usage_page == K_HIDPAGE_BUTTON {
+            let usage = IOHIDElementGetUsage(element);
+            // Only react to buttons 3, 4, 5 (middle, back, forward)
+            if !(3..=5).contains(&usage) {
+                return;
             }
-            (HotkeyController::from_mode(&hk.mode), hk.cancel_on_hold)
-        };
-        // Lock is dropped — ptt_* may write to settings or app state.
 
-        let bit = hid_usage_bit(usage);
-        let was_down = HID_BUTTON_STATE.load(Ordering::Relaxed) & bit != 0;
+            let int_value = IOHIDValueGetIntegerValue(value);
+            let pressed = int_value != 0;
 
-        if pressed {
-            if !was_down {
-                HID_BUTTON_STATE.fetch_or(bit, Ordering::Relaxed);
-                if cancel_on_hold && common::should_arm_hold_cancel(&context.recorder) {
-                    controller.arm_hold_cancel(&context.recorder, &context.tray_icon, &context.app);
+            let (controller, cancel_on_hold) = {
+                let hk = context.hotkey_state.read();
+                let target = hid_mouse_usage_for_name(&hk.key);
+                if target != Some(usage) {
+                    return;
                 }
-                match controller.press_action(context.recorder.is_recording()) {
+                (HotkeyController::from_mode(&hk.mode), hk.cancel_on_hold)
+            };
+
+            let bit = hid_usage_bit(usage);
+            let was_down = HID_BUTTON_STATE.load(Ordering::Relaxed) & bit != 0;
+
+            if pressed {
+                if !was_down {
+                    HID_BUTTON_STATE.fetch_or(bit, Ordering::Relaxed);
+                    if cancel_on_hold && common::should_arm_hold_cancel(&context.recorder) {
+                        controller.arm_hold_cancel(
+                            &context.recorder,
+                            &context.tray_icon,
+                            &context.app,
+                        );
+                    }
+                    match controller.press_action(context.recorder.is_recording()) {
+                        TriggerAction::Start => {
+                            common::ptt_down(&context.recorder, &context.tray_icon, &context.app);
+                        }
+                        TriggerAction::Stop => {
+                            common::ptt_up(&context.recorder, &context.tray_icon, &context.app);
+                        }
+                        TriggerAction::Noop => {}
+                    }
+                }
+            } else if was_down {
+                HID_BUTTON_STATE.fetch_and(!bit, Ordering::Relaxed);
+                common::disarm_hold_cancel();
+                match controller.release_action() {
                     TriggerAction::Start => {
                         common::ptt_down(&context.recorder, &context.tray_icon, &context.app);
                     }
@@ -1608,17 +1784,92 @@ mod imp {
                     TriggerAction::Noop => {}
                 }
             }
-        } else if was_down {
-            HID_BUTTON_STATE.fetch_and(!bit, Ordering::Relaxed);
-            common::disarm_hold_cancel();
-            match controller.release_action() {
-                TriggerAction::Start => {
-                    common::ptt_down(&context.recorder, &context.tray_icon, &context.app);
+
+            return;
+        }
+
+        if usage_page == K_HIDPAGE_KEYBOARD {
+            // CGEventTap handles keyboard events when Accessibility is
+            // granted. Firing from IOHID at the same time causes a race:
+            // IOHID starts recording, then CGEventTap sees is_recording=true
+            // and immediately stops it. Skip when CGEventTap is active.
+            if CGEVENTTAP_ACTIVE.load(Ordering::Acquire) {
+                return;
+            }
+            let usage = IOHIDElementGetUsage(element);
+            let (target_usage, key_name, mode_name) = {
+                let hk = context.hotkey_state.read();
+                (
+                    keyboard_hid_usage_for_name(&hk.key),
+                    hk.key.clone(),
+                    hk.mode.clone(),
+                )
+            };
+            let Some(target) = target_usage else { return };
+            if usage != target {
+                return;
+            }
+
+            let int_value = IOHIDValueGetIntegerValue(value);
+            let pressed = int_value != 0;
+
+            let (controller, cancel_on_hold) = {
+                let hk = context.hotkey_state.read();
+                (HotkeyController::from_mode(&hk.mode), hk.cancel_on_hold)
+            };
+
+            if pressed {
+                if HID_KEYBOARD_DOWN.swap(true, Ordering::Relaxed) {
+                    crate::diagnostic_log::emergency_trace(format!(
+                        "[hid-keyboard] ignored repeat key={key_name} usage={usage}"
+                    ));
+                    return;
                 }
-                TriggerAction::Stop => {
-                    common::ptt_up(&context.recorder, &context.tray_icon, &context.app);
+                crate::diagnostic_log::emergency_trace(format!(
+                    "[hid-keyboard] down key={key_name} mode={mode_name} usage={usage} recorder={}",
+                    context.recorder.state()
+                ));
+                if cancel_on_hold && common::should_arm_hold_cancel(&context.recorder) {
+                    controller.arm_hold_cancel(&context.recorder, &context.tray_icon, &context.app);
                 }
-                TriggerAction::Noop => {}
+                let action = controller.press_action(context.recorder.is_recording());
+                crate::diagnostic_log::emergency_trace(format!(
+                    "[hid-keyboard] down action={action:?}"
+                ));
+                match action {
+                    TriggerAction::Start => {
+                        common::ptt_down(&context.recorder, &context.tray_icon, &context.app);
+                    }
+                    TriggerAction::Stop => {
+                        common::ptt_up(&context.recorder, &context.tray_icon, &context.app);
+                    }
+                    TriggerAction::Noop => {}
+                }
+            } else {
+                if !HID_KEYBOARD_DOWN.swap(false, Ordering::Relaxed) {
+                    crate::diagnostic_log::emergency_trace(format!(
+                        "[hid-keyboard] ignored up-without-down key={key_name} usage={usage}"
+                    ));
+                    return;
+                }
+                crate::diagnostic_log::emergency_trace(format!(
+                    "[hid-keyboard] up key={key_name} mode={mode_name} usage={usage} recorder={}",
+                    context.recorder.state()
+                ));
+                common::disarm_hold_cancel();
+                let action = controller.release_action();
+                crate::diagnostic_log::emergency_trace(format!(
+                    "[hid-keyboard] up action={action:?}"
+                ));
+                match action {
+                    TriggerAction::Start => {
+                        common::ptt_down(&context.recorder, &context.tray_icon, &context.app);
+                    }
+                    TriggerAction::Stop => {
+                        common::ptt_up(&context.recorder, &context.tray_icon, &context.app);
+                    }
+                    TriggerAction::Noop => {}
+                }
             }
         }
     }
@@ -1681,6 +1932,29 @@ mod imp {
         });
     }
 
+    /// Keyboard/kp usage page from USB HID spec.
+    const K_HIDPAGE_KEYBOARD: u32 = 0x07;
+
+    /// Map a TurboTalk hotkey name to its USB HID usage code on page 0x07.
+    /// Handles modifier keys (right_option, right_control, etc.) and
+    /// function keys (f13–f19).
+    fn keyboard_hid_usage_for_name(name: &str) -> Option<u32> {
+        match name {
+            "right_option" => Some(0xE6),  // Right Alt / Option
+            "right_control" => Some(0xE4), // Right Control
+            "right_command" => Some(0xE7), // Right GUI / Command
+            "right_shift" => Some(0xE5),   // Right Shift
+            "f13" => Some(0x68),
+            "f14" => Some(0x69),
+            "f15" => Some(0x6A),
+            "f16" => Some(0x6B),
+            "f17" => Some(0x6C),
+            "f18" => Some(0x6D),
+            "f19" => Some(0x6E),
+            _ => None,
+        }
+    }
+
     pub fn spawn(
         recorder: Arc<Recorder>,
         tray_icon: TrayIcon,
@@ -1697,6 +1971,10 @@ mod imp {
             app.clone(),
             hotkey_state.clone(),
         );
+
+        // The IOHIDManager handles both mouse buttons and keyboard hotkeys
+        // (see hid_mouse_value_callback which checks both K_HIDPAGE_BUTTON
+        // and K_HIDPAGE_KEYBOARD). Only Input Monitoring is required.
 
         std::thread::spawn(move || {
             // Permission watchdog loop. If the process lacks Accessibility trust,
@@ -1796,7 +2074,11 @@ mod imp {
                                         if cancel_on_hold
                                             && common::should_arm_hold_cancel(&recorder_cb)
                                         {
-                                            controller.arm_hold_cancel(&recorder_cb, &tray_cb, &app_cb);
+                                            controller.arm_hold_cancel(
+                                                &recorder_cb,
+                                                &tray_cb,
+                                                &app_cb,
+                                            );
                                         }
                                         match controller.press_action(recorder_cb.is_recording()) {
                                             TriggerAction::Start => {
@@ -1937,28 +2219,30 @@ mod imp {
                             }
                         });
 
+                        // Gate IOHID keyboard handling: while CGEventTap is
+                        // active both paths would fire for the same keypress,
+                        // causing the immediate-discard race in toggle mode.
+                        CGEVENTTAP_ACTIVE.store(true, Ordering::Release);
                         CFRunLoop::run_current();
+                        CGEVENTTAP_ACTIVE.store(false, Ordering::Release);
                         shutdown.store(true, Ordering::Release);
                         return;
                     }
                     Err(()) => {
                         let trusted = accessibility_trusted();
-                        tracing::error!(
-                            "[hotkey] CGEventTap failed (accessibility_trusted={trusted}, retry={trusted_failure_retries})"
-                        );
-                        if !surfaced_permission_error {
+                        if trusted {
+                            tracing::error!(
+                                "[hotkey] CGEventTap failed (accessibility_trusted={trusted}, retry={trusted_failure_retries})"
+                            );
+                        } else {
+                            tracing::warn!(
+                                "[hotkey] CGEventTap unavailable because Accessibility trust is false; IOHID fallback remains active"
+                            );
+                        }
+                        if trusted && !surfaced_permission_error {
                             surfaced_permission_error = true;
-                            let (kind, message) = if trusted {
-                                (
-                                    "hotkey-input-monitoring",
-                                    "Record trigger could not receive keyboard events. Turn on Turbo Talk in System Settings → Privacy & Security → Input Monitoring, then restart Turbo Talk.",
-                                )
-                            } else {
-                                (
-                                    "hotkey-permission",
-                                    "Record trigger needs Accessibility permission. Add Turbo Talk in System Settings → Privacy & Security → Accessibility — Turbo Talk will pick it up automatically once granted.",
-                                )
-                            };
+                            let kind = "hotkey-input-monitoring";
+                            let message = "Record trigger could not receive keyboard events. Turn on Turbo Talk in System Settings → Privacy & Security → Input Monitoring, then restart Turbo Talk.";
                             let app_for_emit = app.clone();
                             std::thread::spawn(move || {
                                 std::thread::sleep(std::time::Duration::from_millis(1200));
@@ -2306,16 +2590,31 @@ mod tests {
 
     #[test]
     fn hold_press_and_release_are_simple() {
-        assert_eq!(HotkeyController::Hold.press_action(false), TriggerAction::Start);
-        assert_eq!(HotkeyController::Hold.press_action(true), TriggerAction::Start);
+        assert_eq!(
+            HotkeyController::Hold.press_action(false),
+            TriggerAction::Start
+        );
+        assert_eq!(
+            HotkeyController::Hold.press_action(true),
+            TriggerAction::Start
+        );
         assert_eq!(HotkeyController::Hold.release_action(), TriggerAction::Stop);
     }
 
     #[test]
     fn toggle_press_toggles_and_release_is_noop() {
-        assert_eq!(HotkeyController::Toggle.press_action(false), TriggerAction::Start);
-        assert_eq!(HotkeyController::Toggle.press_action(true), TriggerAction::Stop);
-        assert_eq!(HotkeyController::Toggle.release_action(), TriggerAction::Noop);
+        assert_eq!(
+            HotkeyController::Toggle.press_action(false),
+            TriggerAction::Start
+        );
+        assert_eq!(
+            HotkeyController::Toggle.press_action(true),
+            TriggerAction::Stop
+        );
+        assert_eq!(
+            HotkeyController::Toggle.release_action(),
+            TriggerAction::Noop
+        );
     }
 
     #[test]

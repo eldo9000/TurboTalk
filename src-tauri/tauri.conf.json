@@ -27,7 +27,7 @@
         "maximizable": false,
         "center": true,
         "transparent": false,
-        "skipTaskbar": true,
+        "skipTaskbar": false,
         "visible": false
       },
       {

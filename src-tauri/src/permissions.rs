@@ -1,13 +1,15 @@
 // First-launch readiness checks + System Settings deep-links.
 //
 // Three things gate the app from being usable:
-//   1. macOS Accessibility — needed by CGEventTap for the global hotkey.
-//      Granting requires app restart (AXIsProcessTrusted caches per-process).
-//   2. macOS Input Monitoring — needed by newer macOS releases for global
+//   1. macOS Input Monitoring — needed by newer macOS releases for global
 //      keyboard listening. Granting takes effect after restarting the listener.
-//   3. macOS Microphone — TCC permission for cpal to capture audio.
+//   2. macOS Microphone — TCC permission for cpal to capture audio.
 //      Native prompt fires on `requestAccess`; granting takes effect live.
-//   4. At least one Whisper model `.bin` exists in the canonical models dir.
+//   3. At least one local model exists in the canonical models dir.
+//
+// macOS Accessibility is still reported separately because automatic Cmd+V
+// paste depends on it. On ad-hoc builds it can remain false even when System
+// Settings shows Turbo Talk enabled, so it must not block dictation readiness.
 //
 // `check_readiness` returns the current state of all three so the frontend
 // can render an onboarding wizard and re-poll while it's open. Each step's
@@ -24,6 +26,10 @@ static FORCE_ONBOARDING: AtomicBool = AtomicBool::new(false);
 /// Starts true; cleared when setup completes (all gates green).
 /// The hotkey reads this to silently suppress dictation during setup.
 static ONBOARDING_ACTIVE: AtomicBool = AtomicBool::new(true);
+
+/// Avoid flooding the logs while the onboarding UI polls readiness.
+#[cfg(target_os = "macos")]
+static WARNED_AX_FALLBACK: AtomicBool = AtomicBool::new(false);
 
 /// Check whether the onboarding/splash screen is still active.
 /// Called by the hotkey listener to suppress dictation during setup.
@@ -50,12 +56,13 @@ pub enum PermissionStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct Readiness {
     pub accessibility: PermissionStatus,
+    pub automatic_paste: PermissionStatus,
     pub input_monitoring: PermissionStatus,
     pub microphone: PermissionStatus,
     pub model_present: bool,
     /// Host OS id (`macos`, `windows`, `linux`, …) for platform-aware onboarding UI.
     pub platform: String,
-    /// True iff all four gates pass — frontend uses this as the
+    /// True iff all dictation gates pass — frontend uses this as the
     /// "show onboarding vs. show main UI" switch.
     pub ready: bool,
     /// Debug override: true when `reset_onboarding` was called this session.
@@ -66,14 +73,32 @@ pub struct Readiness {
 // ── Accessibility ───────────────────────────────────────────────────────────
 
 #[cfg(target_os = "macos")]
-fn accessibility_status() -> PermissionStatus {
+fn automatic_paste_status() -> PermissionStatus {
     if crate::hotkey::accessibility_trusted() {
         PermissionStatus::Granted
     } else {
-        // No "not determined" distinction for Accessibility — if it isn't
-        // trusted, the user must explicitly grant it in System Settings.
+        if !WARNED_AX_FALLBACK.swap(true, Ordering::Relaxed) {
+        tracing::warn!(
+            "[permissions] AXIsProcessTrusted() returned false; \
+                 relying on IOHIDManager keyboard fallback (Input Monitoring) for hotkey"
+        );
+    }
         PermissionStatus::Denied
     }
+}
+
+#[cfg(target_os = "macos")]
+fn accessibility_status() -> PermissionStatus {
+    // This field is the historical "can the app pass setup?" signal. The
+    // IOHID keyboard listener now provides hotkeys through Input Monitoring,
+    // so Accessibility is no longer a dictation gate on ad-hoc builds.
+    let _ = automatic_paste_status();
+    PermissionStatus::Granted
+}
+
+#[cfg(not(target_os = "macos"))]
+fn automatic_paste_status() -> PermissionStatus {
+    PermissionStatus::Unsupported
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -275,6 +300,7 @@ fn model_present() -> bool {
 #[specta::specta]
 pub fn check_readiness() -> Readiness {
     let accessibility = accessibility_status();
+    let automatic_paste = automatic_paste_status();
     let input_monitoring = input_monitoring_status();
     let microphone = microphone_status();
     let model_present = model_present();
@@ -289,6 +315,7 @@ pub fn check_readiness() -> Readiness {
     let ready = ok(accessibility) && ok(input_monitoring) && ok(microphone) && model_present;
     Readiness {
         accessibility,
+        automatic_paste,
         input_monitoring,
         microphone,
         model_present,
@@ -367,23 +394,36 @@ pub fn open_system_settings(pane: String) -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 pub fn restart_app(app: tauri::AppHandle) {
-    #[cfg(debug_assertions)]
+    #[cfg(not(debug_assertions))]
     {
-        use tauri::Emitter;
-
-        let _ = app.emit(
-            "ui-error",
-            serde_json::json!({
-                "kind": "restart-dev-mode",
-                "message": "Restart is disabled in dev mode. Stop the local run and launch it again.",
-                "recoverable": true
-            }),
-        );
-        tracing::warn!("[permissions] restart_app ignored in debug/dev mode");
+        app.restart();
     }
 
-    #[cfg(not(debug_assertions))]
-    app.restart();
+    #[cfg(debug_assertions)]
+    {
+        match std::env::current_exe() {
+            Ok(exe) => {
+                tracing::info!(
+                    "[permissions] restart_app: spawning {} and exiting in dev mode",
+                    exe.display()
+                );
+                let _ = std::process::Command::new(&exe).spawn();
+                std::process::exit(0);
+            }
+            Err(e) => {
+                tracing::error!("[permissions] restart_app: failed to get current exe: {e}");
+                use tauri::Emitter;
+                let _ = app.emit(
+                    "ui-error",
+                    serde_json::json!({
+                        "kind": "restart-dev-mode",
+                        "message": format!("Restart failed: {e}"),
+                        "recoverable": true
+                    }),
+                );
+            }
+        }
+    }
 }
 
 /// Reset the TCC permission entry for Turbo Talk so the onboarding wizard

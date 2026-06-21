@@ -24,8 +24,8 @@
 // false) before the move and restoring afterwards is the known workaround.
 
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition,
-    PhysicalSize, WebviewWindow,
+    AppHandle, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition, PhysicalSize,
+    WebviewWindow,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -126,10 +126,7 @@ fn find_cursor_monitor(
             let s = m.size();
             let lw = s.width as f64 / m.scale_factor();
             let lh = s.height as f64 / m.scale_factor();
-            cx >= p.x as f64
-                && cx < p.x as f64 + lw
-                && cy >= p.y as f64
-                && cy < p.y as f64 + lh
+            cx >= p.x as f64 && cx < p.x as f64 + lw && cy >= p.y as f64 && cy < p.y as f64 + lh
         })
         .cloned()
         .or(fallback_current)
@@ -194,9 +191,20 @@ fn monitor_logical_bounds(m: &Monitor) -> (f64, f64, f64, f64) {
 /// Safe to call on any platform — on non-macOS it's just set_position.
 #[cfg(target_os = "macos")]
 fn position_nspanel(win: &WebviewWindow, pos: LogicalPosition<f64>) {
-    let _ = win.set_always_on_top(false);
-    let _ = win.set_position(pos);
-    let _ = win.set_always_on_top(true);
+    // Only demote/promote the window level when necessary.  The overlay is
+    // always created with "alwaysOnTop":true (NSFloatingWindowLevel), so on
+    // most calls this is already the case.  Skipping the toggle when possible
+    // avoids a macOS 26 NSPanel edge case where rapid level changes can
+    // cause the window to visually disappear (compositor catches the mid-
+    // demotion frame and the re-promotion races with the next display refresh).
+    let was_top = win.is_always_on_top().unwrap_or(true);
+    if was_top {
+        let _ = win.set_position(pos);
+    } else {
+        let _ = win.set_always_on_top(false);
+        let _ = win.set_position(pos);
+        let _ = win.set_always_on_top(true);
+    }
 }
 
 // ── Overlay window ─────────────────────────────────────────────────────────

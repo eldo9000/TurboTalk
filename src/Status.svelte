@@ -43,7 +43,7 @@
     const hideEvents = [
       'transcript', 'transcript-error', 'recording-discarded',
       'recording-cancelled', 'recording-recovered', 'recording-too-short',
-      'device-lost', 'paste-error',
+      'device-lost', 'paste-error', 'paste-copied',
     ];
     hideEvents.forEach(ev => {
       listen(ev, () => hide()).then(u => uns.push(u));

@@ -1,8 +1,9 @@
 <script>
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
-  import { getCurrentWindow, cursorPosition, primaryMonitor } from '@tauri-apps/api/window';
-  import { commands } from './bindings.ts';
+import { getCurrentWindow, cursorPosition, primaryMonitor } from '@tauri-apps/api/window';
+import { commands } from './bindings.ts';
+import { invoke } from '@tauri-apps/api/core';
 
   // 'recording' | 'transcribing' | 'error' | 'idle'
   // Arming (warm-up) is now handled by the separate Status window.
@@ -37,6 +38,34 @@
 
   let transcribeTimer    = null;
   let transcribeTick     = $state(0); // incremented by timer to keep Svelte rendering during transcription
+  let idleTimer          = null; // handle for the 350ms stopTranscribing timeout
+
+  // Job-id tracking so the overlay can ignore stale events from a previous
+  // dictation that arrive after a new one has already started.  The backend
+  // emits a dictation-stage event with a job_id immediately after ptt-down
+  // (in the same critical section), so this is authoritative for "which
+  // dictation is currently active."
+  let currentJobId = $state(null);
+
+  // ── Overlay event log (rotating ring buffer) ──────────────────────────
+  // The last 100 overlay lifecycle events are kept in memory and exposed
+  // on `window.__OVERLAY_LOG` so they can be inspected from the browser
+  // devtools.  Every entry is also forwarded to the Rust tracing system
+  // via `log_overlay_event` so it ends up in the rolling log files under
+  // ~/.config/turbotalk/logs/.
+  const MAX_LOG = 100;
+  const overlayLog = [];
+  let logSeq = 0;
+
+  function logOverlay(trigger, detail) {
+    const entry = { seq: ++logSeq, ts: Date.now(), trigger, detail };
+    overlayLog.push(entry);
+    if (overlayLog.length > MAX_LOG) overlayLog.shift();
+    // Best-effort: if the IPC call fails (e.g. Tauri not ready yet) the
+    // entry is still in the in-memory ring buffer.
+    invoke('log_overlay_event', { event: trigger, detail }).catch(() => {});
+    window.__OVERLAY_LOG = overlayLog;
+  }
 
   let recordingStart  = null;
   let elapsedSecs     = $state(0);
@@ -176,6 +205,9 @@
   }
 
   function stopTranscribing(nextMode = 'idle') {
+    logOverlay('mode_transition', { from: mode, to: nextMode, trigger: 'stopTranscribing', job_id: currentJobId });
+    clearTimeout(idleTimer);
+    idleTimer = null;
     clearInterval(transcribeTimer);
     transcribeTimer = null;
     resetElapsed();
@@ -241,6 +273,7 @@
     // still loading (cold start). On the warm path ptt-down fires directly
     // and the arming state is skipped entirely — no yellow flash.
     listen('ptt-down', () => {
+      logOverlay('event_arrived', { event: 'ptt-down', mode, job_id: currentJobId, accepted: true });
       levels = Array(HISTORY).fill(0);
       speechFrames = 0;
       wordCount = 0;
@@ -248,6 +281,23 @@
       resetMeterPeak();
       startElapsed();
       mode = 'recording';
+      // Clear the job-id anchor — the next dictation-stage event (emitted
+      // immediately after ptt-down in the same critical section) will set
+      // the correct currentJobId.  Setting null here means completion events
+      // from the *previous* job are rejected until the new job_id arrives.
+      currentJobId = null;
+      // Cancel any stale idle transition from a previous dictation's
+      // transcript event.  Without this, the 350ms timeout fires after
+      // ptt-down and clobbers mode back to 'idle', making the overlay
+      // invisible for the entire new recording.
+      logOverlay('timer_cancel', { name: 'idleTimer', reason: 'ptt-down', had_value: idleTimer !== null });
+      clearTimeout(idleTimer);
+      idleTimer = null;
+      // Also cancel any lingering error-panel timer so a stale
+      // exitError() doesn't clobber the recording mode mid-dictation.
+      logOverlay('timer_cancel', { name: 'errorTimer', reason: 'ptt-down', had_value: errorTimer !== null });
+      clearTimeout(errorTimer);
+      errorTimer = null;
       // Fire the one-shot connect flash. Re-arm cleanly if a previous flash
       // timer is still pending (rapid re-press).
       justConnected = true;
@@ -262,6 +312,7 @@
     }).then(u => uns.push(u));
 
     listen('ptt-up', () => {
+      logOverlay('event_arrived', { event: 'ptt-up', mode, job_id: currentJobId, accepted: true });
       miniDotLevel = 0;
       mode = 'transcribing';
       stopElapsed(); // keep elapsedSecs visible as recording duration during transcription
@@ -271,9 +322,16 @@
     }).then(u => uns.push(u));
 
     listen('transcript', () => {
-      // If the error panel is showing (flaky paste), don't dismiss it early.
-      if (mode === 'error') return;
-      setTimeout(() => { stopTranscribing('idle'); }, 350);
+      const accepted = mode === 'transcribing';
+      logOverlay('event_arrived', { event: 'transcript', mode, job_id: currentJobId, accepted });
+      // Guard: only transition from transcribing → idle.  If the mode is
+      // already 'recording', a new dictation started before this event
+      // arrived — ignore the stale transcript entirely so its delayed
+      // timeout doesn't make the overlay invisible mid-recording.
+      if (mode !== 'transcribing') return;
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => { stopTranscribing('idle'); }, 350);
+      logOverlay('timer_set', { name: 'idleTimer', delay: 350, reason: 'transcript_event', job_id: currentJobId });
     }).then(u => uns.push(u));
 
     // Error panel helpers — toggle overlay cursor events so the user can
@@ -281,10 +339,12 @@
     let errorTimer = null;
 
     function enterError() {
+      logOverlay('mode_transition', { from: mode, to: 'error', trigger: 'enterError', job_id: currentJobId });
       stopTranscribing('error');
     }
 
     function exitError() {
+      logOverlay('mode_transition', { from: 'error', to: 'idle', trigger: 'exitError_timer', job_id: currentJobId });
       clearTimeout(errorTimer);
       errorTimer = null;
       mode = 'idle';
@@ -293,31 +353,56 @@
     // Guard: don't override the error panel with an idle transition.
     // The error panel owns the display until its timer dismisses it.
     function skipIfError() {
-      return mode === 'error';
+      if (mode === 'error') {
+        logOverlay('guard_rejected', { guard: 'skipIfError', event: '(caller)', mode, job_id: currentJobId });
+        return true;
+      }
+      return false;
+    }
+
+    // Guard: only allow lifecycle-completion transitions when the overlay
+    // is in a terminal display state (transcribing or error).  Ignores
+    // stale events from a previous dictation that arrive during a new
+    // recording — those would hide the overlay mid-dictation.
+    function skipUnlessTranscribingOrError() {
+      if (mode !== 'transcribing' && mode !== 'error') {
+        logOverlay('guard_rejected', { guard: 'skipUnlessTranscribingOrError', event: '(caller)', mode, job_id: currentJobId });
+        return true;
+      }
+      return false;
     }
 
     // Hallucination rejection — interrupt whatever the overlay is showing
     // (recording or transcribing) and replace it with a fixed-size error
     // panel that stays for 3 seconds regardless of overlay size mode.
+    // All rejections are now advisory (text is always pasted) — the panel
+    // alerts the user to review the output.
     listen('transcription-rejected', (e) => {
       const payload = e.payload || {};
-      if (skipIfError()) return;
-      // Only interrupt for flaky (pasted despite detection) or blocked
-      // (nothing pasted). Partial salvage follows transcript normally.
+      const guarded = skipIfError();
+      logOverlay('event_arrived', { event: 'transcription-rejected', mode, job_id: currentJobId, guarded, flaky: payload.flaky, pasted: payload.pasted });
+      if (guarded) return;
+      // Show for all rejection events — the text was pasted with a warning.
       if (payload.flaky || payload.pasted === false) {
         enterError();
         errorTimer = setTimeout(exitError, 3000);
+        logOverlay('timer_set', { name: 'errorTimer', delay: 3000, reason: 'transcription-rejected', job_id: currentJobId });
       }
     }).then(u => uns.push(u));
 
     listen('transcript-error', () => {
-      if (skipIfError()) return;
+      const guarded = skipIfError();
+      logOverlay('event_arrived', { event: 'transcript-error', mode, job_id: currentJobId, guarded });
+      if (guarded) return;
       enterError();
       errorTimer = setTimeout(exitError, 3000);
+      logOverlay('timer_set', { name: 'errorTimer', delay: 3000, reason: 'transcript-error', job_id: currentJobId });
     }).then(u => uns.push(u));
 
     listen('recording-discarded', (e) => {
-      if (skipIfError()) return;
+      const guarded = skipUnlessTranscribingOrError();
+      logOverlay('event_arrived', { event: 'recording-discarded', mode, job_id: currentJobId, guarded, reason: e.payload });
+      if (guarded) return;
       // empty-final-text means transcription ran but cleanup produced nothing
       // (e.g. all non-speech annotations stripped). Show feedback so the user
       // knows the system tried. Other discards (too-short, error-path) are
@@ -325,40 +410,72 @@
       if (e.payload === 'empty-final-text') {
         enterError();
         errorTimer = setTimeout(exitError, 3000);
+        logOverlay('timer_set', { name: 'errorTimer', delay: 3000, reason: 'recording-discarded', job_id: currentJobId });
       } else {
         stopTranscribing('idle');
       }
     }).then(u => uns.push(u));
 
     listen('recording-cancelled', () => {
-      if (skipIfError()) return;
+      const guarded = skipUnlessTranscribingOrError();
+      logOverlay('event_arrived', { event: 'recording-cancelled', mode, job_id: currentJobId, guarded });
+      if (guarded) return;
       stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     listen('recording-recovered', () => {
-      if (skipIfError()) return;
+      const guarded = skipUnlessTranscribingOrError();
+      logOverlay('event_arrived', { event: 'recording-recovered', mode, job_id: currentJobId, guarded });
+      if (guarded) return;
       stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     listen('recording-too-short', () => {
-      if (skipIfError()) return;
+      const guarded = skipUnlessTranscribingOrError();
+      logOverlay('event_arrived', { event: 'recording-too-short', mode, job_id: currentJobId, guarded });
+      if (guarded) return;
       stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     listen('device-lost', () => {
-      if (skipIfError()) return;
+      const guarded = skipUnlessTranscribingOrError();
+      logOverlay('event_arrived', { event: 'device-lost', mode, job_id: currentJobId, guarded });
+      if (guarded) return;
       stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     listen('paste-error', () => {
-      if (skipIfError()) return;
+      const guarded = skipUnlessTranscribingOrError();
+      logOverlay('event_arrived', { event: 'paste-error', mode, job_id: currentJobId, guarded });
+      if (guarded) return;
       enterError();
       errorTimer = setTimeout(exitError, 3000);
+      logOverlay('timer_set', { name: 'errorTimer', delay: 3000, reason: 'paste-error', job_id: currentJobId });
+    }).then(u => uns.push(u));
+
+    listen('paste-copied', () => {
+      const guarded = skipUnlessTranscribingOrError();
+      logOverlay('event_arrived', { event: 'paste-copied', mode, job_id: currentJobId, guarded });
+      if (guarded) return;
+      stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     // Belt-and-suspenders: backend always emits stage=ready when a job ends.
+    // Use job_id to prevent a stale ready event from a previous dictation
+    // from hiding the overlay during the current dictation's transcription
+    // phase.  ptt-down resets currentJobId to null; the first dictation-stage
+    // after ptt-down (always emitted in the same critical section) sets it.
     listen('dictation-stage', (e) => {
-      if (e.payload?.stage === 'ready' && mode === 'transcribing') {
+      const jobId = e.payload?.job_id;
+      const stage = e.payload?.stage;
+      logOverlay('event_arrived', { event: 'dictation-stage', stage, mode, job_id_in_payload: jobId, current_job_id: currentJobId });
+      // Silently update the job-id anchor.  The backend emits this
+      // immediately after ptt-down, before any completion events.
+      if (jobId != null && currentJobId == null) {
+        currentJobId = jobId;
+      }
+      // Stage=ready → transition to idle, but ONLY for our own job.
+      if (stage === 'ready' && mode === 'transcribing' && jobId === currentJobId) {
         stopTranscribing('idle');
       }
     }).then(u => uns.push(u));
@@ -409,10 +526,12 @@
     }).then(u => uns.push(u));
 
     return () => {
+      logOverlay('component_destroy', { mode, job_id: currentJobId });
       clearInterval(cursorTimer);
       clearInterval(elapsedTimer);
       clearTimeout(flashTimer);
       clearTimeout(errorTimer);
+      clearTimeout(idleTimer);
       uns.forEach(u => u());
     };
   });

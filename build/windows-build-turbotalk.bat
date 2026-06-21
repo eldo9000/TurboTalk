@@ -67,10 +67,10 @@ echo ============================================
 echo  BUILD COMPLETE!
 echo ============================================
 echo.
-dir /b "build\artifacts\*.exe" 2>nul && (
-    echo  Installer: %CD%\build\artifacts\
+dir /b "build\*.exe" 2>nul && (
+    echo  Installer: %CD%\build\
 ) || (
-    echo  Check %CD%\build\artifacts\ for output
+    echo  Check %CD%\build\ for output
 )
 echo.
 pause
