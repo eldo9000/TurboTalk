@@ -14,43 +14,34 @@ pub enum TrayState {
 }
 
 pub fn make_icon(state: TrayState) -> Image<'static> {
-    // Windows system tray scales icons down aggressively; 32×32 matches the
-    // bundled .ico and avoids the semi-transparent fringe that reads as a blue
-    // square on the Win32 tray compositor.
-    #[cfg(target_os = "windows")]
-    {
-        if matches!(state, TrayState::Idle) {
-            return Image::from_bytes(include_bytes!("../icons/32x32.png"))
-                .expect("embedded 32x32 tray icon");
-        }
+    // All platforms: use the bundled PNG for the idle state. macOS menu bar
+    // renders @2x PNGs correctly; the tray-icon crate resizes to 18pt height.
+    if matches!(state, TrayState::Idle) {
+        return Image::from_bytes(include_bytes!("../icons/128x128@2x.png"))
+            .expect("embedded tray icon");
     }
 
+    // Recording / Transcribing: generate pixel buffers. The label/overlay
+    // approach avoids maintaining separate colored PNGs for each state.
     #[cfg(target_os = "windows")]
     let size = 32u32;
-    // macOS menu bar height is ~22pt logical. Tauri passes width/height as
-    // NSImage logical points, so 44pt would overflow the bar and get clipped.
-    // Use 22×22 so the icon fits at its natural size.
     #[cfg(not(target_os = "windows"))]
     let size = 22u32;
 
     let mut px = vec![0u8; (size * size * 4) as usize];
 
-    // Windows does not composite alpha-0 as transparent in the notification
-    // area — fringe pixels pick up the tray background (often blue). Start from
-    // an opaque #111 canvas matching the app icon, then paint state on top.
     #[cfg(target_os = "windows")]
     fill_opaque(&mut px, size, 17, 17, 17);
 
+    // macOS: white-on-clear template icons (alpha channel only; system picks
+    // the right color for light/dark mode).
     match state {
-        TrayState::Idle => {
-            fill_circle(&mut px, size, 17, 17, 17);
-            draw_tt(&mut px, size);
-        }
         TrayState::Recording => {
-            fill_circle(&mut px, size, 248, 68, 68);
+            fill_circle(&mut px, size, 255, 255, 255);
             draw_x(&mut px, size);
         }
-        TrayState::Transcribing => fill_circle(&mut px, size, 251, 191, 36),
+        TrayState::Transcribing => fill_circle(&mut px, size, 255, 255, 255),
+        _ => {} // idle handled above
     }
 
     Image::new_owned(px, size, size)
@@ -121,6 +112,11 @@ pub fn build(app: &tauri::App) -> tauri::Result<TrayIcon> {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .tooltip("TurboTalk")
+        // macOS: treat as template image (alpha-channel only) so the system
+        // renders the icon with proper contrast in light/dark mode. Without
+        // this, the generated pixel buffer gets rendered as a tiny dark
+        // square that's invisible on the menu bar.
+        .icon_as_template(true)
         .on_tray_icon_event(move |tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -187,6 +183,17 @@ pub fn build(app: &tauri::App) -> tauri::Result<TrayIcon> {
     tracing::info!("[tray] tray icon created");
 
     Ok(tray_icon)
+}
+
+/// Set the tray icon state, re-applying the macOS template flag after every
+/// state transition. The tray-icon crate's `set_icon()` hardcodes
+/// `icon_is_template = false` on macOS — this wrapper restores it.
+pub fn set_tray_icon(tray: &TrayIcon, state: TrayState) {
+    let _ = tray.set_icon(Some(make_icon(state)));
+    #[cfg(target_os = "macos")]
+    {
+        let _ = tray.set_icon_as_template(true);
+    }
 }
 
 // ── Pixel helpers ─────────────────────────────────────────────────────────────

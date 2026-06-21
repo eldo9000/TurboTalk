@@ -322,7 +322,7 @@ pub(crate) mod common {
             // join). The worker will exit on its own once the segment channel
             // closes; we don't need its results.
             let _ = CURRENT_SEG_TRANSCRIBER.lock().take();
-            let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+            tray::set_tray_icon(&tray, TrayState::Idle);
             emit_critical(&app, "recording-cancelled", ());
             // If cancel killed the whisper-server (Transcribing → Ready path),
             // the worker is now invalidated and READY is false. Re-warm so the
@@ -601,7 +601,7 @@ pub(crate) mod common {
             if CANCEL_PENDING.swap(false, Ordering::AcqRel) {
                 crate::diagnostic_log::emergency_trace("[ptt_down] cancel_pending after rec.start");
                 rec.cancel();
-                let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                tray::set_tray_icon(&tray, TrayState::Idle);
                 emit_critical(&app, "recording-cancelled", ());
                 session_metrics::record_dictation_discarded();
                 return;
@@ -657,7 +657,7 @@ pub(crate) mod common {
                             "[ptt_down] cancel_pending during audio_live",
                         );
                         rec.cancel();
-                        let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                        tray::set_tray_icon(&tray, TrayState::Idle);
                         emit_critical(&app, "recording-cancelled", ());
                         return;
                     }
@@ -693,7 +693,7 @@ pub(crate) mod common {
             // lands immediately. `frontmost_app()` spawns osascript (~50-200ms);
             // audio capture is already running, so moving it after the cue is a
             // pure latency win with no data loss.
-            let _ = tray.set_icon(Some(tray::make_icon(TrayState::Recording)));
+            tray::set_tray_icon(&tray, TrayState::Recording);
             // Pin the overlay window to the cursor's monitor *before* emitting
             // ptt-down so the recording UI never flashes on the wrong display.
             // The arming branch above already repositioned, but a second call
@@ -733,7 +733,7 @@ pub(crate) mod common {
         if call_finish_guarded {
             rec.finish_guarded();
         }
-        let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+        tray::set_tray_icon(&tray, TrayState::Idle);
         if let Some(job_id) = job_id_opt {
             emit_stage(app, job_id, "ready");
         }
@@ -926,7 +926,7 @@ pub(crate) mod common {
                     let seg_transcriber_opt = CURRENT_SEG_TRANSCRIBER.lock().take();
 
                     // We are now in `FinalizingAudio` per recorder contract.
-                    let _ = tray.set_icon(Some(tray::make_icon(TrayState::Transcribing)));
+                    tray::set_tray_icon(&tray, TrayState::Transcribing);
                     emit_critical(&app, "ptt-up", ());
                     if let Some(job_id) = job_id_opt {
                         emit_stage(&app, job_id, "finalizing_audio");
@@ -947,7 +947,7 @@ pub(crate) mod common {
                             e
                         );
                         rec.finish_guarded();
-                        let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                        tray::set_tray_icon(&tray, TrayState::Idle);
                         session_metrics::record_dictation_discarded();
                         // Must emit recording-discarded so the frontend clears
                         // transcribing=true (set by ptt-up above). Without this
@@ -1036,7 +1036,7 @@ pub(crate) mod common {
                         // Recorder forced out from under us (e.g. cancel).
                         // A new job may have already started (Recording state).
                         rec.finish_guarded();
-                        let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                        tray::set_tray_icon(&tray, TrayState::Idle);
                         session_metrics::record_dictation_discarded();
                         emit_critical(&app, "recording-discarded", ());
                         if let Some(job_id) = job_id_opt {
@@ -1156,7 +1156,7 @@ pub(crate) mod common {
                     // End of lifecycle — back to Ready regardless of which arm we
                     // took (success, transcribe error, or paste error).
                     rec.finish_guarded();
-                    let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                    tray::set_tray_icon(&tray, TrayState::Idle);
                     if let Some(job_id) = job_id_opt {
                         emit_stage(&app, job_id, "ready");
                     }
@@ -1185,7 +1185,7 @@ pub(crate) mod common {
                             // immediately. Without this the overlay stays stuck in
                             // "Recording" for the entire Whisper inference window
                             // (1–3 s), making the user think recording is still live.
-                            let _ = tray.set_icon(Some(tray::make_icon(TrayState::Transcribing)));
+                            tray::set_tray_icon(&tray, TrayState::Transcribing);
                             emit_critical(&app, "ptt-up", ());
                             if let Some(job_id) = job_id_opt {
                                 emit_stage(&app, job_id, "transcribing");
@@ -1339,7 +1339,7 @@ pub(crate) mod common {
                     // Normal discard path — `recording-discarded` is the catch-all
                     // the overlay listens to; `recording-too-short` is the more
                     // specific subtype the main window uses to show a toast.
-                    let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                    tray::set_tray_icon(&tray, TrayState::Idle);
                     session_metrics::record_dictation_discarded();
                     if let DiscardReason::TooShort { duration_ms } = reason {
                         crate::diagnostic_log::emergency_trace(format!(
@@ -1384,7 +1384,7 @@ pub(crate) mod common {
                         }
                     }
                     tracing::warn!("stop ignored: {}", e);
-                    let _ = tray.set_icon(Some(tray::make_icon(TrayState::Idle)));
+                    tray::set_tray_icon(&tray, TrayState::Idle);
                 }
             }
         });

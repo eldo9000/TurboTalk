@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-CERT_NAME="TurboTalk Development"
+CERT_NAME="TurboTalk"
 CERT_DIR="${HOME}/.config/turbotalk/dev-cert"
 KEYCHAIN="${HOME}/Library/Keychains/login.keychain-db"
 

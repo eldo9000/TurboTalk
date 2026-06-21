@@ -1565,7 +1565,7 @@ pub fn run() {
                             hotkey::arm_ptt_up_suppression();
                         }
                         level_rec.cancel_after_device_lost();
-                        let _ = level_tray.set_icon(Some(tray::make_icon(tray::TrayState::Idle)));
+                        tray::set_tray_icon(&level_tray, tray::TrayState::Idle);
                         let _ = level_app.emit("device-lost", ());
                         // `recording-discarded` keeps the overlay's existing
                         // catch-all listener happy without the frontend needing
@@ -1647,14 +1647,13 @@ pub fn run() {
 
             Ok(())
         })
-        // Close button quits while the menu-bar item is not a reliable recovery
-        // surface on this macOS/Tauri combination.
+        // Close hides the main window instead of quitting — the Dock icon is
+        // the reliable way back in since the tray icon does not render on
+        // macOS 26. Right-click Dock → Quit to actually exit.
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() != "main" {
-                    let _ = window.hide();
-                    api.prevent_close();
-                }
+                let _ = window.hide();
+                api.prevent_close();
             }
         })
         .build(tauri::generate_context!())

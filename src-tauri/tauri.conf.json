@@ -1,7 +1,7 @@
 {
   "productName": "Turbo Talk",
   "version": "0.9.8",
-  "identifier": "com.turbotalk.dictation",
+  "identifier": "com.turbotalk.dictation2",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:1431",
@@ -117,7 +117,7 @@
     "createUpdaterArtifacts": false,
     "externalBin": ["binaries/whisper-cli", "binaries/whisper-server"],
     "macOS": {
-      "signingIdentity": "TurboTalk Development",
+      "signingIdentity": "TurboTalk",
       "hardenedRuntime": false,
       "entitlements": "entitlements.plist",
       "infoPlist": "Info.plist"

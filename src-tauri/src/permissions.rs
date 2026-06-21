@@ -469,7 +469,7 @@ pub fn reset_tcc_entry(service: String) -> Result<(), String> {
         let status = std::process::Command::new("tccutil")
             .arg("reset")
             .arg(tcc_service)
-            .arg("com.turbotalk.dictation")
+            .arg("com.turbotalk.dictation2")
             .status()
             .map_err(|e| format!("tccutil failed to launch: {e}"))?;
         if status.success() {
