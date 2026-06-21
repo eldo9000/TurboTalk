@@ -35,6 +35,19 @@ import { invoke } from '@tauri-apps/api/core';
   let showPreview = $derived(
     overlaySize === 'large' && (mode === 'recording' || mode === 'transcribing')
   );
+  let committedPreviewWords = $derived(
+    previewText.trim() ? previewText.trim().split(/\s+/).length : 0
+  );
+  let glyphWordCount = $derived(
+    showPreview ? Math.max(wordCount, committedPreviewWords) : 0
+  );
+  let glyphWords = $derived(
+    Array.from({ length: glyphWordCount }, (_, index) => ({
+      index,
+      width: glyphWidth(index),
+      committed: index < committedPreviewWords,
+    }))
+  );
 
   let transcribeTimer    = null;
   let transcribeTick     = $state(0); // incremented by timer to keep Svelte rendering during transcription
@@ -76,6 +89,11 @@ import { invoke } from '@tauri-apps/api/core';
 
   function fmtElapsed(s) {
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  function glyphWidth(index) {
+    const pattern = [42, 58, 34, 72, 49, 88, 39, 64, 54, 30, 78, 46, 96, 37, 66];
+    return pattern[index % pattern.length];
   }
 
   function startElapsed() {
@@ -758,12 +776,10 @@ import { invoke } from '@tauri-apps/api/core';
     mask-image: linear-gradient(to right, transparent 0%, #000 25%);
   }
 
-  /* Live draft preview box. Floats above the pill (bottom overlay) or below it
-     (top overlay) and grows with the transcript — no clip, no fade. For bottom
-     position the box's bottom edge is pinned just above the pill, so new text
-     pushes the box upward as you talk; for top position the top edge is pinned
-     and it grows downward. The 'large' window (see lib.rs) gives the room to
-     expand. Purpose of this mode: see exactly how much will be pasted. */
+  /* Large-mode preview box. It deliberately renders glyphic word pills instead
+     of readable draft text: immediate progress without pulling the speaker into
+     mid-sentence proofreading. Segment preview text still marks earlier pills
+     as committed when it arrives, but the words stay hidden. */
   .seg-preview {
     position: absolute;
     left: 50%;
@@ -771,7 +787,9 @@ import { invoke } from '@tauri-apps/api/core';
     bottom: calc(100% + 12px);
     width: 984px;
     box-sizing: border-box;
-    padding: 14px 20px;
+    min-height: 86px;
+    max-height: 250px;
+    padding: 18px 20px;
     border-radius: 14px;
     background: rgba(16, 16, 16, 0.87);
     border: 1px solid rgba(255, 255, 255, 0.08);
@@ -779,24 +797,60 @@ import { invoke } from '@tauri-apps/api/core';
     -webkit-backdrop-filter: blur(18px) saturate(160%);
     transition: opacity 180ms ease-out;
     pointer-events: none;
+    overflow: hidden;
   }
   .seg-preview.below {
     bottom: auto;
     top: calc(100% + 12px);
   }
-  .seg-preview-text {
-    font-size: 17px;
-    line-height: 1.45;
-    text-align: left;
-    color: rgba(255, 255, 255, 0.92);
-    word-break: break-word;
-    user-select: none;
+  .glyph-preview {
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-end;
+    align-items: center;
+    gap: 9px 8px;
+    min-height: 50px;
+    max-height: 212px;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 100%);
+    mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 100%);
   }
-  .seg-preview-placeholder {
-    font-size: 16px;
-    font-style: italic;
-    color: rgba(255, 255, 255, 0.4);
-    user-select: none;
+
+  .glyph-word {
+    height: 13px;
+    border-radius: 999px;
+    flex: 0 0 auto;
+    background:
+      linear-gradient(90deg, rgba(255,255,255,0.32), rgba(255,255,255,0.17));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
+    opacity: 0.58;
+    transform: translateY(0);
+    animation: glyph-in 140ms ease-out both;
+  }
+
+  .glyph-word.committed {
+    background:
+      linear-gradient(90deg, rgba(255,255,255,0.62), rgba(255,255,255,0.38));
+    opacity: 0.9;
+  }
+
+  .glyph-cursor {
+    width: 42px;
+    height: 13px;
+    border-radius: 999px;
+    background: rgba(248, 113, 113, 0.44);
+    box-shadow: 0 0 16px rgba(248, 113, 113, 0.32);
+    animation: glyph-cursor 1.05s ease-in-out infinite;
+  }
+
+  @keyframes glyph-in {
+    0% { transform: translateY(4px) scaleX(0.7); }
+    100% { transform: translateY(0) scaleX(1); }
+  }
+
+  @keyframes glyph-cursor {
+    0%, 100% { opacity: 0.25; }
+    50% { opacity: 0.9; }
   }
 
 </style>
@@ -822,10 +876,23 @@ import { invoke } from '@tauri-apps/api/core';
       class:below={overlayPosition === 'top'}
       style:opacity={isPeeking ? 0.12 : 1}
     >
-      {#if previewText}
-        <span class="seg-preview-text">{previewText}</span>
+      {#if glyphWords.length > 0}
+        <div class="glyph-preview" aria-hidden="true">
+          {#each glyphWords as word (word.index)}
+            <span
+              class="glyph-word"
+              class:committed={word.committed}
+              style:width={`${word.width}px`}
+            ></span>
+          {/each}
+          {#if mode === 'recording'}
+            <span class="glyph-cursor"></span>
+          {/if}
+        </div>
       {:else}
-        <span class="seg-preview-placeholder">Listening…</span>
+        <div class="glyph-preview" aria-hidden="true">
+          <span class="glyph-cursor"></span>
+        </div>
       {/if}
     </div>
   {/if}

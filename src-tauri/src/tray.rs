@@ -14,15 +14,6 @@ pub enum TrayState {
 }
 
 pub fn make_icon(state: TrayState) -> Image<'static> {
-    // All platforms: use the bundled PNG for the idle state. macOS menu bar
-    // renders @2x PNGs correctly; the tray-icon crate resizes to 18pt height.
-    if matches!(state, TrayState::Idle) {
-        return Image::from_bytes(include_bytes!("../icons/128x128@2x.png"))
-            .expect("embedded tray icon");
-    }
-
-    // Recording / Transcribing: generate pixel buffers. The label/overlay
-    // approach avoids maintaining separate colored PNGs for each state.
     #[cfg(target_os = "windows")]
     let size = 32u32;
     #[cfg(not(target_os = "windows"))]
@@ -33,15 +24,16 @@ pub fn make_icon(state: TrayState) -> Image<'static> {
     #[cfg(target_os = "windows")]
     fill_opaque(&mut px, size, 17, 17, 17);
 
-    // macOS: white-on-clear template icons (alpha channel only; system picks
-    // the right color for light/dark mode).
+    // macOS: non-template mode so actual RGB colors render (red for recording,
+    // amber for transcribing). Idle is fully transparent — the .title("TT")
+    // text is the visible element on the menu bar.
     match state {
+        TrayState::Idle => {}
         TrayState::Recording => {
-            fill_circle(&mut px, size, 255, 255, 255);
+            fill_circle(&mut px, size, 248, 68, 68);
             draw_x(&mut px, size);
         }
-        TrayState::Transcribing => fill_circle(&mut px, size, 255, 255, 255),
-        _ => {} // idle handled above
+        TrayState::Transcribing => fill_circle(&mut px, size, 251, 191, 36),
     }
 
     Image::new_owned(px, size, size)
@@ -112,11 +104,6 @@ pub fn build(app: &tauri::App) -> tauri::Result<TrayIcon> {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .tooltip("TurboTalk")
-        // macOS: treat as template image (alpha-channel only) so the system
-        // renders the icon with proper contrast in light/dark mode. Without
-        // this, the generated pixel buffer gets rendered as a tiny dark
-        // square that's invisible on the menu bar.
-        .icon_as_template(true)
         .on_tray_icon_event(move |tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -185,15 +172,10 @@ pub fn build(app: &tauri::App) -> tauri::Result<TrayIcon> {
     Ok(tray_icon)
 }
 
-/// Set the tray icon state, re-applying the macOS template flag after every
-/// state transition. The tray-icon crate's `set_icon()` hardcodes
-/// `icon_is_template = false` on macOS — this wrapper restores it.
+/// Set the tray icon state. Uses non-template images so the actual RGB colors
+/// render (red recording circle, amber transcribing circle).
 pub fn set_tray_icon(tray: &TrayIcon, state: TrayState) {
     let _ = tray.set_icon(Some(make_icon(state)));
-    #[cfg(target_os = "macos")]
-    {
-        let _ = tray.set_icon_as_template(true);
-    }
 }
 
 // ── Pixel helpers ─────────────────────────────────────────────────────────────
@@ -219,39 +201,10 @@ fn set(px: &mut [u8], w: u32, x: u32, y: u32, r: u8, g: u8, b: u8, a: u8) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn rect(px: &mut [u8], w: u32, x: u32, y: u32, rw: u32, rh: u32, r: u8, g: u8, b: u8) {
-    for row in y..y + rh {
-        for col in x..x + rw {
-            set(px, w, col, row, r, g, b, 255);
-        }
-    }
-}
-
 // ── "TT" glyph ───────────────────────────────────────────────────────────────
-
-fn draw_t(px: &mut [u8], w: u32, ox: u32, oy: u32, lw: u32, lh: u32, bar_h: u32, stem_w: u32) {
-    rect(px, w, ox, oy, lw, bar_h, 255, 255, 255);
-    rect(px, w, ox + (lw - stem_w) / 2, oy + bar_h, stem_w, lh - bar_h, 255, 255, 255);
-}
-
-fn draw_tt(px: &mut [u8], w: u32) {
-    // Scale glyph dimensions proportionally from the 44px reference design.
-    let s = w as f32 / 44.0;
-    let lw = (10.0 * s).round().max(2.0) as u32;
-    let lh = (16.0 * s).round().max(3.0) as u32;
-    let bar_h = (3.0 * s).round().max(1.0) as u32;
-    let stem_w = (4.0 * s).round().max(1.0) as u32;
-    let gap = (4.0 * s).round().max(1.0) as u32;
-    let total = lw * 2 + gap;
-    if total >= w {
-        return;
-    }
-    let ox = (w - total) / 2;
-    let oy = (w - lh) / 2;
-    draw_t(px, w, ox, oy, lw, lh, bar_h, stem_w);
-    draw_t(px, w, ox + lw + gap, oy, lw, lh, bar_h, stem_w);
-}
+// Note: the "TT" text is set via .title("TT") on the TrayIconBuilder, not
+// drawn into the pixel buffer. Idle state uses a transparent pixel buffer
+// so only the title text is visible in the menu bar.
 
 // ── Filled circle (anti-aliased edge) ─────────────────────────────────────────
 
@@ -273,8 +226,8 @@ fn fill_circle(px: &mut [u8], size: u32, r: u8, g: u8, b: u8) {
 
 fn draw_x(px: &mut [u8], size: u32) {
     let cx = size as f32 / 2.0;
-    let arm = 10.0f32; // Euclidean half-arm length in pixels
-    let half_w = 2.0f32; // line half-width in pixels
+    let arm = 5.0f32; // Euclidean half-arm length in pixels
+    let half_w = 1.0f32; // line half-width in pixels
     let s = std::f32::consts::SQRT_2;
 
     for y in 0..size {

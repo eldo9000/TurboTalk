@@ -1,7 +1,15 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-06-20 (git history cleanup: see below)  
-**Current state:** IOHID keyboard fallback is active and user-proven for the ad-hoc `/Applications/Turbo Talk.app`. Right Option dictation works through Input Monitoring. Automatic paste is still blocked when macOS reports `AXIsProcessTrusted() == false`, but the fallback copy path is now verified: TurboTalk writes the transcript to the system clipboard and tells the user to press Command-V.
+**Last updated:** 2026-06-21 (large overlay glyph preview)  
+**Current state:** IOHID keyboard fallback is active and user-proven for the ad-hoc `/Applications/Turbo Talk.app`. Right Option dictation works through Input Monitoring. Ad-hoc macOS auto-paste is user-proven via Session tap. Large overlay mode now has an audio-driven glyph preview: word-shaped pills appear immediately while speaking, and existing segment-preview results only brighten committed pills instead of showing readable draft text.
+
+## Next action
+
+Run one large-overlay dictation by eye: set overlay size to Large, hold Right Option for a paragraph, and confirm the pill stream feels immediate without readable distraction; success signal is that pills appear during speech before any delayed segment text lands, then dictation still pastes normally.
+
+## Latest session proof
+
+2026-06-21: Implemented the large-overlay glyph preview only in `src/Overlay.svelte`; no backend behavior changed. `npm run typecheck` passed. `npm run build` passed with the existing tolerated top-level-await transform warnings from `src/main.js`.
 
 ## Open backlog
 
