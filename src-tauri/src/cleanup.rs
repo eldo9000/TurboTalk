@@ -93,7 +93,11 @@ pub fn process(raw: &str, app: &tauri::AppHandle) -> String {
     }
 
     let cfg = crate::settings::load();
-    match cfg.cleanup.mode {
+
+    // Apply antivocabulary replacements as a post-pass — consistent across
+    // all cleanup modes (off, regex, chaperone). Each entry is either a bare
+    // word (removed) or a "from→to" pair (replaced).
+    let result = match cfg.cleanup.mode {
         crate::settings::CleanupMode::Off => handle_raw(trimmed),
         crate::settings::CleanupMode::Regex => handle_prose(trimmed, &cfg.cleanup),
         crate::settings::CleanupMode::Chaperone => match classify_blocking(trimmed, &cfg.cleanup) {
@@ -111,7 +115,9 @@ pub fn process(raw: &str, app: &tauri::AppHandle) -> String {
                 handle_raw(trimmed)
             }
         },
-    }
+    };
+
+    apply_antivocabulary(&result, &cfg.cleanup.antivocabulary)
 }
 
 // ── Voice command detection ───────────────────────────────────────────────────
@@ -325,6 +331,56 @@ fn capitalize_first(s: &str) -> String {
     let mut chars = s.chars();
     let first = chars.next().unwrap().to_uppercase().to_string();
     first + chars.as_str()
+}
+
+// ── Anti-vocabulary ───────────────────────────────────────────────────────────
+//
+// Post-processing replacements applied after all cleanup modes. Each entry is
+// either a bare word (removed entirely as a word-level token) or a "from→to"
+// pair (replaced). Case-insensitive matching on word boundaries.
+
+fn apply_antivocabulary(text: &str, rules: &[String]) -> String {
+    if rules.is_empty() || text.is_empty() {
+        return text.to_string();
+    }
+    let mut result = text.to_string();
+    for rule in rules {
+        let rule = rule.trim();
+        if rule.is_empty() {
+            continue;
+        }
+        if let Some(pos) = rule.find('→') {
+            let from = rule[..pos].trim();
+            let to = rule[pos + 3..].trim();
+            if from.is_empty() {
+                continue;
+            }
+            // Word-boundary replacement: replace "from" with "to" only when
+            // it appears as a whole word (not as a substring of another word).
+            result = replace_word(&result, from, to);
+        } else {
+            // Bare word: remove it entirely (word-level).
+            result = replace_word(&result, rule, "");
+        }
+    }
+    result.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Replace all occurrences of `from` as a whole word (case-insensitive) with
+/// `to`. Operates on word boundaries so "grok" doesn't match "groking".
+fn replace_word(text: &str, from: &str, to: &str) -> String {
+    if from.is_empty() {
+        return text.to_string();
+    }
+    let pattern = format!(
+        r"(?i)(?<!\w){}(?!\w)",
+        regex::escape(from)
+    );
+    let re = match regex::Regex::new(&pattern) {
+        Ok(r) => r,
+        Err(_) => return text.to_string(),
+    };
+    re.replace_all(text, to).to_string()
 }
 
 // ── Ollama classifier ─────────────────────────────────────────────────────────

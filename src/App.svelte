@@ -345,6 +345,7 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgOllamaUrl            = $state('');
   let cfgLlmModel             = $state('');
   let cfgVocabulary           = $state('');
+  let cfgAntiVocabulary       = $state('');
   let cfgClassifierPrompt     = $state('');
   let showPromptEditor        = $state(false);
   let modesSaveMsg            = $state('');
@@ -858,6 +859,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfgOllamaUrl        = cfg.cleanup?.ollama_url                 ?? '';
     cfgLlmModel         = cfg.cleanup?.classifier_model           ?? '';
     cfgVocabulary       = (cfg.cleanup?.vocabulary ?? []).join('\n');
+    cfgAntiVocabulary   = (cfg.cleanup?.antivocabulary ?? []).join('\n');
     cfgClassifierPrompt = cfg.cleanup?.classifier_prompt          ?? DEFAULT_CLASSIFIER_PROMPT;
     modesSaveMsg = '';
   }
@@ -870,6 +872,7 @@ Reply with only the single word, lowercase, no punctuation.
         ollama_url: 'http://localhost:11434',
         classifier_model: 'llama3.2:3b',
         vocabulary: [],
+        antivocabulary: [],
         classifier_prompt: DEFAULT_CLASSIFIER_PROMPT,
       };
     }
@@ -880,6 +883,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfg.cleanup.ollama_url              = cfgOllamaUrl;
     cfg.cleanup.classifier_model        = cfgLlmModel;
     cfg.cleanup.vocabulary              = cfgVocabulary.split('\n').map(s => s.trim()).filter(Boolean);
+    cfg.cleanup.antivocabulary          = cfgAntiVocabulary.split('\n').map(s => s.trim()).filter(Boolean);
     cfg.cleanup.classifier_prompt       = cfgClassifierPrompt;
     const res = await commands.saveConfig(cfg);
     modesSaveMsg = res.status === 'ok' ? 'Saved.' : 'Error: ' + res.error;
@@ -1102,6 +1106,7 @@ Reply with only the single word, lowercase, no punctuation.
 
   function modesState() {
     return {
+      cfgBackend,
       cfgCleanupMode,
       cfgStripFillers,
       cfgAppendPeriod,
@@ -1109,6 +1114,7 @@ Reply with only the single word, lowercase, no punctuation.
       cfgOllamaUrl,
       cfgLlmModel,
       cfgVocabulary,
+      cfgAntiVocabulary,
       cfgClassifierPrompt,
       activePresetId,
       cfgVadEnabled,
@@ -1131,6 +1137,7 @@ Reply with only the single word, lowercase, no punctuation.
       setStripArtifacts: (v) => { cfgStripArtifacts = v; saveModes(); },
       setVadEnabled: (v) => { cfgVadEnabled = v; saveModes(); },
       setVocabulary: (v) => { cfgVocabulary = v; saveModes(); },
+      setAntiVocabulary: (v) => { cfgAntiVocabulary = v; saveModes(); },
       setOllamaUrl: (v) => { cfgOllamaUrl = v; saveModes(); },
       setLlmModel: (v) => { cfgLlmModel = v; saveModes(); },
       setClassifierPrompt: (v) => { cfgClassifierPrompt = v; saveModes(); },

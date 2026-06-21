@@ -103,7 +103,7 @@ Reply with only the single word, lowercase, no punctuation.
       {/if}
     </div>
 
-    <div class="tt-section {state.cfgCleanupMode === 'chaperone' ? '' : 'tt-section-last'}">
+    <div class="tt-section {state.cfgCleanupMode === 'chaperone' ? '' : 'tt-section-last'}" class:tt-muted={state.cfgBackend !== 'whisper'}>
       <div class="subsection-hd"><span class="subsection-hd-title">Whisper</span></div>
       <div class="tt-row tt-row-field" data-tip="Skip silent regions before transcription — prevents hallucination on silence and speeds up long recordings">
         <span class="tt-lbl">Silence Filter</span>
@@ -111,6 +111,7 @@ Reply with only the single word, lowercase, no punctuation.
           <button
             onclick={() => actions.setVadEnabled(!state.cfgVadEnabled)}
             class="tt-multi-btn" class:tt-multi-on={state.cfgVadEnabled}
+            disabled={state.cfgBackend !== 'whisper'}
             data-tip="Silero VAD pre-filter — when on, whisper-server skips silent regions before transcribing">Skip silent regions (VAD)</button>
         </div>
       </div>
@@ -121,11 +122,32 @@ Reply with only the single word, lowercase, no punctuation.
           value={state.cfgVocabulary}
           onchange={(e) => actions.setVocabulary(e.currentTarget.value)}
           rows="4"
-          placeholder={"One word or phrase per line…\nTurbo Talk\nOllama\nggml-base"}
+          placeholder={"One word or phrase per line…\nTurbo Talk\nOllama\ggml-base"}
           class="tt-input tt-mono"
+          disabled={state.cfgBackend !== 'whisper'}
           spellcheck="false"
         ></textarea>
         <p class="tt-desc">Domain terms Whisper tends to mishear. Applied as <code class="tt-code">--prompt</code> bias every transcription.</p>
+      </div>
+      {#if state.cfgBackend !== 'whisper'}
+        <p class="tt-yellow">Silence Filter and Custom vocabulary require the Whisper backend. Switch to Whisper in Models → Transcription Engine.</p>
+      {/if}
+    </div>
+
+    <div class="tt-section tt-section-last">
+      <div class="subsection-hd"><span class="subsection-hd-title">Corrections</span></div>
+      <div class="tt-row tt-row-col">
+        <label for="anti-vocabulary" class="tt-lbl tt-lbl-fixed">Anti-vocabulary</label>
+        <textarea
+          id="anti-vocabulary"
+          value={state.cfgAntiVocabulary}
+          onchange={(e) => actions.setAntiVocabulary(e.currentTarget.value)}
+          rows="3"
+          placeholder={"One per line. Bare word = removed; from→to = replaced.\ngroq→grok\nfluant→fluent"}
+          class="tt-input tt-mono"
+          spellcheck="false"
+        ></textarea>
+        <p class="tt-desc">Words to fix or remove after transcription — works with any backend. Use <code class="tt-code">word→replacement</code> to replace, or just <code class="tt-code">word</code> to drop it entirely.</p>
       </div>
     </div>
   </div>

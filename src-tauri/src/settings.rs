@@ -196,6 +196,12 @@ pub struct CleanupConfig {
     /// Simple mode: strip common filler words (um, uh, er, hmm).
     #[serde(default = "default_true")]
     pub strip_fillers: bool,
+    /// Anti-vocabulary: word-to-word replacement or word removal applied after
+    /// all other cleanup. Each entry is either a bare word (removed entirely)
+    /// or a "from→to" pair (replaced). Intended for persistent spelling errors
+    /// from the transcriber (e.g. "groq→grok").
+    #[serde(default)]
+    pub antivocabulary: Vec<String>,
     /// Simple mode: append a period if the transcript ends without punctuation.
     #[serde(default)]
     pub append_period: bool,
@@ -264,6 +270,7 @@ impl Default for CleanupConfig {
             ollama_url: "http://localhost:11434".into(),
             classifier_model: "llama3.2:3b".into(),
             vocabulary: vec![],
+            antivocabulary: vec![],
             classifier_prompt: default_classifier_prompt(),
             strip_fillers: true,
             append_period: false,

@@ -218,3 +218,7 @@ pub fn spawn(
 pub fn accessibility_trusted() -> bool {
     true
 }
+
+pub fn iohid_listener_running() -> bool {
+    false // IOHID is macOS-only; Input Monitoring is Unsupported on Windows
+}

@@ -109,6 +109,7 @@ sha2            = "0.10"
 specta            = { version = "=2.0.0-rc.24", features = ["derive"] }
 specta-typescript = "=0.0.11"
 tauri-specta      = { version = "=2.0.0-rc.24", features = ["derive", "typescript"] }
+regex = "1.12.4"
 
 # macOS-only dependencies. `core-graphics` and `core-foundation` underpin the
 # CGEventTap-based push-to-talk hotkey in `src/hotkey.rs`. Both crates use

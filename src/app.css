@@ -675,6 +675,13 @@ html.dark .tt-model-star-lbl { color: #facc15; }
 .tt-warn { color: #f87171; font-size: 11px; }
 html:not(.dark) .tt-warn { color: #dc2626; }
 
+/* ── Muted section (backend-gated features) ────────────────────────── */
+.tt-muted { opacity: 0.45; pointer-events: none; }
+
+/* ── Yellow notice text ────────────────────────────────────────────── */
+.tt-yellow { color: #eab308; font-size: 11px; margin-top: 4px; padding: 4px 0; }
+html:not(.dark) .tt-yellow { color: #a16207; }
+
 /* ── History tab ─────────────────────────────────────────────────────── */
 .tt-history {
   font-size: 13px;

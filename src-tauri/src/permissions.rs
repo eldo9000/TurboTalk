@@ -125,6 +125,13 @@ fn input_monitoring_status() -> PermissionStatus {
     match status {
         K_IOHID_ACCESS_TYPE_GRANTED => PermissionStatus::Granted,
         K_IOHID_ACCESS_TYPE_DENIED => PermissionStatus::Denied,
+        // TCC can transiently return Unknown after a binary update while it
+        // re-verifies the code signature. If the IOHID listener is already
+        // running, Input Monitoring is effectively granted — override Unknown
+        // so the welcome screen doesn't re-appear on every rebuild.
+        K_IOHID_ACCESS_TYPE_UNKNOWN if crate::hotkey::iohid_listener_running() => {
+            PermissionStatus::Granted
+        }
         K_IOHID_ACCESS_TYPE_UNKNOWN => PermissionStatus::NotDetermined,
         _ => PermissionStatus::Denied,
     }
@@ -312,7 +319,22 @@ pub fn check_readiness() -> Readiness {
     fn ok(s: PermissionStatus) -> bool {
         matches!(s, PermissionStatus::Granted | PermissionStatus::Unsupported)
     }
-    let ready = ok(accessibility) && ok(input_monitoring) && ok(microphone) && model_present;
+    // Input Monitoring: if the IOHID listener is already running, the hotkey
+    // works regardless of what IOHIDCheckAccess reports. TCC can show Denied
+    // for a freshly-rebuilt binary (stale code-hash entry) while the listener
+    // is actively delivering events.
+    let input_monitoring_ok =
+        ok(input_monitoring) || crate::hotkey::iohid_listener_running();
+    // Microphone: only block on explicit Denied. NotDetermined means cpal has
+    // not yet prompted, or AVFoundation's TCC view of a cpal-granted permission
+    // is stale. Either way the audio stream will open (or prompt) on first use.
+    let microphone_ok = !matches!(microphone, PermissionStatus::Denied);
+    let ready = ok(accessibility) && input_monitoring_ok && microphone_ok && model_present;
+    tracing::info!(
+        "[readiness] accessibility={:?} input_monitoring={:?}(ok={}) microphone={:?}(ok={}) model_present={} iohid_running={} ready={}",
+        accessibility, input_monitoring, input_monitoring_ok, microphone, microphone_ok,
+        model_present, crate::hotkey::iohid_listener_running(), ready
+    );
     Readiness {
         accessibility,
         automatic_paste,

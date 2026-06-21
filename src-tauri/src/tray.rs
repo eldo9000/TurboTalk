@@ -27,8 +27,11 @@ pub fn make_icon(state: TrayState) -> Image<'static> {
 
     #[cfg(target_os = "windows")]
     let size = 32u32;
+    // macOS menu bar height is ~22pt logical. Tauri passes width/height as
+    // NSImage logical points, so 44pt would overflow the bar and get clipped.
+    // Use 22×22 so the icon fits at its natural size.
     #[cfg(not(target_os = "windows"))]
-    let size = 44u32;
+    let size = 22u32;
 
     let mut px = vec![0u8; (size * size * 4) as usize];
 
@@ -220,29 +223,27 @@ fn rect(px: &mut [u8], w: u32, x: u32, y: u32, rw: u32, rh: u32, r: u8, g: u8, b
 
 // ── "TT" glyph ───────────────────────────────────────────────────────────────
 
-fn draw_t(px: &mut [u8], w: u32, ox: u32, oy: u32) {
-    // 10 wide × 16 tall, white
-    let (lw, lh, bar_h, stem_w) = (10u32, 16u32, 3u32, 4u32);
-    rect(px, w, ox, oy, lw, bar_h, 255, 255, 255); // top bar
-    rect(
-        px,
-        w,
-        ox + (lw - stem_w) / 2,
-        oy + bar_h,
-        stem_w,
-        lh - bar_h,
-        255,
-        255,
-        255,
-    ); // stem
+fn draw_t(px: &mut [u8], w: u32, ox: u32, oy: u32, lw: u32, lh: u32, bar_h: u32, stem_w: u32) {
+    rect(px, w, ox, oy, lw, bar_h, 255, 255, 255);
+    rect(px, w, ox + (lw - stem_w) / 2, oy + bar_h, stem_w, lh - bar_h, 255, 255, 255);
 }
 
 fn draw_tt(px: &mut [u8], w: u32) {
-    let (lw, lh, gap) = (10u32, 16u32, 4u32);
-    let ox = (w - lw * 2 - gap) / 2;
+    // Scale glyph dimensions proportionally from the 44px reference design.
+    let s = w as f32 / 44.0;
+    let lw = (10.0 * s).round().max(2.0) as u32;
+    let lh = (16.0 * s).round().max(3.0) as u32;
+    let bar_h = (3.0 * s).round().max(1.0) as u32;
+    let stem_w = (4.0 * s).round().max(1.0) as u32;
+    let gap = (4.0 * s).round().max(1.0) as u32;
+    let total = lw * 2 + gap;
+    if total >= w {
+        return;
+    }
+    let ox = (w - total) / 2;
     let oy = (w - lh) / 2;
-    draw_t(px, w, ox, oy);
-    draw_t(px, w, ox + lw + gap, oy);
+    draw_t(px, w, ox, oy, lw, lh, bar_h, stem_w);
+    draw_t(px, w, ox + lw + gap, oy, lw, lh, bar_h, stem_w);
 }
 
 // ── Filled circle (anti-aliased edge) ─────────────────────────────────────────
