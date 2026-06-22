@@ -78,6 +78,10 @@ pub struct Config {
     /// `resolve_backend_variant`.
     #[serde(default)]
     pub backend_variant: String,
+    /// Pause media playback (music, podcasts) when dictation starts, then
+    /// resume when the transcript is pasted. Defaults on.
+    #[serde(default = "default_true")]
+    pub pause_media_on_dictate: bool,
 }
 
 fn default_sound_volume() -> f32 {
@@ -386,6 +390,7 @@ impl Default for Config {
             sound_volume: 0.5,
             backend: BackendFamily::default(),
             backend_variant: String::new(),
+            pause_media_on_dictate: true,
         }
     }
 }

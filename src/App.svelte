@@ -478,6 +478,7 @@ Reply with only the single word, lowercase, no punctuation.
   let cfgVadEnabled        = $state(true);
   let cfgBackend           = $state('parakeet'); // 'whisper' | 'parakeet'
   let cfgBackendVariant    = $state('');
+  let cfgPauseMediaOnDictate = $state(true);
   let readinessModelPresent = $state(false);
 
   const DEFAULT_PARAKEET_VARIANT = 'tdt-0.6b-v2';
@@ -999,6 +1000,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfgVadEnabled        = cfg.whisper?.vad_enabled             ?? true;
     cfgBackend           = cfg.backend                          ?? 'parakeet';
     cfgBackendVariant    = cfg.backend_variant                   ?? '';
+    cfgPauseMediaOnDictate = cfg.pause_media_on_dictate          ?? true;
     cfgLaunchLogin       = launch;
     audioDevices         = devs;
     settingsSaveMsg      = '';
@@ -1030,6 +1032,7 @@ Reply with only the single word, lowercase, no punctuation.
     cfg.whisper.vad_enabled           = cfgVadEnabled;
     cfg.backend                       = cfgBackend;
     cfg.backend_variant               = cfgBackendVariant;
+    cfg.pause_media_on_dictate        = cfgPauseMediaOnDictate;
     const saveRes = await commands.saveConfig(cfg);
     if (saveRes.status === 'error') {
       settingsSaveMsg = 'Error: ' + saveRes.error;
@@ -1724,6 +1727,15 @@ Reply with only the single word, lowercase, no punctuation.
                 onclick={() => { cfgSoundOnError = !cfgSoundOnError; saveSettings(); }}
                 class="tt-multi-btn" class:tt-multi-on={cfgSoundOnError}
                 data-tip="Play a low beep when dictation has errors">on Error</button>
+            </div>
+          </div>
+          <div class="tt-row tt-row-field" data-tip="Pause music/podcasts while dictating and resume after paste">
+            <span class="tt-lbl">Media</span>
+            <div class="tt-multi">
+              <button
+                onclick={() => { cfgPauseMediaOnDictate = !cfgPauseMediaOnDictate; saveSettings(); }}
+                class="tt-multi-btn" class:tt-multi-on={cfgPauseMediaOnDictate}
+                data-tip="Pause playback during dictation, resume after">Pause on Dictate</button>
             </div>
           </div>
           <div class="tt-row tt-row-field tt-row-col" data-tip="Volume for audio notification chimes">

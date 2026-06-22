@@ -581,6 +581,11 @@ pub(crate) mod common {
 
             session_metrics::record_hotkey_down();
 
+            // Pause media playback before capture starts.
+            if crate::settings::load().pause_media_on_dictate {
+                crate::media_control::pause();
+            }
+
             if let Err(e) = rec.start() {
                 crate::diagnostic_log::emergency_trace(format!(
                     "[ptt_down] rec.start failed state={} err={e}",
@@ -848,6 +853,11 @@ pub(crate) mod common {
                     "Couldn't paste — check Accessibility permission".to_string(),
                 );
             }
+        }
+
+        // Resume media playback after paste completes.
+        if crate::settings::load().pause_media_on_dictate {
+            crate::media_control::resume();
         }
 
         // End of lifecycle.

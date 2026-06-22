@@ -17,6 +17,7 @@ pub mod diagnostic_log;
 pub mod diagnostics;
 pub mod hotkey;
 pub mod macos_input_monitoring;
+pub mod media_control;
 pub mod ollama;
 pub mod paste;
 pub mod permissions;
