@@ -1428,6 +1428,17 @@ pub fn run() {
             permissions::reset_tcc_entry,
         ])
         .setup(|app| {
+            // ── Hide dock icon (tray-only app) ─────────────────────────────
+            #[cfg(target_os = "macos")]
+            {
+                use objc2::msg_send;
+                let app_cls = objc2::class!(NSApplication);
+                let shared_app: *mut objc2::runtime::AnyObject =
+                    unsafe { msg_send![app_cls, sharedApplication] };
+                // NSApplicationActivationPolicyAccessory = 1 (no dock icon)
+                unsafe { msg_send![shared_app, setActivationPolicy: 1i64] }
+            }
+
             // ── Tray icon ──────────────────────────────────────────────────
             let tray_icon = crate::tray::build(app)?;
 
