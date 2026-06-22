@@ -34,6 +34,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+cc = "1"
 
 [dev-dependencies]
 # Serializes tests that mutate the process-wide settings cache (TASK-38).
