@@ -1,6 +1,6 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-06-21 (large overlay glyph preview)  
+**Last updated:** 2026-06-22 (tray icon consolidation)  
 **Current state:** IOHID keyboard fallback is active and user-proven for the ad-hoc `/Applications/Turbo Talk.app`. Right Option dictation works through Input Monitoring. Ad-hoc macOS auto-paste is user-proven via Session tap. Large overlay mode now has an audio-driven glyph/text preview: live speech appears as word-shaped pills, paused segment commits become readable text, and the live pill cursor continues from the committed edge. Live pill widths use a lorem-ipsum word-length sequence, preview/audio panels are both fixed to 984px, and the live pill rate now adapts after segment commits instead of assuming one speaking speed.
 
 ## Next action
@@ -114,6 +114,12 @@ the flag is `flaky=true` (full rejection — still pasted with stronger warning)
 
 This matches the existing "flaky" philosophy at the original lines 1163-1191:
 "the garbage text is still more useful than appearing to have done nothing."
+
+## This session (2026-06-22)
+
+**Tray icon fix:** The tray was rendering as two visual slots — an empty icon space on the left and the `.title("TT")` text on the right — because removing `.icon_as_template(true)` made the transparent idle pixel buffer visible as a dark square. Removed `.title("TT")`, restored the `draw_tt` pixel-glyph function, and toggled `.icon_as_template` by state: template mode for idle (system-colored "TT" text), non-template for recording/transcribing (actual red/amber circles). Single icon slot, clean. Commit `714f429`.
+
+**Window sizing fix:** Removed the `$effect` block in `src/App.svelte` that called `applyWindowSizing()` on every tab switch. The Settings tab's content-fitting code was forcing the window to a measured height, creating a jarring resize on tab switch. Only the zoom-level `$effect` now triggers `applyWindowSizing()`. Commit `<pending>`.
 
 ## Outstanding
 - Tray icon may still not be visible on user's display — needs user confirmation. Check both monitors and any Bartender/Ice/Hidden Bar software.

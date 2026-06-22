@@ -691,13 +691,7 @@ Reply with only the single word, lowercase, no punctuation.
     void applyWindowSizing();
   });
 
-  // Re-fit the window height whenever the active tab changes (the Settings tab
-  // clips to its content; other tabs fall back to the 2× cap).
-  $effect(() => {
-    activeTab; // track
-    if (showOnboarding) return;
-    void applyWindowSizing();
-  });
+
 
   function zoomIn()  { if (zoomIdx < ZOOM_LEVELS.length - 1) zoomIdx++; }
   function zoomOut() { if (zoomIdx > 0) zoomIdx--; }
