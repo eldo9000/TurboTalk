@@ -21,21 +21,33 @@ fn helper_path() -> Option<PathBuf> {
 fn toggle() {
     let path = match helper_path() {
         Some(p) => p,
-        None => return,
+        None => {
+            tracing::warn!("[media_control] helper binary not found next to exe");
+            return;
+        }
     };
-    let _ = Command::new(&path).output();
+    tracing::debug!("[media_control] toggling via {:?}", path);
+    if let Err(e) = Command::new(&path).output() {
+        tracing::warn!("[media_control] helper failed: {e}");
+    }
 }
 
-/// Check if a media app is currently playing. Only queries running apps
-/// to avoid launching anything.
+/// Check if a media app is currently playing without launching anything.
 #[cfg(target_os = "macos")]
 fn is_playing() -> bool {
+    // Fast check using pgrep before touching osascript
     for app in &["Music", "Spotify"] {
+        let running = Command::new("pgrep")
+            .args(["-x", app])
+            .output()
+            .ok()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !running {
+            continue;
+        }
         let out = Command::new("osascript")
-            .args(["-e", &format!(
-                r#"tell application "System Events" to if exists (process "{}") then tell application "{}" to get player state"#,
-                app, app
-            )])
+            .args(["-e", &format!(r#"tell application "{}" to get player state"#, app)])
             .output();
         if let Ok(out) = out {
             if let Ok(s) = String::from_utf8(out.stdout) {
@@ -65,10 +77,8 @@ pub fn pause() {
 /// Only toggles if we paused something earlier.
 pub fn resume() {
     if !WAS_PLAYING.load(std::sync::atomic::Ordering::Acquire) {
-        tracing::debug!("[media_control] nothing was paused, skipping resume");
         return;
     }
-    // Let audio quality settle after recording before resuming playback.
     std::thread::sleep(std::time::Duration::from_millis(500));
     tracing::debug!("[media_control] resuming playback");
     toggle();
