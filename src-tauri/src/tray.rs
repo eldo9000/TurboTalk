@@ -7,6 +7,7 @@ use tauri::{
     Emitter, Manager,
 };
 
+#[derive(Clone, Copy, PartialEq)]
 pub enum TrayState {
     Idle,
     Recording,
@@ -24,11 +25,11 @@ pub fn make_icon(state: TrayState) -> Image<'static> {
     #[cfg(target_os = "windows")]
     fill_opaque(&mut px, size, 17, 17, 17);
 
-    // macOS: non-template mode so actual RGB colors render (red for recording,
-    // amber for transcribing). Idle is fully transparent — the .title("TT")
-    // text is the visible element on the menu bar.
+    // Idle: draw "TT" glyph with template mode so macOS renders it in the
+    // system menu bar text color. Recording/Transcribing: non-template mode
+    // so actual RGB colors render (red circle, amber circle).
     match state {
-        TrayState::Idle => {}
+        TrayState::Idle => draw_tt(&mut px, size),
         TrayState::Recording => {
             fill_circle(&mut px, size, 248, 68, 68);
             draw_x(&mut px, size);
@@ -37,6 +38,126 @@ pub fn make_icon(state: TrayState) -> Image<'static> {
     }
 
     Image::new_owned(px, size, size)
+}
+
+// ── Pixel helpers ─────────────────────────────────────────────────────────────
+// Pixel-buffer plotters take RGBA + position + size — naturally many args.
+
+#[cfg(target_os = "windows")]
+fn fill_opaque(px: &mut [u8], w: u32, r: u8, g: u8, b: u8) {
+    for y in 0..w {
+        for x in 0..w {
+            set(px, w, x, y, r, g, b, 255);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn set(px: &mut [u8], w: u32, x: u32, y: u32, r: u8, g: u8, b: u8, a: u8) {
+    if x < w && y < w {
+        let i = ((y * w + x) * 4) as usize;
+        px[i] = r;
+        px[i + 1] = g;
+        px[i + 2] = b;
+        px[i + 3] = a;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rect(px: &mut [u8], w: u32, x: u32, y: u32, rw: u32, rh: u32, r: u8, g: u8, b: u8) {
+    for row in y..y + rh {
+        for col in x..x + rw {
+            set(px, w, col, row, r, g, b, 255);
+        }
+    }
+}
+
+// ── "TT" glyph ───────────────────────────────────────────────────────────────
+// Draws "TT" into the pixel buffer for the idle state. The icon uses template
+// mode so macOS renders it in the system menu bar text color. Recording and
+// transcribing states use non-template icons so actual RGB colors show.
+
+fn draw_t(px: &mut [u8], w: u32, ox: u32, oy: u32, lw: u32, lh: u32, bar_h: u32, stem_w: u32) {
+    rect(px, w, ox, oy, lw, bar_h, 255, 255, 255);
+    rect(
+        px,
+        w,
+        ox + (lw - stem_w) / 2,
+        oy + bar_h,
+        stem_w,
+        lh - bar_h,
+        255,
+        255,
+        255,
+    );
+}
+
+fn draw_tt(px: &mut [u8], w: u32) {
+    // Scale glyph dimensions proportionally from the 44px reference design.
+    let s = w as f32 / 44.0;
+    let lw = (10.0 * s).round().max(2.0) as u32;
+    let lh = (16.0 * s).round().max(3.0) as u32;
+    let bar_h = (3.0 * s).round().max(1.0) as u32;
+    let stem_w = (4.0 * s).round().max(1.0) as u32;
+    let gap = (4.0 * s).round().max(1.0) as u32;
+    let total = lw * 2 + gap;
+    if total >= w {
+        return;
+    }
+    let ox = (w - total) / 2;
+    let oy = (w - lh) / 2;
+    draw_t(px, w, ox, oy, lw, lh, bar_h, stem_w);
+    draw_t(px, w, ox + lw + gap, oy, lw, lh, bar_h, stem_w);
+}
+
+// ── Filled circle (anti-aliased edge) ─────────────────────────────────────────
+
+fn fill_circle(px: &mut [u8], size: u32, r: u8, g: u8, b: u8) {
+    let (cx, cy) = (size as f32 / 2.0, size as f32 / 2.0);
+    let radius = size as f32 / 2.0 - 3.5;
+    for y in 0..size {
+        for x in 0..size {
+            let dist = ((x as f32 - cx + 0.5).powi(2) + (y as f32 - cy + 0.5).powi(2)).sqrt();
+            if dist < radius + 1.0 {
+                let a = ((radius + 1.0 - dist).clamp(0.0, 1.0) * 255.0) as u8;
+                set(px, size, x, y, r, g, b, a);
+            }
+        }
+    }
+}
+
+// ── White X glyph (drawn over an existing filled circle) ──────────────────────
+
+fn draw_x(px: &mut [u8], size: u32) {
+    let cx = size as f32 / 2.0;
+    let arm = 5.0f32; // Euclidean half-arm length in pixels
+    let half_w = 1.0f32; // line half-width in pixels
+    let s = std::f32::consts::SQRT_2;
+
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 + 0.5 - cx;
+            let dy = y as f32 + 0.5 - cx;
+
+            // Decompose into the two diagonal axes.
+            // a = perpendicular distance to arm1 = along-axis distance for arm2, and vice-versa.
+            let a = (dy - dx).abs() / s; // perp to arm1 / along arm2
+            let b = (dx + dy).abs() / s; // along arm1 / perp to arm2
+
+            let on_arm1 = a < half_w && b <= arm;
+            let on_arm2 = b < half_w && a <= arm;
+
+            if on_arm1 || on_arm2 {
+                let i = ((y * size + x) * 4) as usize;
+                // Only paint inside the circle (where the background alpha is set).
+                if px[i + 3] > 128 {
+                    px[i] = 255;
+                    px[i + 1] = 255;
+                    px[i + 2] = 255;
+                }
+            }
+        }
+    }
 }
 
 // ── Tray builder ──────────────────────────────────────────────────────────
@@ -100,7 +221,7 @@ pub fn build(app: &tauri::App) -> tauri::Result<TrayIcon> {
     let menu_first_manual_main_show = first_manual_main_show.clone();
     let tray_icon: TrayIcon = TrayIconBuilder::new()
         .icon(make_icon(TrayState::Idle))
-        .title("TT")
+        .icon_as_template(true)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .tooltip("TurboTalk")
@@ -172,86 +293,14 @@ pub fn build(app: &tauri::App) -> tauri::Result<TrayIcon> {
     Ok(tray_icon)
 }
 
-/// Set the tray icon state. Uses non-template images so the actual RGB colors
-/// render (red recording circle, amber transcribing circle).
+/// Set the tray icon state. Idle renders the "TT" glyph in template mode
+/// (system menu bar text color). Recording/Transcribing use non-template
+/// mode so the actual RGB colors render (red circle, amber circle).
 pub fn set_tray_icon(tray: &TrayIcon, state: TrayState) {
     let _ = tray.set_icon(Some(make_icon(state)));
-}
-
-// ── Pixel helpers ─────────────────────────────────────────────────────────────
-// Pixel-buffer plotters take RGBA + position + size — naturally many args.
-
-#[cfg(target_os = "windows")]
-fn fill_opaque(px: &mut [u8], w: u32, r: u8, g: u8, b: u8) {
-    for y in 0..w {
-        for x in 0..w {
-            set(px, w, x, y, r, g, b, 255);
-        }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = tray.set_icon_as_template(matches!(state, TrayState::Idle));
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn set(px: &mut [u8], w: u32, x: u32, y: u32, r: u8, g: u8, b: u8, a: u8) {
-    if x < w && y < w {
-        let i = ((y * w + x) * 4) as usize;
-        px[i] = r;
-        px[i + 1] = g;
-        px[i + 2] = b;
-        px[i + 3] = a;
-    }
-}
-
-// ── "TT" glyph ───────────────────────────────────────────────────────────────
-// Note: the "TT" text is set via .title("TT") on the TrayIconBuilder, not
-// drawn into the pixel buffer. Idle state uses a transparent pixel buffer
-// so only the title text is visible in the menu bar.
-
-// ── Filled circle (anti-aliased edge) ─────────────────────────────────────────
-
-fn fill_circle(px: &mut [u8], size: u32, r: u8, g: u8, b: u8) {
-    let (cx, cy) = (size as f32 / 2.0, size as f32 / 2.0);
-    let radius = size as f32 / 2.0 - 3.5;
-    for y in 0..size {
-        for x in 0..size {
-            let dist = ((x as f32 - cx + 0.5).powi(2) + (y as f32 - cy + 0.5).powi(2)).sqrt();
-            if dist < radius + 1.0 {
-                let a = ((radius + 1.0 - dist).clamp(0.0, 1.0) * 255.0) as u8;
-                set(px, size, x, y, r, g, b, a);
-            }
-        }
-    }
-}
-
-// ── White X glyph (drawn over an existing filled circle) ──────────────────────
-
-fn draw_x(px: &mut [u8], size: u32) {
-    let cx = size as f32 / 2.0;
-    let arm = 5.0f32; // Euclidean half-arm length in pixels
-    let half_w = 1.0f32; // line half-width in pixels
-    let s = std::f32::consts::SQRT_2;
-
-    for y in 0..size {
-        for x in 0..size {
-            let dx = x as f32 + 0.5 - cx;
-            let dy = y as f32 + 0.5 - cx;
-
-            // Decompose into the two diagonal axes.
-            // a = perpendicular distance to arm1 = along-axis distance for arm2, and vice-versa.
-            let a = (dy - dx).abs() / s; // perp to arm1 / along arm2
-            let b = (dx + dy).abs() / s; // along arm1 / perp to arm2
-
-            let on_arm1 = a < half_w && b <= arm;
-            let on_arm2 = b < half_w && a <= arm;
-
-            if on_arm1 || on_arm2 {
-                let i = ((y * size + x) * 4) as usize;
-                // Only paint inside the circle (where the background alpha is set).
-                if px[i + 3] > 128 {
-                    px[i] = 255;
-                    px[i + 1] = 255;
-                    px[i + 2] = 255;
-                }
-            }
-        }
-    }
-}
