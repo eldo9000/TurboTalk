@@ -597,8 +597,6 @@ pub(crate) mod common {
             // Pause media playback before capture starts.
             if crate::settings::load().pause_media_on_dictate {
                 crate::media_control::pause();
-                // Give the system time to process the pause event.
-                std::thread::sleep(std::time::Duration::from_millis(150));
             }
 
             if let Err(e) = rec.start() {
@@ -870,13 +868,13 @@ pub(crate) mod common {
             }
         }
 
-        // Resume media playback after paste completes.
+        // End of lifecycle.
+        bail_out(rec, tray, app, job_id_opt, true);
+
+        // Resume media playback after everything is fully done.
         if crate::settings::load().pause_media_on_dictate {
             crate::media_control::resume();
         }
-
-        // End of lifecycle.
-        bail_out(rec, tray, app, job_id_opt, true);
     }
 
     pub(super) fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {

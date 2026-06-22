@@ -22,6 +22,8 @@ pub fn pause() {
     #[cfg(target_os = "macos")]
     {
         toggle();
+        // Let the system process the pause before we start recording.
+        std::thread::sleep(std::time::Duration::from_millis(200));
         DID_PAUSE.store(true, Ordering::Release);
     }
 }
@@ -33,8 +35,9 @@ pub fn resume() {
         if !DID_PAUSE.load(Ordering::Acquire) {
             return;
         }
-        // Let audio quality settle after recording before resuming playback.
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        // Wait for audio quality to fully settle after recording,
+        // then wait a bit more so the state machine is idle.
+        std::thread::sleep(std::time::Duration::from_millis(800));
         toggle();
         DID_PAUSE.store(false, Ordering::Release);
     }
