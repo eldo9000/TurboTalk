@@ -419,6 +419,18 @@ pub(crate) mod common {
     // there would stall the global keyboard hook. Both ptt_down and ptt_up
     // therefore spawn a worker thread and return immediately.
 
+    // Boost thread priority on macOS via QoS
+    fn boost_thread() {
+        #[cfg(target_os = "macos")]
+        unsafe {
+            // QOS_CLASS_USER_INITIATED = 0x19
+            extern "C" {
+                fn pthread_set_qos_class_self_np(class: i32, relative_priority: i32) -> i32;
+            }
+            let _ = pthread_set_qos_class_self_np(0x19, 0);
+        }
+    }
+
     pub(super) fn ptt_down(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
         crate::diagnostic_log::emergency_trace(format!(
             "[ptt_down] enter onboarding={} recorder={} ready={} prewarm_in_flight={} prewarm_failed={}",
@@ -463,6 +475,7 @@ pub(crate) mod common {
         let tray = tray_icon.clone();
         let app = app.clone();
         std::thread::spawn(move || {
+            boost_thread();
             let _start_guard = StartInFlightGuard;
             // One-in-flight policy: only `Ready` is allowed to start a new job.
             // If the recorder is busy (anything from FinalizingAudio through
@@ -871,6 +884,7 @@ pub(crate) mod common {
         let tray = tray_icon.clone();
         let app = app.clone();
         std::thread::spawn(move || {
+            boost_thread();
             crate::diagnostic_log::emergency_trace(format!(
                 "[ptt_up] enter recorder={} suppress_pending={}",
                 rec.state(),
