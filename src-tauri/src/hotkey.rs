@@ -584,6 +584,8 @@ pub(crate) mod common {
             // Pause media playback before capture starts.
             if crate::settings::load().pause_media_on_dictate {
                 crate::media_control::pause();
+                // Give the system time to process the pause event.
+                std::thread::sleep(std::time::Duration::from_millis(150));
             }
 
             if let Err(e) = rec.start() {
