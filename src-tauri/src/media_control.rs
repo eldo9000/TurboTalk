@@ -1,52 +1,44 @@
 // Pause/resume media playback when dictation starts/stops.
-// Uses a helper binary that posts the same NXSYSDEFINED media key
-// event as the physical Play/Pause key on an Apple keyboard.
+// Uses osascript playpause on already-running media apps (pgrep gate
+// prevents launching). Fast, safe, no permissions needed.
 
-use std::path::PathBuf;
-use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-static WAS_PLAYING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static WAS_PLAYING: AtomicBool = AtomicBool::new(false);
 
-fn helper_path() -> Option<PathBuf> {
-    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    for name in &["media-toggle-aarch64-apple-darwin", "media-toggle"] {
-        let p = exe_dir.join(name);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    None
-}
-
-fn toggle() {
-    let path = match helper_path() {
-        Some(p) => p,
-        None => {
-            tracing::warn!("[media_control] helper binary not found next to exe");
-            return;
-        }
-    };
-    tracing::debug!("[media_control] toggling via {:?}", path);
-    if let Err(e) = Command::new(&path).output() {
-        tracing::warn!("[media_control] helper failed: {e}");
-    }
-}
-
-/// Check if a media app is currently playing without launching anything.
 #[cfg(target_os = "macos")]
-fn is_playing() -> bool {
-    // Fast check using pgrep before touching osascript
+fn app_running(name: &str) -> bool {
+    std::process::Command::new("pgrep")
+        .args(["-x", name])
+        .output()
+        .ok()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+fn osascript_playpause(app: &str) {
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", &format!(r#"tell application "{}" to playpause"#, app)])
+        .output();
+}
+
+#[cfg(target_os = "macos")]
+fn toggle_running_media() {
     for app in &["Music", "Spotify"] {
-        let running = Command::new("pgrep")
-            .args(["-x", app])
-            .output()
-            .ok()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if !running {
+        if app_running(app) {
+            osascript_playpause(app);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn any_playing() -> bool {
+    for app in &["Music", "Spotify"] {
+        if !app_running(app) {
             continue;
         }
-        let out = Command::new("osascript")
+        let out = std::process::Command::new("osascript")
             .args(["-e", &format!(r#"tell application "{}" to get player state"#, app)])
             .output();
         if let Ok(out) = out {
@@ -63,27 +55,28 @@ fn is_playing() -> bool {
 /// Pause media playback. Call before dictation starts.
 /// Only toggles if something is actually playing.
 pub fn pause() {
-    if !is_playing() {
-        tracing::debug!("[media_control] nothing playing, skipping pause");
-        WAS_PLAYING.store(false, std::sync::atomic::Ordering::Release);
-        return;
+    #[cfg(target_os = "macos")]
+    {
+        if !any_playing() {
+            WAS_PLAYING.store(false, Ordering::Release);
+            return;
+        }
+        toggle_running_media();
+        WAS_PLAYING.store(true, Ordering::Release);
     }
-    tracing::debug!("[media_control] pausing playback");
-    toggle();
-    WAS_PLAYING.store(true, std::sync::atomic::Ordering::Release);
 }
 
 /// Resume media playback. Call after dictation finishes.
 /// Only toggles if we paused something earlier.
 pub fn resume() {
-    if !WAS_PLAYING.load(std::sync::atomic::Ordering::Acquire) {
-        return;
+    #[cfg(target_os = "macos")]
+    {
+        if !WAS_PLAYING.load(Ordering::Acquire) {
+            return;
+        }
+        // Let audio quality settle after recording before resuming.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        toggle_running_media();
+        WAS_PLAYING.store(false, Ordering::Release);
     }
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    tracing::debug!("[media_control] resuming playback");
-    toggle();
-    WAS_PLAYING.store(false, std::sync::atomic::Ordering::Release);
 }
-
-#[cfg(not(target_os = "macos"))]
-fn is_playing() -> bool { false }
