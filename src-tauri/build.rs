@@ -6,16 +6,5 @@ fn main() {
     let target = std::env::var("TARGET").unwrap_or_default();
     println!("cargo:rustc-env=TARGET_TRIPLE={}", target);
 
-    // Compile the media key helper C file into the binary.
-    // Runs in-process so it inherits Accessibility permissions.
-    #[cfg(target_os = "macos")]
-    {
-        cc::Build::new()
-            .file("media_toggle.c")
-            .flag("-x")
-            .flag("objective-c")
-            .compile("media_toggle");
-    }
-
     tauri_build::build()
 }

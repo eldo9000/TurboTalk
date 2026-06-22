@@ -1,36 +1,22 @@
 // Pause/resume media playback when dictation starts/stops.
-// Posts NXSYSDEFINED media key event from a C function compiled into
-// the binary (same process = shares Accessibility permissions).
+// Uses osascript playpause on running media apps.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static WAS_PLAYING: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_os = "macos")]
-#[link(name = "Cocoa", kind = "framework")]
-extern "C" {
-    fn media_toggle_play_pause();
+fn toggle(app: &str) {
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", &format!(r#"tell application "{}" to playpause"#, app)])
+        .output();
 }
 
 #[cfg(target_os = "macos")]
-fn toggle() {
-    unsafe { media_toggle_play_pause() }
-}
-
-#[cfg(target_os = "macos")]
-fn any_playing() -> bool {
+fn is_playing() -> bool {
     for app in &["Music", "Spotify"] {
-        let running = std::process::Command::new("pgrep")
-            .args(["-x", app])
-            .output()
-            .ok()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if !running {
-            continue;
-        }
         let out = std::process::Command::new("osascript")
-            .args(["-e", &format!(r#"tell application "{}" to get player state"#, app)])
+            .args(["-e", &format!(r#"if application "{}" is running then tell application "{}" to get player state"#, app, app)])
             .output();
         if let Ok(out) = out {
             if let Ok(s) = String::from_utf8(out.stdout) {
@@ -47,11 +33,12 @@ fn any_playing() -> bool {
 pub fn pause() {
     #[cfg(target_os = "macos")]
     {
-        if !any_playing() {
+        if !is_playing() {
             WAS_PLAYING.store(false, Ordering::Release);
             return;
         }
-        toggle();
+        toggle("Music");
+        toggle("Spotify");
         WAS_PLAYING.store(true, Ordering::Release);
     }
 }
@@ -63,8 +50,10 @@ pub fn resume() {
         if !WAS_PLAYING.load(Ordering::Acquire) {
             return;
         }
+        // Let audio quality settle after recording before resuming playback.
         std::thread::sleep(std::time::Duration::from_millis(500));
-        toggle();
+        toggle("Music");
+        toggle("Spotify");
         WAS_PLAYING.store(false, Ordering::Release);
     }
 }

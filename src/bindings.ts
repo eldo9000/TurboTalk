@@ -352,6 +352,11 @@ export type Config = {
 	 *  `resolve_backend_variant`.
 	 */
 	backend_variant?: string,
+	/**
+	 *  Pause media playback (music, podcasts) when dictation starts, then
+	 *  resume when the transcript is pasted. Defaults on.
+	 */
+	pause_media_on_dictate?: boolean,
 };
 
 /**
