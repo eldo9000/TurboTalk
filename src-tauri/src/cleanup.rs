@@ -155,9 +155,11 @@ fn handle_prose(text: &str, cfg: &crate::settings::CleanupConfig) -> String {
     if cfg.strip_fillers {
         s = strip_filler_words(&s);
     }
-    // Repeated-single-char cleaning is unconditional — isolated repeated
-    // letters (e.g. "f f f f f fix") are always Whisper stuttering artifacts,
+    // Repeated-word and repeated-single-char cleaning is unconditional —
+    // stutter loops ("in in in in in") and isolated repeated letters
+    // ("f f f f f fix") are always Whisper/Parakeet hallucination artifacts,
     // never legitimate speech content.
+    s = collapse_repeated_words(&s);
     s = collapse_repeated_single_chars(&s);
     s = capitalize_first(&s);
     if cfg.append_period {
@@ -258,6 +260,46 @@ fn strip_filler_words(text: &str) -> String {
 ///
 /// Valid single-letter words "a" and "I" are preserved; all other repeated
 /// single-character tokens are removed entirely.
+/// Collapse sequences of 3+ consecutive identical words to a single instance.
+/// Catches Parakeet/Whisper stutter loops like "in in in in in in in" → "in"
+/// and "now, now, now, now, now" → "now, now". Words are compared by stripping
+/// trailing punctuation so "now," and "now." match "now".
+/// Single-letter words are handled separately by `collapse_repeated_single_chars`.
+fn collapse_repeated_words(text: &str) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut result: Vec<&str> = Vec::with_capacity(words.len());
+    let mut i = 0;
+    while i < words.len() {
+        let word = words[i];
+        if word.len() == 1 && word.chars().all(|c| c.is_ascii_alphabetic()) {
+            // Single-letter word — handled by collapse_repeated_single_chars
+            result.push(word);
+            i += 1;
+            continue;
+        }
+        let stem = word.trim_end_matches(|c: char| !c.is_alphanumeric());
+        let mut repeat_count = 1;
+        let mut j = i + 1;
+        while j < words.len() {
+            let next_stem = words[j].trim_end_matches(|c: char| !c.is_alphanumeric());
+            if next_stem.eq_ignore_ascii_case(stem) {
+                repeat_count += 1;
+                j += 1;
+            } else {
+                break;
+            }
+        }
+        if repeat_count >= 3 {
+            result.push(word);
+            i = j;
+        } else {
+            result.push(word);
+            i += 1;
+        }
+    }
+    result.join(" ")
+}
+
 fn collapse_repeated_single_chars(text: &str) -> String {
     let words: Vec<&str> = text.split_whitespace().collect();
     let mut result: Vec<&str> = Vec::with_capacity(words.len());
@@ -321,7 +363,8 @@ fn handle_command(text: &str) -> String {
 }
 
 fn handle_raw(text: &str) -> String {
-    text.to_string()
+    let s = collapse_repeated_words(text);
+    collapse_repeated_single_chars(&s)
 }
 
 fn capitalize_first(s: &str) -> String {

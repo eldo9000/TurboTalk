@@ -35,15 +35,20 @@ import { invoke } from '@tauri-apps/api/core';
   let showPreview = $derived(
     overlaySize === 'large' && (mode === 'recording' || mode === 'transcribing')
   );
-  let committedPreviewWords = $derived(
-    previewText.trim() ? previewText.trim().split(/\s+/).length : 0
+  let liveGlyphWordCount = $state(0);
+  let liveGlyphAccumulator = 0;
+  let liveGlyphWordsPerSecond = 3.1; // ~185 WPM starter; self-corrects as segments commit.
+  let committedPreviewTokens = $derived(
+    previewText.trim() ? previewText.trim().split(/\s+/) : []
   );
+  let committedPreviewWords = $derived(committedPreviewTokens.length);
   let glyphWordCount = $derived(
-    showPreview ? Math.max(wordCount, committedPreviewWords) : 0
+    showPreview ? Math.max(liveGlyphWordCount, committedPreviewWords) : 0
   );
-  let glyphWords = $derived(
+  let previewUnits = $derived(
     Array.from({ length: glyphWordCount }, (_, index) => ({
       index,
+      text: committedPreviewTokens[index] ?? '',
       width: glyphWidth(index),
       committed: index < committedPreviewWords,
     }))
@@ -92,8 +97,14 @@ import { invoke } from '@tauri-apps/api/core';
   }
 
   function glyphWidth(index) {
-    const pattern = [42, 58, 34, 72, 49, 88, 39, 64, 54, 30, 78, 46, 96, 37, 66];
-    return pattern[index % pattern.length];
+    const loremWordLengths = [
+      5, 5, 5, 3, 5, 11, 4, 2, 4, 9, 10, 4, 3, 2, 5, 6,
+      7, 3, 5, 2, 9, 4, 8, 3, 5, 2, 4, 3, 5, 9, 5, 3,
+      4, 8, 2, 5, 7, 6, 3, 6, 5, 8, 4, 6, 5, 3, 4, 2,
+      7, 6, 7, 5, 5, 6, 3, 4, 7, 4, 3, 5, 4, 8, 3, 8,
+    ];
+    const chars = loremWordLengths[index % loremWordLengths.length];
+    return Math.round(Math.max(20, Math.min(112, chars * 8.2 + 14)));
   }
 
   function startElapsed() {
@@ -117,10 +128,15 @@ import { invoke } from '@tauri-apps/api/core';
   }
 
   // Each audio-level event = 50ms. Frames above threshold = speech time.
-  // At 140 WPM: words ≈ speech_seconds * 140 / 60
+  // Live pill count starts from a reasonable dictation pace, then adapts when
+  // committed segment text reveals whether the visual estimate was too slow
+  // or too fast for the current speaker/phrase.
   const SPEECH_THRESHOLD = 0.008;
   const VISUAL_GATE_FLOOR = SPEECH_THRESHOLD * 0.65;
   const VISUAL_GATE_CEIL  = SPEECH_THRESHOLD * 1.6;
+  const DEFAULT_GLYPH_WORDS_PER_SECOND = 3.1; // ~185 WPM
+  const MIN_GLYPH_WORDS_PER_SECOND = 1.6;     // ~96 WPM
+  const MAX_GLYPH_WORDS_PER_SECOND = 5.2;     // ~312 WPM
   let speechFrames = 0;
 
   let overlaySize      = $state('medium'); // 'small' | 'medium' | 'large'
@@ -173,6 +189,20 @@ import { invoke } from '@tauri-apps/api/core';
     const peak = Math.max(meterVisualPeak, METER_FLOOR);
     const gainNorm = Math.min(1, v / peak);
     return Math.pow(gainNorm, 0.45) * gate;
+  }
+
+  function clampGlyphRate(rate) {
+    return Math.max(MIN_GLYPH_WORDS_PER_SECOND, Math.min(MAX_GLYPH_WORDS_PER_SECOND, rate));
+  }
+
+  function adaptGlyphRate(committedWords) {
+    if (committedWords < 4 || liveGlyphWordCount < 2) return;
+    const ratio = committedWords / liveGlyphWordCount;
+    if (ratio > 1.12 || ratio < 0.88) {
+      liveGlyphWordsPerSecond = clampGlyphRate(
+        liveGlyphWordsPerSecond * (0.72 + Math.min(1.7, Math.max(0.55, ratio)) * 0.28)
+      );
+    }
   }
 
   function draw() {
@@ -295,6 +325,9 @@ import { invoke } from '@tauri-apps/api/core';
       levels = Array(HISTORY).fill(0);
       speechFrames = 0;
       wordCount = 0;
+      liveGlyphWordCount = 0;
+      liveGlyphAccumulator = 0;
+      liveGlyphWordsPerSecond = DEFAULT_GLYPH_WORDS_PER_SECOND;
       segPreview = {};
       resetMeterPeak();
       startElapsed();
@@ -517,7 +550,12 @@ import { invoke } from '@tauri-apps/api/core';
 
       if (v > SPEECH_THRESHOLD) {
         speechFrames++;
-        const newCount = Math.round(speechFrames * 0.05 * 140 / 60);
+        liveGlyphAccumulator += 0.05 * liveGlyphWordsPerSecond;
+        while (liveGlyphAccumulator >= 1) {
+          liveGlyphWordCount++;
+          liveGlyphAccumulator -= 1;
+        }
+        const newCount = Math.round(speechFrames * 0.05 * liveGlyphWordsPerSecond);
         if (newCount > wordCount) {
           wordCount = newCount;
         }
@@ -532,7 +570,20 @@ import { invoke } from '@tauri-apps/api/core';
       const index = e.payload?.index;
       const text  = e.payload?.text;
       if (typeof index !== 'number' || !text) return;
-      segPreview = { ...segPreview, [index]: text };
+      const nextPreview = { ...segPreview, [index]: text };
+      const committedWords = Object.keys(nextPreview)
+        .map(Number)
+        .sort((a, b) => a - b)
+        .map(i => nextPreview[i])
+        .join(' ')
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+        .length;
+      adaptGlyphRate(committedWords);
+      segPreview = nextPreview;
+      liveGlyphWordCount = Math.max(liveGlyphWordCount, committedWords);
+      wordCount = Math.max(wordCount, committedWords);
     }).then(u => uns.push(u));
 
     listen('config-update', (e) => {
@@ -649,7 +700,7 @@ import { invoke } from '@tauri-apps/api/core';
     border-radius: 999px;
   }
   .pill.large {
-    min-width: 984px;
+    width: 984px;
     min-height: 92px;
     box-sizing: border-box;
     gap: 18px;
@@ -776,10 +827,10 @@ import { invoke } from '@tauri-apps/api/core';
     mask-image: linear-gradient(to right, transparent 0%, #000 25%);
   }
 
-  /* Large-mode preview box. It deliberately renders glyphic word pills instead
-     of readable draft text: immediate progress without pulling the speaker into
-     mid-sentence proofreading. Segment preview text still marks earlier pills
-     as committed when it arrives, but the words stay hidden. */
+  /* Large-mode preview box. Live speech renders as glyphic word pills so it
+     does not invite proofreading mid-sentence. When a paused segment lands,
+     those committed pills become real words and the live tail continues from
+     the new edge instead of replaying the whole paragraph distance. */
   .seg-preview {
     position: absolute;
     left: 50%;
@@ -787,9 +838,8 @@ import { invoke } from '@tauri-apps/api/core';
     bottom: calc(100% + 12px);
     width: 984px;
     box-sizing: border-box;
-    min-height: 86px;
     max-height: 250px;
-    padding: 18px 20px;
+    padding: 13px 22px;
     border-radius: 14px;
     background: rgba(16, 16, 16, 0.87);
     border: 1px solid rgba(255, 255, 255, 0.08);
@@ -809,7 +859,6 @@ import { invoke } from '@tauri-apps/api/core';
     align-content: flex-end;
     align-items: center;
     gap: 9px 8px;
-    min-height: 50px;
     max-height: 212px;
     overflow: hidden;
     -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 18%, #000 100%);
@@ -828,19 +877,14 @@ import { invoke } from '@tauri-apps/api/core';
     animation: glyph-in 140ms ease-out both;
   }
 
-  .glyph-word.committed {
-    background:
-      linear-gradient(90deg, rgba(255,255,255,0.62), rgba(255,255,255,0.38));
-    opacity: 0.9;
-  }
-
-  .glyph-cursor {
-    width: 42px;
-    height: 13px;
-    border-radius: 999px;
-    background: rgba(248, 113, 113, 0.44);
-    box-shadow: 0 0 16px rgba(248, 113, 113, 0.32);
-    animation: glyph-cursor 1.05s ease-in-out infinite;
+  .glyph-text-word {
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 17px;
+    font-weight: 520;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    user-select: none;
+    animation: text-in 150ms ease-out both;
   }
 
   @keyframes glyph-in {
@@ -848,9 +892,9 @@ import { invoke } from '@tauri-apps/api/core';
     100% { transform: translateY(0) scaleX(1); }
   }
 
-  @keyframes glyph-cursor {
-    0%, 100% { opacity: 0.25; }
-    50% { opacity: 0.9; }
+  @keyframes text-in {
+    0% { opacity: 0; filter: blur(4px); }
+    100% { opacity: 1; filter: blur(0); }
   }
 
 </style>
@@ -876,23 +920,21 @@ import { invoke } from '@tauri-apps/api/core';
       class:below={overlayPosition === 'top'}
       style:opacity={isPeeking ? 0.12 : 1}
     >
-      {#if glyphWords.length > 0}
+      {#if previewUnits.length > 0}
         <div class="glyph-preview" aria-hidden="true">
-          {#each glyphWords as word (word.index)}
-            <span
-              class="glyph-word"
-              class:committed={word.committed}
-              style:width={`${word.width}px`}
-            ></span>
+          {#each previewUnits as word (word.index)}
+            {#if word.committed}
+              <span class="glyph-text-word">{word.text}</span>
+            {:else}
+              <span
+                class="glyph-word"
+                style:width={`${word.width}px`}
+              ></span>
+            {/if}
           {/each}
-          {#if mode === 'recording'}
-            <span class="glyph-cursor"></span>
-          {/if}
         </div>
       {:else}
-        <div class="glyph-preview" aria-hidden="true">
-          <span class="glyph-cursor"></span>
-        </div>
+        <div class="glyph-preview" aria-hidden="true"></div>
       {/if}
     </div>
   {/if}

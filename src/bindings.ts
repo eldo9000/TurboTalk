@@ -273,6 +273,13 @@ export type CleanupConfig = {
 	classifier_prompt?: string,
 	// Simple mode: strip common filler words (um, uh, er, hmm).
 	strip_fillers?: boolean,
+	/**
+	 *  Anti-vocabulary: word-to-word replacement or word removal applied after
+	 *  all other cleanup. Each entry is either a bare word (removed entirely)
+	 *  or a "from→to" pair (replaced). Intended for persistent spelling errors
+	 *  from the transcriber (e.g. "groq→grok").
+	 */
+	antivocabulary?: string[],
 	// Simple mode: append a period if the transcript ends without punctuation.
 	append_period?: boolean,
 	// Simple mode: remove trailing Whisper artifacts like " ." and " ...".
@@ -529,3 +536,4 @@ async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; dat
         return { status: "error", error: e as any };
     }
 }
+

@@ -1,15 +1,15 @@
 # TurboTalk — Session Status
 
 **Last updated:** 2026-06-21 (large overlay glyph preview)  
-**Current state:** IOHID keyboard fallback is active and user-proven for the ad-hoc `/Applications/Turbo Talk.app`. Right Option dictation works through Input Monitoring. Ad-hoc macOS auto-paste is user-proven via Session tap. Large overlay mode now has an audio-driven glyph preview: word-shaped pills appear immediately while speaking, and existing segment-preview results only brighten committed pills instead of showing readable draft text.
+**Current state:** IOHID keyboard fallback is active and user-proven for the ad-hoc `/Applications/Turbo Talk.app`. Right Option dictation works through Input Monitoring. Ad-hoc macOS auto-paste is user-proven via Session tap. Large overlay mode now has an audio-driven glyph/text preview: live speech appears as word-shaped pills, paused segment commits become readable text, and the live pill cursor continues from the committed edge. Live pill widths use a lorem-ipsum word-length sequence, preview/audio panels are both fixed to 984px, and the live pill rate now adapts after segment commits instead of assuming one speaking speed.
 
 ## Next action
 
-Run one large-overlay dictation by eye: set overlay size to Large, hold Right Option for a paragraph, and confirm the pill stream feels immediate without readable distraction; success signal is that pills appear during speech before any delayed segment text lands, then dictation still pastes normally.
+Run one large-overlay dictation by eye: speak slow and fast pause-separated lines; success signal is live pill count stays plausible across speaking speeds, no leading red cursor pill, compact preview bubble, aligned top/bottom panel edges, committed text appears on pauses, and dictation still pastes normally.
 
 ## Latest session proof
 
-2026-06-21: Implemented the large-overlay glyph preview only in `src/Overlay.svelte`; no backend behavior changed. `npm run typecheck` passed. `npm run build` passed with the existing tolerated top-level-await transform warnings from `src/main.js`.
+2026-06-21: Implemented the large-overlay glyph preview only in `src/Overlay.svelte`; no backend behavior changed. `npm run typecheck` passed. `npm run build` passed with the existing tolerated top-level-await transform warnings from `src/main.js`. Follow-up after user saw no change: confirmed the repo/dist had the glyph preview but the installed `/Applications/Turbo Talk.app` was stale and the active config defaulted to Medium. Set `overlay_size = "large"` in `~/.config/librewin/turbotalk/config.toml`, ran `npm run local-install`, codesign verification passed, and relaunched `/Applications/Turbo Talk.app` as PID 61549. Second follow-up: user confirmed initial pills worked but committed segments only brightened and live pills stalled after pauses. Changed committed segments to render readable text and replaced total-estimate catchup with a monotonic live visual cursor. Third follow-up: removed the leading pulsing red cursor pill and dropped the forced starter min-heights so the preview bubble hugs content. Fourth follow-up: replaced repeating pill width pattern with deterministic English word-length distribution and matched preview padding to the large audio pill. Fifth follow-up: replaced distribution estimator with lorem-ipsum word character counts and set both `.pill.large` and `.seg-preview` to exact `width: 984px`. Sixth follow-up: user noticed fixed speech-time estimator undercounted fast speech; raised starter rate to ~185 WPM and added segment-commit self-correction bounded at ~96-312 WPM. `npm run typecheck`, `npm run build`, and `npm run local-install` passed; relaunched `/Applications/Turbo Talk.app` as PID 13725.
 
 ## Open backlog
 
