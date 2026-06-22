@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>LSUIElement</key>
+  <true/>
   <key>NSMicrophoneUsageDescription</key>
   <string>Turbo Talk uses the microphone only while you hold the push-to-talk hotkey so it can transcribe your speech locally.</string>
   <key>NSAppleEventsUsageDescription</key>
