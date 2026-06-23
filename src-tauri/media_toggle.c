@@ -33,27 +33,40 @@ void media_toggle_play_pause(void) {
     }
 }
 
-// Returns 1 if the default output device has active IO (audio is playing).
-// Uses kAudioDevicePropertyDeviceIsRunningSomewhere which works with
-// Bluetooth devices (AirPods) and aggregate devices.
+// Returns 1 if ANY output device has active IO (audio is playing).
+// Iterates all devices to handle Bluetooth/aggregate device quirks.
 int audio_is_playing(void) {
-    AudioDeviceID devId = kAudioObjectUnknown;
-    UInt32 size = sizeof(devId);
-    AudioObjectPropertyAddress defaultAddr = {
-        kAudioHardwarePropertyDefaultOutputDevice,
+    // Get list of all audio device IDs
+    AudioObjectPropertyAddress devListAddr = {
+        kAudioHardwarePropertyDevices,
         kAudioObjectPropertyScopeOutput,
         kAudioObjectPropertyElementMain
     };
-    AudioObjectGetPropertyData(kAudioObjectSystemObject, &defaultAddr, 0, NULL, &size, &devId);
-    if (devId == kAudioObjectUnknown) return 0;
+    UInt32 dataSize = 0;
+    AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &devListAddr, 0, NULL, &dataSize);
+    UInt32 deviceCount = dataSize / sizeof(AudioDeviceID);
+    if (deviceCount == 0) return 0;
 
-    AudioObjectPropertyAddress addr = {
+    AudioDeviceID *devices = malloc(dataSize);
+    if (!devices) return 0;
+    AudioObjectGetPropertyData(kAudioObjectSystemObject, &devListAddr, 0, NULL, &dataSize, devices);
+
+    AudioObjectPropertyAddress runningAddr = {
         kAudioDevicePropertyDeviceIsRunningSomewhere,
         kAudioObjectPropertyScopeOutput,
         kAudioObjectPropertyElementMain
     };
-    UInt32 isRunning = 0;
-    size = sizeof(isRunning);
-    OSStatus err = AudioObjectGetPropertyData(devId, &addr, 0, NULL, &size, &isRunning);
-    return (err == noErr && isRunning) ? 1 : 0;
+
+    int found = 0;
+    for (UInt32 i = 0; i < deviceCount; i++) {
+        UInt32 isRunning = 0;
+        UInt32 size = sizeof(isRunning);
+        OSStatus err = AudioObjectGetPropertyData(devices[i], &runningAddr, 0, NULL, &size, &isRunning);
+        if (err == noErr && isRunning) {
+            found = 1;
+            break;
+        }
+    }
+    free(devices);
+    return found;
 }
