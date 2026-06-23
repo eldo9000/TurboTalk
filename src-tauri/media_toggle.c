@@ -1,12 +1,12 @@
-// macOS media key toggle — compiled into the binary, same process = same
-// Accessibility permissions as the main app.
+// macOS media key toggle + audio-playing detection.
+// Compiled into the binary — same process, same permissions.
 
 #import <Cocoa/Cocoa.h>
+#import <CoreAudio/CoreAudio.h>
 
 void media_toggle_play_pause(void) {
     @autoreleasepool {
-        int keyCode = 16; // NX_KEYTYPE_PLAY
-
+        int keyCode = 16;
         NSEvent *down = [NSEvent otherEventWithType:NSEventTypeSystemDefined
                                            location:NSZeroPoint
                                       modifierFlags:0
@@ -17,12 +17,8 @@ void media_toggle_play_pause(void) {
                                               data1:((keyCode << 16) | (0xa << 8))
                                               data2:-1];
         CGEventRef cgDown = [down CGEvent];
-        if (cgDown) {
-            CGEventPost(kCGSessionEventTap, cgDown);
-        }
-
+        if (cgDown) CGEventPost(kCGSessionEventTap, cgDown);
         [NSThread sleepForTimeInterval:0.01];
-
         NSEvent *up = [NSEvent otherEventWithType:NSEventTypeSystemDefined
                                          location:NSZeroPoint
                                     modifierFlags:0
@@ -33,8 +29,30 @@ void media_toggle_play_pause(void) {
                                             data1:((keyCode << 16) | (0xb << 8))
                                             data2:-1];
         CGEventRef cgUp = [up CGEvent];
-        if (cgUp) {
-            CGEventPost(kCGSessionEventTap, cgUp);
-        }
+        if (cgUp) CGEventPost(kCGSessionEventTap, cgUp);
     }
+}
+
+// Returns 1 if the default output device has active IO (audio is playing).
+// Uses CoreAudio property kAudioDevicePropertyDeviceIsRunning.
+int audio_is_playing(void) {
+    AudioObjectPropertyAddress addr = {
+        kAudioDevicePropertyDeviceIsRunning,
+        kAudioObjectPropertyScopeOutput,
+        kAudioObjectPropertyElementMain
+    };
+    AudioDeviceID devId = kAudioObjectUnknown;
+    UInt32 size = sizeof(devId);
+    AudioObjectPropertyAddress defaultAddr = {
+        kAudioHardwarePropertyDefaultOutputDevice,
+        kAudioObjectPropertyScopeOutput,
+        kAudioObjectPropertyElementMain
+    };
+    AudioObjectGetPropertyData(kAudioObjectSystemObject, &defaultAddr, 0, NULL, &size, &devId);
+    if (devId == kAudioObjectUnknown) return 0;
+
+    UInt32 isRunning = 0;
+    size = sizeof(isRunning);
+    OSStatus err = AudioObjectGetPropertyData(devId, &addr, 0, NULL, &size, &isRunning);
+    return (err == noErr && isRunning) ? 1 : 0;
 }

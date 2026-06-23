@@ -14,6 +14,8 @@ fn main() {
             .file("media_toggle.c")
             .flag("-x")
             .flag("objective-c")
+            .flag("-framework")
+            .flag("CoreAudio")
             .compile("media_toggle");
     }
 
