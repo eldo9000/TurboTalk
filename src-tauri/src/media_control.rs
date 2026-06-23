@@ -25,6 +25,7 @@ pub fn pause() {
     #[cfg(target_os = "macos")]
     {
         let playing = any_playing();
+        tracing::info!("[media_control] pause — audio_is_playing={}", playing);
         if !playing {
             DID_PAUSE.store(false, Ordering::Release);
             return;
@@ -40,8 +41,10 @@ pub fn resume() {
     #[cfg(target_os = "macos")]
     {
         if !DID_PAUSE.load(Ordering::Acquire) {
+            tracing::debug!("[media_control] resume — skipped (nothing was paused)");
             return;
         }
+        tracing::info!("[media_control] resume — waiting 800ms then toggling");
         std::thread::sleep(std::time::Duration::from_millis(800));
         unsafe { media_toggle_play_pause() }
         DID_PAUSE.store(false, Ordering::Release);
