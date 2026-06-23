@@ -34,13 +34,9 @@ void media_toggle_play_pause(void) {
 }
 
 // Returns 1 if the default output device has active IO (audio is playing).
-// Uses CoreAudio property kAudioDevicePropertyDeviceIsRunning.
+// Uses kAudioDevicePropertyDeviceIsRunningSomewhere which works with
+// Bluetooth devices (AirPods) and aggregate devices.
 int audio_is_playing(void) {
-    AudioObjectPropertyAddress addr = {
-        kAudioDevicePropertyDeviceIsRunning,
-        kAudioObjectPropertyScopeOutput,
-        kAudioObjectPropertyElementMain
-    };
     AudioDeviceID devId = kAudioObjectUnknown;
     UInt32 size = sizeof(devId);
     AudioObjectPropertyAddress defaultAddr = {
@@ -51,6 +47,11 @@ int audio_is_playing(void) {
     AudioObjectGetPropertyData(kAudioObjectSystemObject, &defaultAddr, 0, NULL, &size, &devId);
     if (devId == kAudioObjectUnknown) return 0;
 
+    AudioObjectPropertyAddress addr = {
+        kAudioDevicePropertyDeviceIsRunningSomewhere,
+        kAudioObjectPropertyScopeOutput,
+        kAudioObjectPropertyElementMain
+    };
     UInt32 isRunning = 0;
     size = sizeof(isRunning);
     OSStatus err = AudioObjectGetPropertyData(devId, &addr, 0, NULL, &size, &isRunning);
