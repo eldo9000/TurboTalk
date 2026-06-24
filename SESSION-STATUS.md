@@ -121,6 +121,51 @@ This matches the existing "flaky" philosophy at the original lines 1163-1191:
 
 **Window sizing fix:** Removed the `$effect` block in `src/App.svelte` that called `applyWindowSizing()` on every tab switch. The Settings tab's content-fitting code was forcing the window to a measured height, creating a jarring resize on tab switch. Only the zoom-level `$effect` now triggers `applyWindowSizing()`. Commit `<pending>`.
 
+## Paste refactor (2026-06-24) — macOS done, Windows ready for build
+
+### macOS paste (complete)
+Complete rewrite of the paste module from a 366-line monolithic `paste.rs` into a 10-module tiered system (7 macOS + 3 Windows + legacy).
+
+### Windows paste (new — needs Windows build test)
+Three new modules gated on `#[cfg(target_os = "windows")]`:
+
+| Module | Lines | What it does |
+|--------|-------|-------------|
+| `win_clipboard.rs` | 177 | Win32 clipboard full-format snapshot via `EnumClipboardFormats` + `GlobalAlloc`/`SetClipboardData`. Replaces `arboard`. Drop-guard for `CloseClipboard`. |
+| `win_focus.rs` | 68 | `GetForegroundWindow` → `AttachThreadInput` → `SetForegroundWindow` + `BringWindowToTop`. Same as the macOS window activation fix. |
+| `win_paste.rs` | 72 | Orchestrator: save clipboard → write text → activate window → `enigo` Ctrl+V with `Key::Layout('v')` (fixes layout issue) → restore from snapshot. |
+
+**Key fix:** `enigo` now uses `Key::Layout('v')` instead of `Key::Unicode('v')` — Ctrl+V must fire on VK_V (0x56), not a WM_CHAR character event.
+
+Cargo.toml: added `"winbase"`, `"synchapi"`, `"errhandlingapi"` to winapi features.
+
+The `#[cfg(not(target_os = "macos"))]` paste branch is now split into `#[cfg(target_os = "windows")]` → `win_paste::paste()` and `#[cfg(target_os = "linux")]` → `legacy::paste()` (Linux path unchanged).
+
+Complete rewrite of the paste module from a 366-line monolithic `paste.rs` into a 7-module tiered system:
+
+### New architecture (`src-tauri/src/paste/`)
+- **Tier 1** — `ax_inject.rs`: Direct AX text injection (`AXSelectedText` / `AXValue`) into native text fields. No clipboard, no keystrokes. Requires Accessibility trust.
+- **Tier 2** — `clipboard.rs` + `keyboard_layout.rs` + `synthetic_keys.rs`: NSPasteboard save/restore (replaces `arboard`), dynamic V keycode via `UCKeyTranslate` (fixes Dvorak/Colemak), `CGEventPost` Cmd+V.
+- **Tier 3** — Text left on clipboard as manual Cmd+V backup (when AX trust is absent).
+- **Focus: ** `focus_capture.rs`: AX-based PID/bundle ID capture + `NSRunningApplication` activation before paste (fixes paste into wrong app).
+- **Orchestrator** — `mod.rs` runs all three tiers in order with `changeCount`-gated clipboard restore.
+
+### What changed
+- `paste.rs` → `paste/legacy.rs` (kept for non-macOS + `frontmost_app` re-export)
+- `arboard` eliminated on macOS (replaced by native NSPasteboard)
+- Hardcoded V keycode 0x09 → dynamic `UCKeyTranslate` lookup
+- 500ms sleep → 200ms sleep with `changeCount` guard
+- Window activation added before paste (was missing entirely)
+- 200ms sleep down from 500ms (changeCount guard catches races)
+- `arboard`/`pbcopy` fallback removed on macOS
+
+### To test
+1. **TextEdit (native):** Dictate, verify Tier 1 fires. Logs should show `[ax_inject] injected N chars via AXSelectedText`
+2. **Cursor/VS Code (Electron):** Dictate, verify fallthrough to Tier 2. Logs: `[paste] Tier 2 — clipboard restored`
+3. **Clipboard preservation:** Copy something first, dictate, verify it's still on clipboard after
+4. **Dvorak/Colemak:** Verify Cmd+V still works (should resolve correct keycode)
+5. **Ad-hoc build:** Verify clipboard fallback still works (Tier 1 skipped, Tier 2 posts at HID)
+
 ## Outstanding
 - Tray icon may still not be visible on user's display — needs user confirmation. Check both monitors and any Bartender/Ice/Hidden Bar software.
 - Tray icon pixel size for macOS should be 22×22 (not 44×44) — low priority now that title text is visible.

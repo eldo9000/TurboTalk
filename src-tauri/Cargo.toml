@@ -123,6 +123,7 @@ core-foundation = "0.10"
 # Microphone TCC status query + native prompt (first-launch onboarding).
 objc2               = "0.6"
 objc2-foundation    = "0.3"
+objc2-app-kit       = "0.3"
 objc2-av-foundation = "0.3"
 block2              = "0.6"
 
@@ -132,4 +133,4 @@ rdev = "0.5"
 
 # Windows push-to-talk uses a native WH_KEYBOARD_LL hook (see hotkey_win32.rs).
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["winuser"] }
+winapi = { version = "0.3", features = ["winuser", "winbase", "synchapi", "errhandlingapi"] }

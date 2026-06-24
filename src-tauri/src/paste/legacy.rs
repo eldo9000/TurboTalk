@@ -1,4 +1,8 @@
 // Active-application text injection.
+// Kept for non-macOS paste and for frontmost_app() which is still used by hotkey.rs.
+// On macOS the tiered paste in mod.rs supersedes this module.
+#![cfg_attr(target_os = "macos", allow(dead_code))]
+
 // macOS: write to clipboard (arboard), send Cmd+V via CGEventPost when
 // Accessibility trust is available, restore prior clipboard. `frontmost_app()` uses
 // NSWorkspace via objc2 instead of osascript (also sub-millisecond).
@@ -94,10 +98,23 @@ fn accessibility_trusted() -> bool {
 /// Uses `NSWorkspace.sharedWorkspace.frontmostApplication.localizedName`
 /// via the `objc2` crate — a sub-millisecond native call.
 /// The process name is sufficient for focus-change observability.
+///
+/// NSWorkspace requires the main thread. Returns None if called from a
+/// background thread (which happens during dictation — ptt_up spawns
+/// the paste worker on a background thread).
 #[cfg(target_os = "macos")]
 pub fn frontmost_app() -> Option<String> {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
+
+    // NSWorkspace is an AppKit class — must be on the main thread.
+    #[link(name = "System", kind = "dylib")]
+    extern "C" {
+        fn pthread_main_np() -> i32;
+    }
+    if unsafe { pthread_main_np() == 0 } {
+        return None;
+    }
 
     unsafe {
         let workspace: *mut AnyObject = msg_send![objc2::class!(NSWorkspace), sharedWorkspace];
@@ -112,7 +129,6 @@ pub fn frontmost_app() -> Option<String> {
         if name.is_null() {
             return None;
         }
-        // localizedName returns an autoreleased NSString*; convert via UTF8String.
         let utf8: *const std::os::raw::c_char = msg_send![name, UTF8String];
         if utf8.is_null() {
             return None;
