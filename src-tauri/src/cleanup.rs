@@ -444,15 +444,22 @@ struct OllamaResponse {
 /// Apple Silicon; allow 60s so the first inference after launch always lands.
 const OLLAMA_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
-static OLLAMA_CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+static OLLAMA_CLIENT: OnceLock<anyhow::Result<reqwest::blocking::Client>> = OnceLock::new();
 
-pub(crate) fn ollama_client() -> &'static reqwest::blocking::Client {
-    OLLAMA_CLIENT.get_or_init(|| {
+pub(crate) fn ollama_client() -> Option<&'static reqwest::blocking::Client> {
+    let result = OLLAMA_CLIENT.get_or_init(|| {
         reqwest::blocking::Client::builder()
             .connect_timeout(Duration::from_secs(2))
             .build()
-            .expect("reqwest blocking client build")
-    })
+            .map_err(|e| anyhow::anyhow!("failed to build shared HTTP client: {e}"))
+    });
+    match result {
+        Ok(client) => Some(client),
+        Err(e) => {
+            tracing::error!("[ollama] {e}");
+            None
+        }
+    }
 }
 
 /// Reject any URL that does not point at a loopback address. This is an
@@ -529,7 +536,9 @@ fn classify_blocking(text: &str, cfg: &crate::settings::CleanupConfig) -> anyhow
         stream: false,
     };
 
-    let client = ollama_client();
+    let client = ollama_client().ok_or_else(|| {
+        anyhow::anyhow!("Ollama HTTP client unavailable")
+    })?;
 
     let resp: OllamaResponse = client
         .post(endpoint)

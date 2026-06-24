@@ -100,7 +100,12 @@ pub fn ping_ollama() -> Result<Reachable, String> {
         }
     };
 
-    let client = crate::cleanup::ollama_client();
+    let Some(client) = crate::cleanup::ollama_client() else {
+        return Ok(Reachable {
+            reachable: false,
+            version: None,
+        });
+    };
 
     let resp = match client.get(endpoint).timeout(OLLAMA_TIMEOUT).send() {
         Ok(r) => r,
@@ -149,7 +154,9 @@ pub fn check_ollama_model(model_name: String) -> Result<bool, String> {
         Err(_) => return Ok(false),
     };
 
-    let client = crate::cleanup::ollama_client();
+    let Some(client) = crate::cleanup::ollama_client() else {
+        return Ok(false);
+    };
 
     let resp = match client.get(endpoint).timeout(OLLAMA_TIMEOUT).send() {
         Ok(r) => r,
@@ -334,7 +341,7 @@ pub async fn prewarm_ollama() {
             Ok(u) => u,
             Err(_) => return,
         };
-        let client = crate::cleanup::ollama_client();
+        let Some(client) = crate::cleanup::ollama_client() else { return };
         let body = serde_json::json!({
             "model": model,
             "prompt": "hi",
