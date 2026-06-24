@@ -166,6 +166,26 @@ Complete rewrite of the paste module from a 366-line monolithic `paste.rs` into 
 4. **Dvorak/Colemak:** Verify Cmd+V still works (should resolve correct keycode)
 5. **Ad-hoc build:** Verify clipboard fallback still works (Tier 1 skipped, Tier 2 posts at HID)
 
+## Windows hotkey (2026-06-24) — WH_KEYBOARD_LL hook landed
+
+The Windows PTT hotkey path (`hotkey_win32.rs`) was rewritten from a 224-line
+`GetAsyncKeyState` polling loop (8ms interval, 125 Hz) to a 317-line
+`WH_KEYBOARD_LL` low-level keyboard hook on a dedicated `GetMessageW`
+message-pump thread:
+
+- Uses the shared `HotkeyController` pattern (press_action / release_action /
+  arm_hold_cancel / cancel_if_busy) matching the macOS IOHID keyboard handler
+- Reads config inside the callback (same pattern as macOS CGEventTap)
+- Dedup via `PTT_KEY_HELD` / `ESC_KEY_HELD` atomics
+- Skips synthetic/injected events via `LLKHF_INJECTED` flag
+- Clean shutdown path: `GetMessageW` returning 0 breaks the loop, then
+  `UnhookWindowsHookEx` fires
+- `HotkeyProbe` preserved with updated fields (hook_installed, event counters)
+- `cargo check --manifest-path src-tauri/Cargo.toml` passes (macOS)
+- `GetAsyncKeyState`, `thread::sleep` in polling loop, `POLL_CTX` all removed
+
+Commit `63d79a0`.
+
 ## Outstanding
 - Tray icon may still not be visible on user's display — needs user confirmation. Check both monitors and any Bartender/Ice/Hidden Bar software.
 - Tray icon pixel size for macOS should be 22×22 (not 44×44) — low priority now that title text is visible.
