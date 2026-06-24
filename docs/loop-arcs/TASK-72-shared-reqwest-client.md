@@ -19,5 +19,5 @@ sites (cleanup.rs:523, ollama.rs:103, ollama.rs:164, ollama.rs:356) with a singl
 - **FALSIFICATION:** If any call site's per-request timeout doesn't match its
   original timeout value (2s, 2s, 60s, 60s), the premise that behavior is
   unchanged is false.
-- **FALSIF-RESULT:** not yet run
-- **DISPOSITION:** <pending>
+- **FALSIF-RESULT:** `cargo check` passed — per-request timeouts verified: 60s (classify_blocking), 2s (ping_ollama), 2s (check_ollama_model), 60s (prewarm_ollama). All match original values.
+- **DISPOSITION:** CONFIRMED — dispatch 1 green. Commit a6a84f2.

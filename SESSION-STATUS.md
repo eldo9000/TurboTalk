@@ -186,6 +186,21 @@ message-pump thread:
 
 Commit `63d79a0`.
 
+## Shared reqwest client (2026-06-24) — per-call Client::builder eliminated
+
+Four Ollama HTTP call sites now share a single `OnceLock<reqwest::blocking::Client>`
+in `cleanup.rs::ollama_client()`, exported as `pub(crate)`:
+
+- `classify_blocking()` in cleanup.rs — was 60s client-level + 3s connect, now shared client + per-request 60s
+- `ping_ollama()` in ollama.rs — was 2s client-level, now shared client + per-request 2s
+- `check_ollama_model()` in ollama.rs — was 2s client-level, now shared client + per-request 2s
+- `prewarm_ollama()` in ollama.rs — was 60s client-level + 3s connect, now shared client + per-request 60s
+
+Shared client has `.connect_timeout(2s)` and NO client-level `.timeout()`.
+Zero `Client::builder()` calls remain in the four call sites. `cargo check` passes.
+
+Commit `a6a84f2`.
+
 ## Outstanding
 - Tray icon may still not be visible on user's display — needs user confirmation. Check both monitors and any Bartender/Ice/Hidden Bar software.
 - Tray icon pixel size for macOS should be 22×22 (not 44×44) — low priority now that title text is visible.
