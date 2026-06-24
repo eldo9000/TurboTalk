@@ -81,6 +81,27 @@ check_cxx_source_runs for ARM SVE hangs on macOS arm64 (Apple M4/M3/M2/M1 have n
 Fix: patch check_cxx_source_runs → check_cxx_source_compiles in ggml/src/ggml-cpu/CMakeLists.txt.
 Applies to: whisper.cpp cmake, any ggml-based cmake build on macOS arm64.
 
+## WH_KEYBOARD_LL-needs-message-pump
+`SetWindowsHookExW(WH_KEYBOARD_LL, ...)` installs a hook whose callback fires
+only when the installing thread pumps messages via `GetMessageW` / `PeekMessageW`.
+If the thread never enters a message loop (e.g. it calls `thread::sleep` in a
+polling loop), the callback silently never fires — the hook is installed and
+`UnhookWindowsHookEx` succeeds, but zero events are delivered.
+
+**Previous workaround:** `GetAsyncKeyState` polling at ~125 Hz was used
+because the hook appeared broken. The real problem was the missing message pump.
+
+**Fix (TASK-78):** Replace the polling loop with a dedicated thread that:
+1. Calls `SetWindowsHookExW(WH_KEYBOARD_LL, callback, NULL, 0)`
+2. Runs `GetMessageW` in a loop (the callback fires inside this call)
+3. On shutdown, posts `WM_QUIT` to break the loop, then `UnhookWindowsHookEx`
+
+**Key detail:** `WH_KEYBOARD_LL` is a *system-global* hook (the thread ID is 0).
+The callback receives a `KBDLLHOOKSTRUCT` with `vkCode`, `flags` (including
+`LLKHF_INJECTED` to detect synthetic input), and the `WM_KEYDOWN`/`WM_KEYUP`/
+`WM_SYSKEYDOWN`/`WM_SYSKEYUP` message types. The hook handle parameter to
+`CallNextHookEx` is ignored for low-level hooks (can pass NULL).
+
 ## CoreML-dyld-init-hang
 Building whisper.cpp with `WHISPER_COREML=1` links `libwhisper.coreml.dylib` into
 `libwhisper.1.dylib`, which pulls in `CoreML.framework` at **dyld load time** — before

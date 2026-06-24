@@ -1,44 +1,70 @@
-//! Windows push-to-talk via `GetAsyncKeyState` polling.
+//! Windows push-to-talk via `WH_KEYBOARD_LL` low-level keyboard hook.
 //!
-//! `WH_KEYBOARD_LL` (and `rdev` on top of it) often installs successfully but
-//! receives zero events in packaged Tauri builds on some Windows setups. Polling
-//! the configured VK at ~125 Hz is reliable for modifier-style PTT keys.
+//! Installs a global low-level keyboard hook on a dedicated message-pumping
+//! thread. The hook callback processes each keyboard event, matches the
+//! configured PTT hotkey and Escape cancel, and dispatches to the common
+//! lifecycle layer via `HotkeyController`.
 
-use crate::hotkey::common;
+use super::common;
+use super::{HotkeyController, TriggerAction};
 use crate::recorder::Recorder;
 use parking_lot::Mutex;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{tray::TrayIcon, AppHandle};
-use winapi::um::winuser::GetAsyncKeyState;
+use winapi::shared::minwindef::{DWORD, HHOOK, HINSTANCE, LPARAM, LRESULT, UINT, WPARAM};
+use winapi::um::winuser::{
+    CallNextHookEx, GetMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
+    KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN,
+    WM_SYSKEYUP,
+};
 
-const POLL_INTERVAL: Duration = Duration::from_millis(8);
+// LLKHF_* constants — winapi 0.3 does not expose these; values from
+// Windows SDK `winuser.h`.
+const LLKHF_EXTENDED: u32 = 0x0001;
+const LLKHF_INJECTED: u32 = 0x0010;
+const LLKHF_ALTDOWN: u32 = 0x0020;
+const LLKHF_UP: u32 = 0x0080;
+
+/// Hook handle stored for cleanup inside the hook thread.
+static HOOK_HANDLE: AtomicUsize = AtomicUsize::new(0);
+
+/// Thread ID stored so an external caller can post WM_QUIT to shut down
+/// the hook thread cleanly.
+static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 
 static LISTENER_ALIVE: AtomicBool = AtomicBool::new(false);
-static POLL_LOOPS: AtomicU64 = AtomicU64::new(0);
-static MATCHED_DOWN_COUNT: AtomicU64 = AtomicU64::new(0);
-static LAST_MATCHED_VK: AtomicU32 = AtomicU32::new(0);
+static HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
+static KEY_EVENT_COUNT: AtomicU64 = AtomicU64::new(0);
+static ESC_CANCEL_COUNT: AtomicU64 = AtomicU64::new(0);
 static LISTENER_STARTED_MS: AtomicU64 = AtomicU64::new(0);
+
+/// True while the PTT key is physically held. Prevents the first
+/// WM_KEYDOWN from re-entering on autorepeat.
+static PTT_KEY_HELD: AtomicBool = AtomicBool::new(false);
+
+/// Escape key dedup same as PTT_KEY_HELD.
+static ESC_KEY_HELD: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct HotkeyProbe {
     pub method: String,
     pub listener_alive: bool,
-    pub poll_loops: u64,
-    pub matched_down_count: u64,
-    pub last_matched_vk: u32,
+    pub hook_installed: bool,
+    pub key_event_count: u64,
+    pub esc_cancel_count: u64,
     pub listener_started_ms: u64,
 }
 
 pub fn diagnostic_probe() -> HotkeyProbe {
     HotkeyProbe {
-        method: "GetAsyncKeyState polling (8ms)".into(),
+        method: "WH_KEYBOARD_LL low-level hook (message pump)".into(),
         listener_alive: LISTENER_ALIVE.load(Ordering::Relaxed),
-        poll_loops: POLL_LOOPS.load(Ordering::Relaxed),
-        matched_down_count: MATCHED_DOWN_COUNT.load(Ordering::Relaxed),
-        last_matched_vk: LAST_MATCHED_VK.load(Ordering::Relaxed),
+        hook_installed: HOOK_INSTALLED.load(Ordering::Relaxed),
+        key_event_count: KEY_EVENT_COUNT.load(Ordering::Relaxed),
+        esc_cancel_count: ESC_CANCEL_COUNT.load(Ordering::Relaxed),
         listener_started_ms: LISTENER_STARTED_MS.load(Ordering::Relaxed),
     }
 }
@@ -50,11 +76,7 @@ fn epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn vk_down(vk: u32) -> bool {
-    unsafe { (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0 }
-}
-
-/// VK codes to poll for each Settings hotkey name.
+/// VK codes for each Settings hotkey name.
 fn vk_codes_for_name(name: &str) -> &'static [u32] {
     match name {
         "left_control" => &[0xA2],
@@ -65,9 +87,7 @@ fn vk_codes_for_name(name: &str) -> &'static [u32] {
         "right_shift" => &[0xA1],
         "left_command" => &[0x5B],
         "right_command" => &[0x5C],
-        // VK_F13–VK_F24 (0x7C–0x87) — spare keys; no default OS action.
-        // Third-party pedals / macro keyboards: map to one of these in
-        // your device software, then select the same key in TurboTalk.
+        // VK_F13–VK_F24 (0x7C–0x87)
         "f13" => &[0x7C],
         "f14" => &[0x7D],
         "f15" => &[0x7E],
@@ -80,96 +100,133 @@ fn vk_codes_for_name(name: &str) -> &'static [u32] {
         "f22" => &[0x85],
         "f23" => &[0x86],
         "f24" => &[0x87],
-        // Mouse extra buttons — users must disable native back/forward action
-        // in their mouse software to avoid double-firing.
-        "mouse_middle" => &[0x04],  // VK_MBUTTON
-        "mouse_back" => &[0x05],    // VK_XBUTTON1
-        "mouse_forward" => &[0x06], // VK_XBUTTON2
+        // Mouse buttons — listed for completeness but not supported by
+        // WH_KEYBOARD_LL. A separate WH_MOUSE_LL hook would be needed.
+        "mouse_middle" => &[0x04],
+        "mouse_back" => &[0x05],
+        "mouse_forward" => &[0x06],
         _ => &[],
     }
 }
 
-fn is_configured_key_down(name: &str) -> Option<u32> {
-    for &vk in vk_codes_for_name(name) {
-        if vk_down(vk) {
-            return Some(vk);
-        }
-    }
-    None
+/// True when the key name maps to a keyboard VK (not a mouse button).
+fn is_keyboard_key(name: &str) -> bool {
+    !matches!(name, "mouse_middle" | "mouse_back" | "mouse_forward")
 }
 
-struct PollContext {
+struct HookContext {
     recorder: Arc<Recorder>,
     tray_icon: TrayIcon,
     app: AppHandle,
     hotkey_state: Arc<parking_lot::RwLock<crate::settings::HotkeyConfig>>,
-    down: AtomicBool,
-    esc_down: AtomicBool,
 }
 
-impl PollContext {
-    fn tick(&self) {
-        POLL_LOOPS.fetch_add(1, Ordering::Relaxed);
+/// The context is stored behind a Mutex so the hook callback can read it.
+/// Since both spawn() and the callback run on the same thread, contention
+/// is zero in practice.
+static HOOK_CTX: Mutex<Option<Arc<HookContext>>> = Mutex::new(None);
 
-        let (config_key, toggle_mode, cancel_on_esc, cancel_on_hold) = {
-            let hk = self.hotkey_state.read();
-            (
-                hk.key.clone(),
-                hk.mode == "toggle",
-                hk.cancel_on_esc,
-                hk.cancel_on_hold,
-            )
-        };
-
-        if cancel_on_esc && vk_down(0x1B) {
-            if !self.esc_down.swap(true, Ordering::AcqRel) {
-                let s = self.recorder.state();
-                if matches!(
-                    s,
-                    crate::recorder::State::Recording | crate::recorder::State::Transcribing
-                ) {
-                    if !toggle_mode && matches!(s, crate::recorder::State::Recording) {
-                        common::arm_ptt_up_suppression();
-                    }
-                    common::trigger_cancel(&self.recorder, &self.tray_icon, &self.app);
-                }
-            }
-            return;
-        }
-        self.esc_down.store(false, Ordering::Relaxed);
-
-        let Some(vk) = is_configured_key_down(&config_key) else {
-            if self.down.swap(false, Ordering::AcqRel) && !toggle_mode {
-                tracing::debug!("[hotkey] win32 poll key up config={config_key}");
-                common::disarm_hold_cancel();
-                common::ptt_up(&self.recorder, &self.tray_icon, &self.app);
-            }
-            return;
-        };
-
-        let was_down = self.down.load(Ordering::Acquire);
-        if !was_down {
-            self.down.store(true, Ordering::Release);
-            MATCHED_DOWN_COUNT.fetch_add(1, Ordering::Relaxed);
-            LAST_MATCHED_VK.store(vk, Ordering::Relaxed);
-            tracing::info!("[hotkey] win32 poll key down vk=0x{vk:02X} config={config_key}");
-            if cancel_on_hold && common::should_arm_hold_cancel(&self.recorder) {
-                common::arm_hold_cancel(&self.recorder, &self.tray_icon, &self.app, toggle_mode);
-            }
-            if toggle_mode {
-                if self.recorder.is_recording() {
-                    common::ptt_up(&self.recorder, &self.tray_icon, &self.app);
-                } else {
-                    common::ptt_down(&self.recorder, &self.tray_icon, &self.app);
-                }
-            } else {
-                common::ptt_down(&self.recorder, &self.tray_icon, &self.app);
-            }
-        }
+/// Low-level keyboard hook callback. Runs on the hook thread during
+/// `GetMessageW` processing.
+///
+/// # Safety
+///
+/// `lParam` must point to a valid `KBDLLHOOKSTRUCT` when `code >= 0`.
+/// Must call `CallNextHookEx` with the original parameters.
+unsafe extern "system" fn hook_callback(code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
+    if code < 0 {
+        return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param);
     }
-}
 
-static POLL_CTX: Mutex<Option<Arc<PollContext>>> = Mutex::new(None);
+    KEY_EVENT_COUNT.fetch_add(1, Ordering::Relaxed);
+
+    let kb = &*(l_param as *const KBDLLHOOKSTRUCT);
+    let vk = kb.vkCode;
+
+    // Skip synthetic/injected keystrokes to avoid reacting to automation
+    // or software that programmatically generates keystrokes.
+    if (kb.flags & LLKHF_INJECTED) != 0 {
+        return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param);
+    }
+
+    let ctx_guard = HOOK_CTX.lock();
+    let Some(ctx) = ctx_guard.as_ref() else {
+        return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param);
+    };
+
+    let (config_key, cancel_on_esc, cancel_on_hold) = {
+        let hk = ctx.hotkey_state.read();
+        (hk.key.clone(), hk.cancel_on_esc, hk.cancel_on_hold)
+    };
+
+    // ── Escape cancel ───────────────────────────────────────────────────
+    if cancel_on_esc && vk == 0x1B {
+        match w_param as u32 {
+            WM_KEYDOWN | WM_SYSKEYDOWN => {
+                if !ESC_KEY_HELD.swap(true, Ordering::AcqRel) {
+                    ESC_CANCEL_COUNT.fetch_add(1, Ordering::Relaxed);
+                    let controller = {
+                        let hk = ctx.hotkey_state.read();
+                        HotkeyController::from_mode(&hk.mode)
+                    };
+                    controller.cancel_if_busy(&ctx.recorder, &ctx.tray_icon, &ctx.app);
+                }
+            }
+            WM_KEYUP | WM_SYSKEYUP => {
+                ESC_KEY_HELD.store(false, Ordering::Release);
+            }
+            _ => {}
+        }
+        return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param);
+    }
+
+    // ── PTT hotkey match ────────────────────────────────────────────────
+    let vks = vk_codes_for_name(&config_key);
+    if vks.is_empty() || !vks.contains(&vk) {
+        return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param);
+    }
+
+    let controller = {
+        let hk = ctx.hotkey_state.read();
+        HotkeyController::from_mode(&hk.mode)
+    };
+
+    match w_param as u32 {
+        WM_KEYDOWN | WM_SYSKEYDOWN => {
+            if !PTT_KEY_HELD.swap(true, Ordering::AcqRel) {
+                if cancel_on_hold && common::should_arm_hold_cancel(&ctx.recorder) {
+                    controller.arm_hold_cancel(&ctx.recorder, &ctx.tray_icon, &ctx.app);
+                }
+                match controller.press_action(ctx.recorder.is_recording()) {
+                    TriggerAction::Start => {
+                        common::ptt_down(&ctx.recorder, &ctx.tray_icon, &ctx.app);
+                    }
+                    TriggerAction::Stop => {
+                        common::ptt_up(&ctx.recorder, &ctx.tray_icon, &ctx.app);
+                    }
+                    TriggerAction::Noop => {}
+                }
+            }
+        }
+        WM_KEYUP | WM_SYSKEYUP => {
+            if PTT_KEY_HELD.swap(false, Ordering::AcqRel) {
+                common::disarm_hold_cancel();
+                match controller.release_action() {
+                    TriggerAction::Start => {
+                        common::ptt_down(&ctx.recorder, &ctx.tray_icon, &ctx.app);
+                    }
+                    TriggerAction::Stop => {
+                        common::ptt_up(&ctx.recorder, &ctx.tray_icon, &ctx.app);
+                    }
+                    TriggerAction::Noop => {}
+                }
+            }
+        }
+        _ => {}
+    }
+
+    CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param)
+}
 
 pub fn spawn(
     recorder: Arc<Recorder>,
@@ -181,37 +238,79 @@ pub fn spawn(
         {
             let hk = hotkey_state.read();
             tracing::info!(
-                "[hotkey] Win32 GetAsyncKeyState poller starting — key={} mode={}",
+                "[hotkey] Win32 WH_KEYBOARD_LL hook starting — key={} mode={}",
                 hk.key,
-                hk.mode
+                hk.mode,
             );
             if vk_codes_for_name(&hk.key).is_empty() {
                 tracing::warn!("[hotkey] unknown hotkey key {:?} on Windows", hk.key);
             }
+            if !is_keyboard_key(&hk.key) {
+                tracing::warn!(
+                    "[hotkey] mouse button key {:?} is not captured by WH_KEYBOARD_LL; \
+                     PTT will not respond to this key",
+                    hk.key,
+                );
+            }
         }
 
         LISTENER_STARTED_MS.store(epoch_ms(), Ordering::Relaxed);
-        LISTENER_ALIVE.store(true, Ordering::Relaxed);
 
-        let ctx = Arc::new(PollContext {
+        *HOOK_CTX.lock() = Some(Arc::new(HookContext {
             recorder,
-            tray_icon,
-            app,
+            tray_icon: tray_icon.clone(),
+            app: app.clone(),
             hotkey_state,
-            down: AtomicBool::new(false),
-            esc_down: AtomicBool::new(false),
-        });
-        *POLL_CTX.lock() = Some(ctx.clone());
+        }));
 
-        tracing::info!("[hotkey] Win32 key poller running");
+        HOOK_THREAD_ID.store(
+            unsafe { winapi::um::processthreadsapi::GetCurrentThreadId() },
+            Ordering::Relaxed,
+        );
 
-        while LISTENER_ALIVE.load(Ordering::Relaxed) {
-            ctx.tick();
-            std::thread::sleep(POLL_INTERVAL);
+        // Install the low-level keyboard hook.
+        // dwThreadId = 0 (global hook); hmod = NULL since the hook proc
+        // lives in our own module.
+        let hook = unsafe {
+            SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_callback), 0 as HINSTANCE, 0)
+        };
+
+        if hook.is_null() {
+            tracing::error!("[hotkey] SetWindowsHookExW(WH_KEYBOARD_LL) failed");
+            *HOOK_CTX.lock() = None;
+            return;
         }
 
-        *POLL_CTX.lock() = None;
-        tracing::info!("[hotkey] Win32 key poller stopped");
+        HOOK_HANDLE.store(hook as usize, Ordering::Relaxed);
+        HOOK_INSTALLED.store(true, Ordering::Relaxed);
+        LISTENER_ALIVE.store(true, Ordering::Relaxed);
+        tracing::info!("[hotkey] Win32 WH_KEYBOARD_LL hook installed");
+
+        // ── Message pump ─────────────────────────────────────────────────
+        // `GetMessageW` blocks until a message arrives; the hook callback
+        // fires synchronously inside this call for each keyboard event.
+        let mut msg: MSG = std::mem::zeroed();
+        loop {
+            let ret = GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0);
+            match ret {
+                0 => break,                         // WM_QUIT
+                -1 => {
+                    tracing::error!("[hotkey] GetMessageW returned -1");
+                    break;
+                }
+                _ => {} // message processed, continue
+            }
+        }
+
+        // ── Cleanup ──────────────────────────────────────────────────────
+        let hook_ptr = HOOK_HANDLE.load(Ordering::Relaxed) as HHOOK;
+        if !hook_ptr.is_null() {
+            UnhookWindowsHookEx(hook_ptr);
+        }
+        *HOOK_CTX.lock() = None;
+        LISTENER_ALIVE.store(false, Ordering::Relaxed);
+        HOOK_INSTALLED.store(false, Ordering::Relaxed);
+        tracing::info!("[hotkey] Win32 WH_KEYBOARD_LL hook stopped");
     });
 }
 
@@ -220,5 +319,5 @@ pub fn accessibility_trusted() -> bool {
 }
 
 pub fn iohid_listener_running() -> bool {
-    false // IOHID is macOS-only; Input Monitoring is Unsupported on Windows
+    false
 }
