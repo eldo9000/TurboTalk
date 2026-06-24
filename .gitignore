@@ -13,3 +13,6 @@ build/TurboTalk-*
 src-tauri/binaries/
 src-tauri/resources/silero_vad.onnx
 .claude/
+
+# macOS
+.DS_Store
