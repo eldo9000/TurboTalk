@@ -440,11 +440,20 @@ struct OllamaResponse {
     response: String,
 }
 
-/// Connect timeout for reaching Ollama — should be near-instant on loopback.
-const OLLAMA_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// Read timeout for a classify response. llama3.2:3b cold-starts in ~20s on
 /// Apple Silicon; allow 60s so the first inference after launch always lands.
 const OLLAMA_READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+static OLLAMA_CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+
+pub(crate) fn ollama_client() -> &'static reqwest::blocking::Client {
+    OLLAMA_CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(2))
+            .build()
+            .expect("reqwest blocking client build")
+    })
+}
 
 /// Reject any URL that does not point at a loopback address. This is an
 /// allowlist, not a denylist: only `localhost`, `127.0.0.1`, and `::1` are
@@ -520,14 +529,12 @@ fn classify_blocking(text: &str, cfg: &crate::settings::CleanupConfig) -> anyhow
         stream: false,
     };
 
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(OLLAMA_CONNECT_TIMEOUT)
-        .timeout(OLLAMA_READ_TIMEOUT)
-        .build()?;
+    let client = ollama_client();
 
     let resp: OllamaResponse = client
         .post(endpoint)
         .json(&body)
+        .timeout(OLLAMA_READ_TIMEOUT)
         .send()
         .map_err(|e| {
             // Connection-refused, timeout, and DNS-failure all surface here.

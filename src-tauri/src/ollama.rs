@@ -100,21 +100,9 @@ pub fn ping_ollama() -> Result<Reachable, String> {
         }
     };
 
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(OLLAMA_TIMEOUT)
-        .connect_timeout(OLLAMA_TIMEOUT)
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => {
-            return Ok(Reachable {
-                reachable: false,
-                version: None,
-            })
-        }
-    };
+    let client = crate::cleanup::ollama_client();
 
-    let resp = match client.get(endpoint).send() {
+    let resp = match client.get(endpoint).timeout(OLLAMA_TIMEOUT).send() {
         Ok(r) => r,
         Err(_) => {
             return Ok(Reachable {
@@ -161,16 +149,9 @@ pub fn check_ollama_model(model_name: String) -> Result<bool, String> {
         Err(_) => return Ok(false),
     };
 
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(OLLAMA_TIMEOUT)
-        .connect_timeout(OLLAMA_TIMEOUT)
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return Ok(false),
-    };
+    let client = crate::cleanup::ollama_client();
 
-    let resp = match client.get(endpoint).send() {
+    let resp = match client.get(endpoint).timeout(OLLAMA_TIMEOUT).send() {
         Ok(r) => r,
         Err(_) => return Ok(false),
     };
@@ -353,21 +334,14 @@ pub async fn prewarm_ollama() {
             Ok(u) => u,
             Err(_) => return,
         };
-        let client = match reqwest::blocking::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(3))
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-        {
-            Ok(c) => c,
-            Err(_) => return,
-        };
+        let client = crate::cleanup::ollama_client();
         let body = serde_json::json!({
             "model": model,
             "prompt": "hi",
             "stream": false,
             "options": { "num_predict": 1 },
         });
-        match client.post(endpoint).json(&body).send() {
+        match client.post(endpoint).json(&body).timeout(std::time::Duration::from_secs(60)).send() {
             Ok(_) => tracing::info!("[ollama-prewarm] model loaded"),
             Err(e) => tracing::debug!("[ollama-prewarm] skipped: {e}"),
         }
