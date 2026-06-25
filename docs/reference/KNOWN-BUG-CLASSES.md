@@ -109,6 +109,14 @@ The callback receives a `KBDLLHOOKSTRUCT` with `vkCode`, `flags` (including
 
 **Key detail:** `cfg.whisper.bin` is never read in production code (`WhisperBackend::from_config` calls `find_whisper_server("whisper-server")` with a hardcoded string). First save after cold start still invalidates (safe fallback — `Config::default()` comparison).
 
+## config-clone-not-a-bug-class
+`settings::load()` used to deep-clone the entire `Config` struct on every call.
+Swapped to `RwLock<Option<Arc<Config>>>` + narrow field accessors for hot-path
+readers (overlay positioning, audio device/idle timeout, pause media toggle).
+This is a performance optimisation, not a bug fix — no functional change.
+`load()` now returns `Arc<Config>`; callers that need owned `Config` explicitly
+clone via `(*load()).clone()`. Auto-deref handles field access for the rest.
+
 ## CoreML-dyld-init-hang
 Building whisper.cpp with `WHISPER_COREML=1` links `libwhisper.coreml.dylib` into
 `libwhisper.1.dylib`, which pulls in `CoreML.framework` at **dyld load time** — before

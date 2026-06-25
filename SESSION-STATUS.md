@@ -1,6 +1,6 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-06-24 (gate worker invalidation on backend-affecting fields only)  
+**Last updated:** 2026-06-24 (Arc<Config> cache, narrow hot-path accessors)  
 **Current state:** IOHID keyboard fallback is active and user-proven for the ad-hoc `/Applications/Turbo Talk.app`. Right Option dictation works through Input Monitoring. Ad-hoc macOS auto-paste is user-proven via Session tap. Large overlay mode now has an audio-driven glyph/text preview: live speech appears as word-shaped pills, paused segment commits become readable text, and the live pill cursor continues from the committed edge. Live pill widths use a lorem-ipsum word-length sequence, preview/audio panels are both fixed to 984px, and the live pill rate now adapts after segment commits instead of assuming one speaking speed.
 
 ## Next action
@@ -114,6 +114,24 @@ the flag is `flaky=true` (full rejection — still pasted with stronger warning)
 
 This matches the existing "flaky" philosophy at the original lines 1163-1191:
 "the garbage text is still more useful than appearing to have done nothing."
+
+## This session (2026-06-24) — Arc<Config> cache + narrow hot-path accessors
+
+**Arc<Config> cache:** Swapped `settings::CACHE` from `RwLock<Option<Config>>` to
+`RwLock<Option<Arc<Config>>>`. `load()` now returns `Arc<Config>` — clone is a
+cheap refcount bump instead of deep-cloning the entire struct (including all
+`Vec<String>` fields for vocabulary, antivocabulary, models). Added narrow field
+accessors for hot-path readers: `overlay_position()`, `overlay_size()`,
+`pause_media_on_dictate()`, `idle_timeout_secs()`, `audio_device()`. These
+acquire the read lock, extract one field, and drop the lock — no full Config clone.
+
+**Hot-path callers updated:**
+- `windowing.rs` (both macOS/not-macOS overlay positioning) — uses narrow accessors
+- `audio.rs` (`idle_timeout_from_settings`, `start`) — uses narrow accessors
+- `hotkey.rs` (`pause_media_on_dictate` at PTT-down/up) — uses narrow accessors
+- `hotkey.rs` (two `prewarm` calls) — explicitly clones Config from Arc for owned-Config fn
+
+**Proof:** `cargo check` passes, `cargo clippy` passes (no new warnings).
 
 ## This session (2026-06-24) — gate worker invalidation
 

@@ -63,7 +63,7 @@ const MIN_RECORDING_MS: u32 = 100;
 /// restart. `0` means "close stream immediately" — handled inline in
 /// `stop()`/`cancel()`, not via the watchdog.
 fn idle_timeout_from_settings() -> Duration {
-    Duration::from_secs(crate::settings::load().audio.idle_timeout_secs as u64)
+    Duration::from_secs(crate::settings::idle_timeout_secs() as u64)
 }
 
 /// How often the idle watchdog wakes up to check whether the warm stream
@@ -712,7 +712,7 @@ impl AudioCapture {
         self.feeder_cursor.store(0, Ordering::SeqCst);
 
         // Always read device from config so changes take effect without restart.
-        let want = crate::settings::load().audio.device;
+        let want = crate::settings::audio_device();
 
         // Decide whether to reuse the warm stream or open a fresh one.
         // Holding `warm_stream` across `open_stream` is fine — the only

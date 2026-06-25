@@ -329,7 +329,10 @@ pub(crate) mod common {
             // next PTT press doesn't sit on the yellow tile waiting for a server
             // that nobody restarted.
             if !crate::transcribe::is_ready() {
-                crate::transcribe::prewarm(crate::settings::load(), app.clone());
+                crate::transcribe::prewarm(
+                    (*crate::settings::load()).clone(),
+                    app.clone(),
+                );
             }
         });
     }
@@ -529,7 +532,10 @@ pub(crate) mod common {
                     return;
                 }
 
-                crate::transcribe::prewarm(crate::settings::load(), app.clone());
+                crate::transcribe::prewarm(
+                    (*crate::settings::load()).clone(),
+                    app.clone(),
+                );
                 crate::diagnostic_log::emergency_trace("[ptt_down] prewarm started; emit ptt-armed");
 
                 // Pin the overlay to the cursor's monitor up front so the
@@ -595,7 +601,7 @@ pub(crate) mod common {
             session_metrics::record_hotkey_down();
 
             // Pause media playback before capture starts.
-            if crate::settings::load().pause_media_on_dictate {
+            if crate::settings::pause_media_on_dictate() {
                 crate::media_control::pause();
             }
 
@@ -872,7 +878,7 @@ pub(crate) mod common {
         bail_out(rec, tray, app, job_id_opt, true);
 
         // Resume media playback after everything is fully done.
-        if crate::settings::load().pause_media_on_dictate {
+        if crate::settings::pause_media_on_dictate() {
             crate::media_control::resume();
         }
     }

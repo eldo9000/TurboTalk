@@ -60,7 +60,7 @@ pub fn emit_ui_error(
 #[tauri::command]
 #[specta::specta]
 fn get_config() -> settings::Config {
-    settings::load()
+    (*settings::load()).clone()
 }
 
 #[tauri::command]
@@ -106,7 +106,7 @@ fn prewarm_model(app: tauri::AppHandle) -> Result<(), String> {
     if !permissions::check_readiness().model_present {
         return Err("No transcription model is installed for the selected engine.".to_string());
     }
-    let cfg = settings::load();
+    let cfg = (*settings::load()).clone();
     transcribe::prewarm(cfg, app);
     Ok(())
 }
@@ -174,7 +174,7 @@ fn apply_alt_backend_after_download(
     family: settings::BackendFamily,
     variant: &str,
 ) -> Result<(), String> {
-    let mut cfg = settings::load();
+    let mut cfg = (*settings::load()).clone();
     cfg.backend = family;
     cfg.backend_variant = variant.to_string();
     settings::save(&cfg).map_err(|e| e.to_string())?;
@@ -378,7 +378,7 @@ fn delete_backend_model(family: String, variant: String) -> Result<bool, String>
     std::fs::remove_dir_all(&canon).map_err(|e| format!("delete failed: {}", e))?;
     tracing::info!("[models] deleted backend bundle {}", canon.display());
 
-    let mut cfg = settings::load();
+    let mut cfg = (*settings::load()).clone();
     if cfg.backend_variant == variant {
         if matches!(cfg.backend, BackendFamily::Parakeet) {
             cfg.backend_variant.clear();

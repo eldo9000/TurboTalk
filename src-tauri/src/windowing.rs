@@ -288,10 +288,10 @@ pub fn reposition_overlay_to_cursor_monitor(app: &AppHandle) {
     };
 
     let (mx, my, mw, mh) = monitor_logical_bounds(&monitor);
-    let cfg = crate::settings::load();
-    let position = cfg.overlay_position;
-    let win_h = overlay_height_for_size(&cfg.overlay_size);
-    let win_w = overlay_width_for_size(&cfg.overlay_size);
+    let position = crate::settings::overlay_position();
+    let overlay_size = crate::settings::overlay_size();
+    let win_h = overlay_height_for_size(&overlay_size);
+    let win_w = overlay_width_for_size(&overlay_size);
     // Center horizontally; clamp so a window wider than the monitor never
     // starts off the left edge.
     let x = (mx + (mw - win_w) / 2.0).max(mx);
@@ -345,10 +345,10 @@ pub fn reposition_overlay_to_cursor_monitor(app: &AppHandle) {
     };
 
     let (mx, my, mw, mh) = monitor_logical_bounds(&monitor);
-    let cfg = crate::settings::load();
-    let position = cfg.overlay_position;
-    let win_h = overlay_height_for_size(&cfg.overlay_size);
-    let win_w = overlay_width_for_size(&cfg.overlay_size);
+    let position = crate::settings::overlay_position();
+    let overlay_size = crate::settings::overlay_size();
+    let win_h = overlay_height_for_size(&overlay_size);
+    let win_w = overlay_width_for_size(&overlay_size);
     let x = (mx + (mw - win_w) / 2.0).max(mx);
     let y = overlay_y_for_position(my, mh, &position, win_h);
 

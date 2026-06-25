@@ -2,14 +2,14 @@
 use parking_lot::RwLock;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 /// Process-wide cache for the parsed `Config`. Populated lazily on first
 /// `load()` and on every `save_config` IPC call. Cache misses fall through to
 /// disk so the cache is strictly an optimization — never a hard dependency.
-static CACHE: OnceLock<RwLock<Option<Config>>> = OnceLock::new();
+static CACHE: OnceLock<RwLock<Option<Arc<Config>>>> = OnceLock::new();
 
-fn cache() -> &'static RwLock<Option<Config>> {
+fn cache() -> &'static RwLock<Option<Arc<Config>>> {
     CACHE.get_or_init(|| RwLock::new(None))
 }
 
@@ -587,15 +587,16 @@ pub(crate) fn save_history_at(
     Ok(())
 }
 
-pub fn load() -> Config {
+pub fn load() -> Arc<Config> {
     // Fast path: return a clone of the cached config if it's been populated.
     if let Some(cfg) = cache().read().as_ref() {
-        return cfg.clone();
+        return Arc::clone(cfg);
     }
     // Slow path: read from disk, then populate the cache.
     let cfg = load_detailed().config;
-    *cache().write() = Some(cfg.clone());
-    cfg
+    let arc = Arc::new(cfg);
+    *cache().write() = Some(Arc::clone(&arc));
+    arc
 }
 
 /// Read `cursor_dot_indicator` from the cached config without cloning the
@@ -620,7 +621,7 @@ pub fn prime_cache() {
 /// Replace the cached config with `cfg`. Call after `save(&cfg)` succeeds so
 /// subsequent readers see the new values without going to disk.
 pub fn update_cache(cfg: &Config) {
-    *cache().write() = Some(cfg.clone());
+    *cache().write() = Some(Arc::new(cfg.clone()));
 }
 
 /// Drop the cached config so the next `load()` re-reads from disk. Useful for
@@ -628,6 +629,56 @@ pub fn update_cache(cfg: &Config) {
 /// behind our back.
 pub fn invalidate_cache() {
     *cache().write() = None;
+}
+
+/// Read `overlay_position` from the cached config without cloning the full
+/// `Config`. Called on PTT-down to position the overlay window.
+pub fn overlay_position() -> String {
+    cache()
+        .read()
+        .as_ref()
+        .map(|c| c.overlay_position.clone())
+        .unwrap_or_else(default_overlay_position)
+}
+
+/// Read `overlay_size` from the cached config without cloning the full
+/// `Config`. Called on PTT-down to position the overlay window.
+pub fn overlay_size() -> String {
+    cache()
+        .read()
+        .as_ref()
+        .map(|c| c.overlay_size.clone())
+        .unwrap_or_else(default_overlay_size)
+}
+
+/// Read `pause_media_on_dictate` without cloning the full `Config`.
+/// Called on every PTT-down/up to pause/resume media playback.
+pub fn pause_media_on_dictate() -> bool {
+    cache()
+        .read()
+        .as_ref()
+        .map(|c| c.pause_media_on_dictate)
+        .unwrap_or(true)
+}
+
+/// Read `audio.idle_timeout_secs` without cloning the full `Config`.
+/// Called on every audio stop/cancel to determine idle watchdog timeout.
+pub fn idle_timeout_secs() -> u32 {
+    cache()
+        .read()
+        .as_ref()
+        .map(|c| c.audio.idle_timeout_secs)
+        .unwrap_or_else(default_idle_timeout_secs)
+}
+
+/// Read `audio.device` without cloning the full `Config`.
+/// Called on every PTT-down to decide which audio device to open.
+pub fn audio_device() -> String {
+    cache()
+        .read()
+        .as_ref()
+        .map(|c| c.audio.device.clone())
+        .unwrap_or_else(|| "default".into())
 }
 
 /// Result of loading config. `parse_error` is `Some(message)` if the on-disk
