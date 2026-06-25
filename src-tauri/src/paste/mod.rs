@@ -100,6 +100,7 @@ pub fn paste(text: &str) -> anyhow::Result<bool> {
     crate::diagnostic_log::emergency_trace("[paste-tier2] synthetic_keys::post_cmd_v");
     synthetic_keys::post_cmd_v();
 
+    crate::diagnostic_log::emergency_trace("[paste-tier2] ax_trusted");
     if ax_trusted {
         crate::diagnostic_log::emergency_trace("[paste-tier2] sleep 200ms");
         std::thread::sleep(std::time::Duration::from_millis(200));
