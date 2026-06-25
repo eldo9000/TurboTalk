@@ -352,8 +352,8 @@ pub(crate) mod common {
     /// because the overlay window has `focus: false` and ignores cursor
     /// events — WKWebView blocks `AudioContext` audio without a user
     /// gesture, so a frontend Web Audio chime would be silently dropped.
-    /// Fires `afplay` on macOS with a built-in system sound; on Windows
-    /// uses PowerShell `SystemSounds`; on Linux silently no-ops.
+    /// Plays a system sound via `NSSound` on macOS, `PlaySoundW` on Windows,
+    /// no-op on Linux.
     pub(crate) fn play_chime(event: ChimeEvent) {
         let cfg = crate::settings::load();
         let (enabled, sound) = match event {
@@ -374,41 +374,62 @@ pub(crate) mod common {
         }
         #[cfg(target_os = "macos")]
         {
-            let vol = cfg.sound_volume.clamp(0.0, 1.0);
-            match std::process::Command::new("afplay")
-                .arg("-v")
-                .arg(format!("{:.3}", vol))
-                .arg(sound)
-                .spawn()
-            {
-                Ok(_) => tracing::info!(
-                    "[chime] afplay {} (vol={:.2})",
-                    sound.rsplit('/').next().unwrap_or(sound),
-                    vol
-                ),
-                Err(e) => tracing::warn!("[chime] afplay failed for {}: {}", sound, e),
+            use objc2::msg_send;
+            use objc2::runtime::AnyObject;
+            use std::ffi::CString;
+
+            fn ns_string(s: &str) -> *mut AnyObject {
+                let c_str = CString::new(s).expect("ns_string: null byte in string");
+                unsafe { msg_send![objc2::class!(NSString), stringWithUTF8String: c_str.as_ptr()] }
+            }
+
+            let vol = cfg.sound_volume.clamp(0.0, 1.0) as f64;
+            let name = sound
+                .rsplit('/')
+                .next()
+                .unwrap_or(sound)
+                .trim_end_matches(".aiff");
+            unsafe {
+                let ns_sound: *mut AnyObject = msg_send![
+                    objc2::class!(NSSound),
+                    soundNamed: ns_string(name)
+                ];
+                if ns_sound.is_null() {
+                    tracing::warn!("[chime] NSSound soundNamed returned null for '{}'", name);
+                } else {
+                    let () = msg_send![ns_sound, setVolume: vol];
+                    let played: i8 = msg_send![ns_sound, play];
+                    if played != 0 {
+                        tracing::info!("[chime] NSSound {} (vol={:.2})", name, vol);
+                    } else {
+                        tracing::warn!("[chime] NSSound play returned NO for '{}'", name);
+                    }
+                }
             }
         }
         #[cfg(target_os = "windows")]
         {
-            let _ = (cfg, sound);
-            let ps_cmd = match event {
-                ChimeEvent::Start => "[System.Media.SystemSounds]::Hand.Play()",
-                ChimeEvent::Finish => "[System.Media.SystemSounds]::Asterisk.Play()",
-                ChimeEvent::Cancel => "[System.Media.SystemSounds]::Exclamation.Play()",
-                ChimeEvent::Error => "[System.Media.SystemSounds]::Hand.Play()",
+            let alias = match event {
+                ChimeEvent::Start | ChimeEvent::Error => {
+                    "SystemHand\0".encode_utf16().collect::<Vec<u16>>()
+                }
+                ChimeEvent::Finish => {
+                    "SystemAsterisk\0".encode_utf16().collect::<Vec<u16>>()
+                }
+                ChimeEvent::Cancel => {
+                    "SystemExclamation\0".encode_utf16().collect::<Vec<u16>>()
+                }
             };
-            let mut cmd = std::process::Command::new("powershell");
-            cmd.args(["-NoProfile", "-NonInteractive", "-Command", ps_cmd]);
-            #[cfg(target_os = "windows")]
-            {
-                use std::os::windows::process::CommandExt;
-                cmd.creation_flags(0x08000000);
+            unsafe {
+                winapi::um::mmsystem::PlaySoundW(
+                    alias.as_ptr(),
+                    std::ptr::null_mut(),
+                    winapi::um::mmsystem::SND_ALIAS
+                        | winapi::um::mmsystem::SND_ASYNC
+                        | winapi::um::mmsystem::SND_NODEFAULT,
+                );
             }
-            match cmd.spawn() {
-                Ok(_) => tracing::info!("[chime] powershell SystemSounds ({:?})", event),
-                Err(e) => tracing::warn!("[chime] powershell failed for {:?}: {}", event, e),
-            }
+            tracing::info!("[chime] PlaySoundW SystemSounds ({:?})", event);
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {

@@ -124,6 +124,16 @@ and compares on restore. Falls back to pbcopy/pbpaste on dispatch failure.
 Windows now captures `GetClipboardSequenceNumber()` at snapshot time and checks
 it before restoring. Returns `Ok(false)` when the clipboard changed.
 
+## chime-subprocess-spawn
+`play_chime` spawned `afplay` (macOS) or `powershell` (Windows) on every
+chime event. Subprocess startup overhead (~10-30ms afplay, ~150-400ms
+powershell) is unnecessary for short system sounds with native APIs
+available.
+
+**Fix:** macOS: `NSSound::soundNamed_()` + `setVolume:` + `play()` via
+`objc2::msg_send!`. Windows: `PlaySoundW` with `SND_ALIAS | SND_ASYNC |
+SND_NODEFAULT`. Both are fire-and-forget, no subprocess spawn.
+
 ## config-clone-not-a-bug-class
 `settings::load()` used to deep-clone the entire `Config` struct on every call.
 Swapped to `RwLock<Option<Arc<Config>>>` + narrow field accessors for hot-path

@@ -1,6 +1,6 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-06-24 (NSPasteboard changeCount guard + Windows GetClipboardSequenceNumber)  
+**Last updated:** 2026-06-24 (NSSound/PlaySoundW chime)  
 **Current state:** TASK-75 complete — segment transcription now builds WAV bytes in memory instead of writing/reading temp files, eliminating N redundant disk round-trips per dictation. IOHID keyboard fallback is active and user-proven for the ad-hoc `/Applications/Turbo Talk.app`. Right Option dictation works through Input Monitoring. Ad-hoc macOS auto-paste is user-proven via Session tap. Large overlay mode now has an audio-driven glyph/text preview: live speech appears as word-shaped pills, paused segment commits become readable text, and the live pill cursor continues from the committed edge. Live pill widths use a lorem-ipsum word-length sequence, preview/audio panels are both fixed to 984px, and the live pill rate now adapts after segment commits instead of assuming one speaking speed.
 
 ## Next action
@@ -284,6 +284,18 @@ Shared client has `.connect_timeout(2s)` and NO client-level `.timeout()`.
 Zero `Client::builder()` calls remain in the four call sites. `cargo check` passes.
 
 Commit `a6a84f2`.
+
+## This session (2026-06-24) — NSSound/PlaySoundW chime
+
+**Replaced per-chime subprocess spawning with in-process platform-native audio APIs:**
+
+- **macOS:** `afplay -v <vol> <path>` → `NSSound::soundNamed_()` + `setVolume:` + `play()`. Extracts sound name from path (e.g. `Pop` from `/System/Library/Sounds/Pop.aiff`). Uses `objc2::msg_send!` and existing `ns_string` pattern from `paste/clipboard.rs`. Fire-and-forget async playback, zero subprocess overhead.
+- **Windows:** `powershell [System.Media.SystemSounds]::...Play()` → `winapi::um::mmsystem::PlaySoundW` with `SND_ALIAS | SND_ASYNC | SND_NODEFAULT`. Maps events to system aliases: `SystemHand` (Start/Error), `SystemAsterisk` (Finish), `SystemExclamation` (Cancel).
+- **Cargo.toml:** Added `"mmsystem"` to winapi features.
+
+**Files changed:** `src-tauri/src/hotkey.rs`, `src-tauri/Cargo.toml`.
+
+**Proof:** `cargo check` passes, `cargo clippy` passes (no new warnings). Zero `afplay` or `powershell` references remain in `play_chime`. Same system sounds, same async fire-and-forget behavior.
 
 ## Outstanding
 - Tray icon may still not be visible on user's display — needs user confirmation. Check both monitors and any Bartender/Ice/Hidden Bar software.
