@@ -4024,6 +4024,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rtrb"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ade083ccbb4bf536df69d1f6432cc23deb7acccff86b183f3923a6fd56a1153"
+
+[[package]]
 name = "rubato"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5772,6 +5778,7 @@ dependencies = [
  "rdev",
  "regex",
  "reqwest 0.12.28",
+ "rtrb",
  "rubato",
  "serde",
  "serde_json",

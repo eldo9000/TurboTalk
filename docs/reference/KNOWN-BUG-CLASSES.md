@@ -142,6 +142,30 @@ This is a performance optimisation, not a bug fix — no functional change.
 `load()` now returns `Arc<Config>`; callers that need owned `Config` explicitly
 clone via `(*load()).clone()`. Auto-deref handles field access for the rest.
 
+## callback-mutex-realloc-ring-buffer
+The cpal audio callback acquired `parking_lot::Mutex` on `samples: Vec<f32>` and
+called `extend_from_slice(data)` which can reallocate the backing buffer. On a
+real-time audio thread this is a latency source (lock contention if the feeder
+thread also accesses the Vec, and allocation jitter).
+
+**Fix:** Replace `Mutex<Vec<f32>>` with an `rtrb` lock-free SPSC ring buffer
+(`Producer` / `Consumer`). The callback calls `Producer::push_partial_slice()`
+— a lock-free memcpy into pre-allocated slots, no allocation, no realloc. The
+feeder thread reads from the `Consumer` side. The ring is sized at
+`RING_CAPACITY` (480k f32 samples ≈ 5 s at 48 kHz stereo). Recordings longer
+than the ring are fine — the feeder drains the consumer every ~10 ms.
+
+**Secondary fix:** Add `Stream::pause()` after `stop()` / `cancel()` and
+`Stream::play()` on `start()` warm-stream reuse. When idle the cpal callback
+stops firing entirely (no wakeups, no preroll accumulation, no mutex traffic).
+The watchdog timeout is still used as a safety net to eventually drop the
+stream.
+
+**Batch fallback path:** The feeder accumulates all chunks into
+`samples_accum: Arc<Mutex<Vec<f32>>>`. On streaming path degradation,
+`stop()` reconstructs the full recording from `samples_accum` + any remaining
+data in the ring consumer. No recording is lost.
+
 ## CoreML-dyld-init-hang
 Building whisper.cpp with `WHISPER_COREML=1` links `libwhisper.coreml.dylib` into
 `libwhisper.1.dylib`, which pulls in `CoreML.framework` at **dyld load time** — before

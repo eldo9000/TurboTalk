@@ -24,6 +24,9 @@ use tempfile::TempPath;
 use crate::audio_finalizer::{DropReason, FinalizeResult, SegmentEmit, StreamingFinalizer};
 use crossbeam_channel::Receiver as SegReceiver;
 
+/// Ring buffer capacity for raw capture samples (~5s at 48 kHz stereo f32).
+const RING_CAPACITY: usize = 480_000;
+
 /// Peak target ≈ -1 dBFS — leaves 1 dB of headroom so the i16 conversion
 /// can't clip even on the loudest inter-sample peaks. Matches Handy and
 /// other reference dictation apps.
@@ -92,7 +95,18 @@ struct ActiveStream {
 }
 
 pub struct AudioCapture {
-    samples: Arc<Mutex<Vec<f32>>>,
+    /// Lock-free SPSC producer written by the cpal callback. The callback
+    /// holds a parking_lot Mutex briefly (uncontended — start() is the
+    /// only other accessor), but never allocates: the ring is pre-allocated
+    /// and push_partial_slice is just a memcpy.
+    samples_producer: Arc<Mutex<Option<rtrb::Producer<f32>>>>,
+    /// SPSC consumer read by the capture-feeder thread and drained by
+    /// stop() for the batch fallback.
+    samples_consumer: Arc<Mutex<Option<rtrb::Consumer<f32>>>>,
+    /// Feeder accumulates every chunk it reads here; stop() uses this for
+    /// the batch path (which needs ALL captured samples, not just what's
+    /// left in the ring after the feeder exits).
+    samples_accum: Arc<Mutex<Vec<f32>>>,
     level: Arc<AtomicU32>, // current RMS as f32 bits
     is_recording: Arc<AtomicBool>,
     /// Set true by the cpal callback the first time it appends samples after
@@ -148,11 +162,6 @@ pub struct AudioCapture {
     /// Set true to ask the feeder thread to drain pending samples, send
     /// them to the worker, and exit. The feeder polls this every ~10 ms.
     feeder_stop: Arc<AtomicBool>,
-    /// How many samples from `samples` the feeder has already shipped to
-    /// the streaming worker. Owned by the feeder; `stop()` reads it after
-    /// the feeder has exited so it knows whether all captured audio
-    /// reached the worker.
-    feeder_cursor: Arc<AtomicUsize>,
     /// Pre-roll ring buffer. Filled by the cpal callback every
     /// tick (regardless of `is_recording`); drained by `start()` on
     /// PTT-down and prepended to `samples`. Holds raw native-rate,
@@ -233,9 +242,9 @@ pub enum StopOutcome {
 //     which reads Recorder's own `Mutex<State>` — never touches
 //     `warm_stream` and therefore never touches the cpal::Stream.
 //   - CoreAudio callback thread (cpal-managed): the callback closure
-//     captures clones of `is_recording` (AtomicBool), `samples` (Arc<Mutex>)
-//     and `level` (AtomicU32) — never the `warm_stream` field, never the
-//     Stream itself, never `&self`.
+//     captures clones of `is_recording` (AtomicBool), `samples_producer`
+//     (Arc<Mutex<Option<Producer>>>) and `level` (AtomicU32) — never the
+//     `warm_stream` field, never the Stream itself, never `&self`.
 //
 // So `warm_stream` is touched from at most two threads (hotkey + watchdog)
 // always behind a parking_lot Mutex, and every other field is already-
@@ -384,7 +393,9 @@ pub(crate) fn write_transcription_wav(
 impl AudioCapture {
     pub fn new() -> anyhow::Result<Self> {
         let capture = Self {
-            samples: Arc::new(Mutex::new(Vec::new())),
+            samples_producer: Arc::new(Mutex::new(None)),
+            samples_consumer: Arc::new(Mutex::new(None)),
+            samples_accum: Arc::new(Mutex::new(Vec::new())),
             level: Arc::new(AtomicU32::new(0)),
             is_recording: Arc::new(AtomicBool::new(false)),
             first_sample: Arc::new(AtomicBool::new(false)),
@@ -398,7 +409,6 @@ impl AudioCapture {
             segment_rx: Mutex::new(None),
             feeder: Mutex::new(None),
             feeder_stop: Arc::new(AtomicBool::new(false)),
-            feeder_cursor: Arc::new(AtomicUsize::new(0)),
             preroll: Arc::new(Mutex::new(VecDeque::new())),
             preroll_capacity: Arc::new(AtomicUsize::new(0)),
             callback_scratch: Arc::new(Mutex::new(Vec::with_capacity(4096))),
@@ -510,9 +520,19 @@ impl AudioCapture {
         );
 
         let rec = self.is_recording.clone();
-        let smp = self.samples.clone();
         let lvl = self.level.clone();
         let first = self.first_sample.clone();
+
+        // Create the lock-free SPSC ring buffer for samples. The producer
+        // is shared via Arc<Mutex<Option<Producer>>> so that start() can
+        // push preroll data through it. The consumer is read by the feeder
+        // and stop().
+        let (samples_producer, samples_consumer) = rtrb::RingBuffer::<f32>::new(RING_CAPACITY);
+        *self.samples_producer.lock() = Some(samples_producer);
+        *self.samples_consumer.lock() = Some(samples_consumer);
+        // Clear the feeder's accumulation Vec from the previous life.
+        self.samples_accum.lock().clear();
+        let smp_producer = self.samples_producer.clone();
 
         // Size and prepare the pre-roll ring for this stream's
         // native rate / channels. Cleared (not just resized) because a
@@ -555,19 +575,15 @@ impl AudioCapture {
         // ---- cpal callback discipline -----------------------------------
         // The audio callback runs on CoreAudio's high-priority thread and
         // must do only:
-        //   1. extend the shared `samples: Mutex<Vec<f32>>` buffer with
-        //      the new native-rate slice;
+        //   1. push native-rate samples into the lock-free SPSC ring
+        //      (`producer.push_partial_slice` — no allocation, no realloc);
         //   2. update the level meter atomic.
         //
-        // No DSP. No channel sends. No heap-alloc beyond what
-        // `Vec::extend_from_slice` does (amortized; `samples` is
-        // pre-grown by the first few callbacks). The streaming finalizer
-        // pulls from `samples` via the capture-feeder thread, never
-        // here.
+        // The ring is sized at RING_CAPACITY (~5 s at 48 kHz stereo f32)
+        // and is pre-allocated at stream-open time. No heap-alloc occurs
+        // in the callback. The streaming finalizer pulls samples via the
+        // capture-feeder thread, never here.
         //
-        // This matches `cjpais/Handy`'s callback discipline. The only
-        // operations below are `extend_from_slice` and `level.store`. If
-        // you add work here, it MUST be moved to the feeder or worker.
         // Feed the pre-roll ring on every callback regardless
         // of `is_recording`. Operations: lock → extend → trim front if
         // over capacity → unlock. One short critical section, called
@@ -590,11 +606,15 @@ impl AudioCapture {
                 device.build_input_stream(
                     &config.into(),
                     move |data: &[f32], _: &_| {
-                        // CALLBACK-ALLOWED-OPS: pre-roll push, append, level.
+                        // CALLBACK-ALLOWED-OPS: pre-roll push, ring push, level.
                         let cap = pre_cap.load(Ordering::Relaxed);
                         push_preroll(&pre, cap, data);
                         if rec.load(Ordering::Relaxed) {
-                            smp.lock().extend_from_slice(data);
+                            // Lock-free push into the pre-allocated ring —
+                            // no allocation, no realloc, no lock contention.
+                            if let Some(p) = smp_producer.lock().as_mut() {
+                                let _ = p.push_partial_slice(data);
+                            }
                             first.store(true, Ordering::Relaxed);
                             lvl.store(rms(data).to_bits(), Ordering::Relaxed);
                         } else {
@@ -607,6 +627,7 @@ impl AudioCapture {
             }
             cpal::SampleFormat::I16 => {
                 let scratch = self.callback_scratch.clone();
+                let smp_i16 = smp_producer.clone();
                 device.build_input_stream(
                     &config.into(),
                     move |data: &[i16], _: &_| {
@@ -616,7 +637,9 @@ impl AudioCapture {
                         let cap = pre_cap.load(Ordering::Relaxed);
                         push_preroll(&pre, cap, &floats);
                         if rec.load(Ordering::Relaxed) {
-                            smp.lock().extend_from_slice(&floats);
+                            if let Some(p) = smp_i16.lock().as_mut() {
+                                let _ = p.push_partial_slice(&floats);
+                            }
                             first.store(true, Ordering::Relaxed);
                             lvl.store(rms(&floats).to_bits(), Ordering::Relaxed);
                         } else {
@@ -629,6 +652,7 @@ impl AudioCapture {
             }
             cpal::SampleFormat::U16 => {
                 let scratch = self.callback_scratch.clone();
+                let smp_u16 = smp_producer.clone();
                 device.build_input_stream(
                     &config.into(),
                     move |data: &[u16], _: &_| {
@@ -638,7 +662,9 @@ impl AudioCapture {
                         let cap = pre_cap.load(Ordering::Relaxed);
                         push_preroll(&pre, cap, &floats);
                         if rec.load(Ordering::Relaxed) {
-                            smp.lock().extend_from_slice(&floats);
+                            if let Some(p) = smp_u16.lock().as_mut() {
+                                let _ = p.push_partial_slice(&floats);
+                            }
                             first.store(true, Ordering::Relaxed);
                             lvl.store(rms(&floats).to_bits(), Ordering::Relaxed);
                         } else {
@@ -690,7 +716,16 @@ impl AudioCapture {
     }
 
     pub fn start(&self) -> anyhow::Result<()> {
-        self.samples.lock().clear();
+        // Discard any stale data still in the samples ring from the previous
+        // recording. The feeder reads from the consumer; we need it empty so
+        // only new callback data (plus preroll below) enters this session.
+        {
+            let mut cg = self.samples_consumer.lock();
+            if let Some(c) = cg.as_mut() {
+                while c.pop().is_ok() {}
+            }
+        }
+        self.samples_accum.lock().clear();
         self.level.store(0_f32.to_bits(), Ordering::Relaxed);
         // Re-arm the first-sample gate. The cpal callback sets it true once it
         // appends post-press audio; the hotkey path polls `audio_live()` to
@@ -709,7 +744,6 @@ impl AudioCapture {
             self.preroll_capacity.store(0, Ordering::SeqCst);
         }
         self.feeder_stop.store(false, Ordering::SeqCst);
-        self.feeder_cursor.store(0, Ordering::SeqCst);
 
         // Always read device from config so changes take effect without restart.
         let want = crate::settings::audio_device();
@@ -727,8 +761,10 @@ impl AudioCapture {
             };
             if reuse {
                 let active = warm.as_ref().expect("reuse implies Some");
+                // Resume the paused stream so the callback fires again.
+                active._stream.play()?;
                 tracing::info!(
-                    "[audio] stream reused (warm) — device=\"{}\" {} Hz {} ch",
+                    "[audio] stream reused (warm, resumed) — device=\"{}\" {} Hz {} ch",
                     want,
                     active.sample_rate,
                     active.channels
@@ -759,15 +795,12 @@ impl AudioCapture {
         // Cancel any pending idle close — we're about to record.
         *self.idle_close_at.lock() = None;
 
-        // Drain the pre-roll ring into `samples` so the first
+        // Drain the pre-roll ring into the samples ring so the first
         // ~PREROLL_MS of audio (captured while the stream was warm but
-        // is_recording=false) is prepended to the recording. Time
-        // ordering is preserved: oldest ring sample first.
-        //
-        // `samples` is cleared at the top of start(); splicing at
-        // 0..0 is effectively `extend`, no shift cost. We move the ring
-        // out via `Vec::from_iter(drain)` so the lock is released
-        // before `samples` is touched.
+        // is_recording=false) is prepended to the recording.
+        // We hold the producer lock briefly to push preroll data; the
+        // callback is paused (stream.play() was just called and the
+        // first callback hasn't fired yet), so no contention.
         let preroll: Vec<f32> = {
             let mut ring = self.preroll.lock();
             ring.drain(..).collect()
@@ -776,7 +809,9 @@ impl AudioCapture {
             let preroll_ms =
                 (preroll.len() as u64 * 1000 / (src_rate as u64 * src_channels as u64)) as u32;
             let n = preroll.len();
-            self.samples.lock().splice(0..0, preroll);
+            if let Some(p) = self.samples_producer.lock().as_mut() {
+                let _ = p.push_partial_slice(&preroll);
+            }
             tracing::info!(
                 "[audio] start: prepended {} samples of pre-roll ({} ms)",
                 n,
@@ -786,16 +821,16 @@ impl AudioCapture {
             tracing::info!("[audio] start: pre-roll ring empty (cold start)");
         }
 
-        // Flip recording before the feeder starts so callbacks append any
-        // post-press samples after the pre-roll already in `samples`. The
-        // feeder cursor begins at 0 and therefore sends pre-roll first.
+        // Flip recording before the feeder starts so callbacks append
+        // post-press samples. Preroll data was already pushed to the ring
+        // above; the feeder will read it first.
         self.is_recording.store(true, Ordering::SeqCst);
 
         // Spawn the streaming finalizer worker and the
         // capture-feeder thread. The worker owns the resampler + VAD
         // state and consumes chunks off the cpal callback's critical
-        // path. The feeder polls `samples` every ~10 ms and ships any
-        // newly-appended tail to the worker.
+        // path. The feeder polls the consumer every ~10 ms and ships
+        // any newly-available samples to the worker.
         let (finalizer, seg_rx) = StreamingFinalizer::start(src_rate, src_channels, NORMALIZE_PEAK);
         *self.streaming.lock() = Some(finalizer);
         *self.segment_rx.lock() = Some(seg_rx);
@@ -807,35 +842,17 @@ impl AudioCapture {
         Ok(())
     }
 
-    /// Spawn the capture-feeder thread. It polls `samples` for new
-    /// content (via a cursor) and ships each new chunk to the streaming
-    /// finalizer via the bounded crossbeam channel. The feeder runs
-    /// off the audio callback thread, so a slow channel send (or even a
-    /// full channel) cannot back-propagate into the cpal callback.
+    /// Spawn the capture-feeder thread. It polls the lock-free SPSC
+    /// consumer for new samples and ships each chunk to the streaming
+    /// finalizer via the bounded crossbeam channel. The feeder also
+    /// accumulates every chunk into `samples_accum` so that stop()'s
+    /// batch fallback holds the complete recording even after the ring
+    /// buffer has been consumed.
     fn spawn_feeder(&self) -> JoinHandle<()> {
-        // Capture clones we hand to the thread. We deliberately do NOT
-        // capture `&self` — the feeder must be detachable so `start()`
-        // can return without leaking lifetimes.
-        let samples = self.samples.clone();
+        let samples_consumer = self.samples_consumer.clone();
+        let samples_accum = self.samples_accum.clone();
         let stop_flag = self.feeder_stop.clone();
-        let cursor = self.feeder_cursor.clone();
-        // The streaming finalizer lives behind the capture's `streaming:
-        // Mutex<Option<...>>`. We can't share that across the thread
-        // boundary directly (the `StreamingFinalizer` is owned by
-        // AudioCapture, not Arc-shared), so the feeder reaches into it
-        // each tick by cloning the `Sender` once — which it can't,
-        // because the Sender is private. Instead, expose `try_send_samples`
-        // through a clone of the Sender held in the finalizer.
-        //
-        // For simplicity, we clone a `try_send` closure: the feeder
-        // captures an Arc<Mutex<Option<StreamingFinalizer>>> by way of
-        // a small shim. To avoid restructuring AudioCapture into Arcs,
-        // we instead reach through `self` via a separate Arc-shared
-        // channel sender. That's what we'll do: the streaming module
-        // exposes a clonable `Sender`-style handle.
-        //
-        // Practical: clone a fresh handle to the channel from the
-        // running finalizer.
+
         let finalizer_sender = self
             .streaming
             .lock()
@@ -846,42 +863,46 @@ impl AudioCapture {
         std::thread::Builder::new()
             .name("turbotalk-capture-feeder".into())
             .spawn(move || {
-                // Poll cadence: 10 ms is short enough to keep the
-                // capture-feeder ahead of the resampler (~30× faster
-                // than realtime on this hardware), and long enough that
-                // the polling loop itself doesn't burn CPU. We never
-                // hold the `samples` lock across DSP — only across the
-                // copy-out of the new tail.
                 let poll_interval = Duration::from_millis(10);
                 let mut backpressure_drops: u64 = 0;
 
                 loop {
                     let stop = stop_flag.load(Ordering::SeqCst);
 
-                    // Snapshot the new tail. Hold the lock only across
-                    // the copy; never across the channel send.
-                    let new_tail: Option<Vec<f32>> = {
-                        let buf = samples.lock();
-                        let consumed = cursor.load(Ordering::SeqCst);
-                        if buf.len() > consumed {
-                            let slice = &buf[consumed..];
-                            let v = slice.to_vec();
-                            cursor.store(buf.len(), Ordering::SeqCst);
-                            Some(v)
+                    // Read available samples from the ring buffer consumer.
+                    // Hold the lock only across the copy-out; never across
+                    // the channel send or the accum Vec.
+                    let chunk: Option<Vec<f32>> = {
+                        let mut cg = samples_consumer.lock();
+                        let consumer = match cg.as_mut() {
+                            Some(c) => c,
+                            None => return,
+                        };
+                        let n = consumer.slots();
+                        if n > 0 {
+                            let mut buf = vec![0.0f32; n];
+                            let (filled, _) = consumer.pop_partial_slice(&mut buf);
+                            // filled spans the whole buf (we allocated n
+                            // which is exactly what slots() reported).
+                            let _ = filled;
+                            Some(buf)
                         } else {
                             None
                         }
                     };
 
-                    if let Some(chunk) = new_tail {
-                        match finalizer_sender.try_send(chunk) {
+                    if let Some(data) = chunk {
+                        // Accumulate for the batch fallback.
+                        samples_accum.lock().extend_from_slice(&data);
+
+                        match finalizer_sender.try_send(data) {
                             Ok(()) => {}
                             Err(DropReason::WorkerBackpressure) => {
                                 // Drop on the capture-feeder side, never
                                 // on the cpal callback side. The
-                                // canonical audio buffer is `samples`,
-                                // so `stop()`'s batch fallback can still
-                                // recover the recording bit-for-bit.
+                                // canonical recording is in `samples_accum`,
+                                // so stop()'s batch fallback still has
+                                // everything.
                                 backpressure_drops += 1;
                             }
                             Err(DropReason::WorkerGone) => {
@@ -895,9 +916,6 @@ impl AudioCapture {
                     }
 
                     if stop {
-                        // After observing the stop signal we did one
-                        // last drain above. Now exit so `stop()` can
-                        // call `finish()` on the finalizer.
                         if backpressure_drops > 0 {
                             tracing::info!(
                                 "[audio] capture-feeder exiting; {} chunks dropped on \
@@ -919,6 +937,9 @@ impl AudioCapture {
     /// value defers to the idle watchdog by setting `idle_close_at` to
     /// `now + N seconds`. Pulled out so `stop()` and `cancel()` agree
     /// bit-for-bit on the warm-vs-cold decision.
+    ///
+    /// When keeping the stream warm we also pause it so the cpal callback
+    /// stops firing; `start()` calls `play()` to resume it.
     fn arm_or_close_warm_stream(&self) {
         let timeout = idle_timeout_from_settings();
         if timeout.is_zero() {
@@ -933,6 +954,14 @@ impl AudioCapture {
             *self.idle_close_at.lock() = None;
             tracing::info!("[audio] stream closed (mic warmth OFF)");
         } else {
+            // Pause the stream so the callback stops firing during idle.
+            // The callback's is_recording gate still keeps samples out of
+            // the recording, but pausing the stream itself means CoreAudio
+            // doesn't even invoke the callback — no wakeups, no mutex, no
+            // preroll accumulation.
+            if let Some(active) = self.warm_stream.lock().as_ref() {
+                let _ = active._stream.pause();
+            }
             *self.idle_close_at.lock() = Some(Instant::now() + timeout);
         }
     }
@@ -985,7 +1014,14 @@ impl AudioCapture {
             tracing::info!("[audio] stream closed (device lost)");
         }
 
-        self.samples.lock().clear();
+        // Discard any remaining samples in the ring and the accumulation.
+        {
+            let mut cg = self.samples_consumer.lock();
+            if let Some(c) = cg.as_mut() {
+                while c.pop().is_ok() {}
+            }
+        }
+        self.samples_accum.lock().clear();
         self.level.store(0_f32.to_bits(), Ordering::Relaxed);
 
         // Honour the mic-warmth setting: either arm the watchdog or close
@@ -1070,10 +1106,40 @@ impl AudioCapture {
 
         // ---- Batch fallback path -------------------------------------
         // Reached only when the streaming path is degraded (worker init
-        // failure, mid-stream VAD/resampler error). Preserved verbatim so a
-        // streaming regression can never lose a recording.
+        // failure, mid-stream VAD/resampler error). We reconstruct the
+        // full recording from two sources:
+        //   1. `samples_accum` — everything the feeder read from the ring
+        //      and shipped to the (now-dead) streaming worker.
+        //   2. `samples_consumer` — whatever the feeder hadn't yet read
+        //      from the ring before it exited (typically the last
+        //      10–20 ms of audio).
         let t_capture_clone_start = Instant::now();
-        let buf_full = self.samples.lock().clone();
+
+        // Drain the feeder's accumulation (fast path — just clone the Vec).
+        let accum = self.samples_accum.lock().clone();
+
+        // Drain any remaining data from the ring consumer (data the feeder
+        // hadn't polled yet).
+        let remaining: Vec<f32> = {
+            let mut cg = self.samples_consumer.lock();
+            match cg.as_mut() {
+                Some(c) => {
+                    let n = c.slots();
+                    if n > 0 {
+                        let mut buf = vec![0.0f32; n];
+                        let (filled, _) = c.pop_partial_slice(&mut buf);
+                        let _ = filled;
+                        buf
+                    } else {
+                        Vec::new()
+                    }
+                }
+                None => Vec::new(),
+            }
+        };
+
+        let mut buf_full = accum;
+        buf_full.extend(remaining);
         capture_clone_ms = t_capture_clone_start.elapsed().as_secs_f32() * 1000.0;
 
         tracing::info!(

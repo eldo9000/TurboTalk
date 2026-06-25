@@ -49,6 +49,7 @@ shared          = { package = "librewin-common", git = "https://github.com/eldo9
 
 # Audio
 cpal            = "0.15"
+rtrb            = "0.3"
 hound           = "3.5"
 rubato          = "0.15"
 # Lock-free MPSC channel for the streaming audio finalizer (TASK-22). The
