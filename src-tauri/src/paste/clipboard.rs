@@ -1,13 +1,30 @@
 // macOS clipboard module.
 //
 // Paste() is called from a background thread (hotkey.rs:ptt_up spawns one).
-// NSPasteboard requires the main thread; arboard handles thread safety
-// internally via its own main-thread dispatch. So we use arboard.
+// NSPasteboard is documented as main-thread-only.  arboard calls
+// NSPasteboard directly with no dispatch, so we wrap every arboard
+// operation in `dispatch_sync_f` to the main queue.  On macOS 26 this
+// prevents the uncaught NSInternalInconsistencyException → SIGTRAP crash
+// that occurs when the pasteboard is accessed from a non-main thread.
 //
 // The native NSPasteboard code in `native` submodule provides full format
 // snapshot/restore and is available for future main-thread code paths.
 
 use anyhow::Result;
+use std::ffi::c_void;
+
+#[allow(non_camel_case_types)]
+type dispatch_queue_t = *const c_void;
+
+#[link(name = "System", kind = "dylib")]
+extern "C" {
+    fn dispatch_get_main_queue() -> dispatch_queue_t;
+    fn dispatch_sync_f(
+        queue: dispatch_queue_t,
+        context: *mut c_void,
+        work: extern "C" fn(*mut c_void),
+    );
+}
 
 /// Snapshot of the clipboard contents at paste time.
 /// On background threads (the common case), this only captures plain text.
@@ -21,31 +38,106 @@ impl PasteboardSnapshot {
     }
 }
 
+// ── Main-thread dispatch helper ────────────────────────────────────────────
+
+/// Synchronously execute `f` on the main thread and return its result.
+///
+/// If the calling thread IS the main thread, `f` runs directly (no dispatch).
+/// Otherwise blocks the caller until the work completes on the main queue.
+fn run_on_main<T: Send, F: FnOnce() -> T + Send>(f: F) -> T {
+    use parking_lot::Mutex;
+
+    let result: Mutex<Option<T>> = Mutex::new(None);
+
+    struct Ctx<T, F: FnOnce() -> T + Send> {
+        f: Option<F>,
+        result: *const Mutex<Option<T>>,
+    }
+
+    let ctx = Box::new(Ctx {
+        f: Some(f),
+        result: &result as *const Mutex<Option<T>>,
+    });
+
+    extern "C" fn trampoline<T, F: FnOnce() -> T + Send>(context: *mut c_void) {
+        unsafe {
+            let mut payload = Box::from_raw(context as *mut Ctx<T, F>);
+            let f = payload.f.take().expect("trampoline called more than once");
+            let r = f();
+            let result = &*payload.result;
+            *result.lock() = Some(r);
+            // payload dropped here — Box freed
+        }
+    }
+
+    let context_ptr = Box::into_raw(ctx) as *mut c_void;
+    unsafe {
+        dispatch_sync_f(
+            dispatch_get_main_queue(),
+            context_ptr,
+            trampoline::<T, F>,
+        );
+    }
+    // trampoline has already consumed the Box — nothing to free here.
+
+    let val = result.lock().take().expect("dispatch_sync_f completed but result not set");
+    val
+}
+
+/// True if the calling thread is the main thread.
+fn is_main_thread() -> bool {
+    #[link(name = "System", kind = "dylib")]
+    extern "C" {
+        fn pthread_main_np() -> i32;
+    }
+    unsafe { pthread_main_np() != 0 }
+}
+
+/// Run `f`, dispatching to the main thread only if we aren't already on it.
+fn on_main<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    if is_main_thread() {
+        f()
+    } else {
+        run_on_main(f)
+    }
+}
+
+// ── Clipboard operations (main-thread-dispatched) ─────────────────────────
+
 /// Save the current pasteboard contents.
 pub fn snapshot() -> Result<PasteboardSnapshot> {
-    let mut cb = arboard::Clipboard::new()?;
-    let prior = cb.get_text().ok();
-    Ok(PasteboardSnapshot { prior_text: prior })
+    on_main(|| {
+        let mut cb = arboard::Clipboard::new()?;
+        let prior = cb.get_text().ok();
+        Ok(PasteboardSnapshot { prior_text: prior })
+    })
 }
 
 /// Clear the pasteboard and write plain text.
 pub fn write_text(text: &str) -> Result<()> {
-    let mut cb = arboard::Clipboard::new()?;
-    cb.set_text(text)?;
-    Ok(())
+    // Capture by clone — the closure is moved to a different thread.
+    let text = text.to_owned();
+    on_main(move || {
+        let mut cb = arboard::Clipboard::new()?;
+        cb.set_text(&text)?;
+        Ok(())
+    })
 }
 
 /// Restore the prior clipboard contents (always restores — no changeCount
 /// guard on the arboard path since we don't have access to the full
 /// pasteboard metadata from a background thread).
 pub fn restore_if_untouched(snapshot: &PasteboardSnapshot) -> Result<bool> {
-    if let Some(prior) = &snapshot.prior_text {
-        let mut cb = arboard::Clipboard::new()?;
-        cb.set_text(prior)?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
+    let prior = snapshot.prior_text.clone();
+    on_main(move || {
+        if let Some(prior) = prior {
+            let mut cb = arboard::Clipboard::new()?;
+            cb.set_text(&prior)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    })
 }
 
 /// Native NSPasteboard implementation for main-thread use only.
