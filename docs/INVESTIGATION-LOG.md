@@ -24,3 +24,4 @@
 | 2026-06-24 | CONFIRMED | dispatch 1/1 — Wire native NSPasteboard changeCount guard + Windows GetClipboardSequenceNumber guard; commit 3e4075d |
 | 2026-06-24 | CONFIRMED | dispatch 1/1 — Replace afplay/powershell chime spawning with NSSound/PlaySoundW in-process APIs; commit d4ff787 |
 | 2026-06-24 | CONFIRMED | dispatch 1/1 — Move CGEventTap inline work to channel-backed processing thread + handle tap-disable events; commit 9836297 |
+| 2026-06-24 | CONFIRMED | dispatch 1/1 — Replace Mutex&lt;Vec&lt;f32&gt;&gt; with rtrb ring buffer + Stream::pause/play for idle; commit ccce04c |
