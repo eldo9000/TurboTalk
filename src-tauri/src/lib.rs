@@ -71,6 +71,7 @@ fn save_config(
     hotkey_state: tauri::State<'_, HotkeyState>,
 ) -> Result<(), String> {
     use tauri::Emitter;
+    let old_cfg = settings::load();
     settings::save(&cfg).map_err(|e| e.to_string())?;
     settings::update_cache(&cfg);
     *hotkey_state.write() = cfg.hotkey.clone();
@@ -79,16 +80,21 @@ fn save_config(
     // now (rather than waiting for the next PTT) keeps the pill out of the
     // user's way the moment they toggle the setting.
     windowing::reposition_overlay_to_cursor_monitor(&app);
-    // Drop the cached worker so the next dictation
-    // picks up any changes to `whisper.model` or `cleanup.vocabulary`. The
-    // rebuild is cheap (path validation only — no model load) so we do not
-    // try to detect "did anything actually change".
-    transcribe::invalidate_worker();
-    // Eagerly rebuild against the new config in the background so the next
-    // PTT press doesn't have to sit on the yellow arming tile while the
-    // model loads. Mirrors the startup prewarm — same readiness semantics,
-    // same `dictation-ready` / `dictation-ready-failed` events.
-    transcribe::prewarm(cfg.clone(), app.clone());
+    // Rebuild the transcription worker only when backend-affecting config
+    // fields change. Non-backend fields (theme, sound, overlay, cursor dot,
+    // etc.) still persist to disk and update the cache but do NOT destroy
+    // the warm worker.
+    let needs_rebuild = old_cfg.backend != cfg.backend
+        || old_cfg.backend_variant != cfg.backend_variant
+        || old_cfg.whisper.model != cfg.whisper.model
+        || old_cfg.whisper.vad_enabled != cfg.whisper.vad_enabled
+        || old_cfg.cleanup.vocabulary != cfg.cleanup.vocabulary;
+    if needs_rebuild {
+        transcribe::invalidate_worker();
+        transcribe::prewarm(cfg.clone(), app.clone());
+    } else {
+        tracing::debug!("[settings] no backend change — skipping worker invalidation");
+    }
     // Notify other windows (overlay) of UI-relevant config changes.
     let _ = app.emit("config-update", &cfg);
     Ok(())

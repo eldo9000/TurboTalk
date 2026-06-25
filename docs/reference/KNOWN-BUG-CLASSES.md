@@ -102,6 +102,13 @@ The callback receives a `KBDLLHOOKSTRUCT` with `vkCode`, `flags` (including
 `WM_SYSKEYDOWN`/`WM_SYSKEYUP` message types. The hook handle parameter to
 `CallNextHookEx` is ignored for low-level hooks (can pass NULL).
 
+## save-config-unconditional-worker-rebuild
+`save_config` unconditionally called `transcribe::invalidate_worker()` + `transcribe::prewarm()` on every config save, destroying the warm whisper-server/Parakeet worker even when only non-backend fields changed (theme, sound, overlay, cursor dot, etc.).
+
+**Fix (TASK-73):** Capture the previous config via `settings::load()` before `settings::update_cache()`, then gate the invalidation on a before/after comparison of only the five backend-affecting fields: `backend`, `backend_variant`, `whisper.model`, `whisper.vad_enabled`, `cleanup.vocabulary`. All other fields persist to disk and update the cache normally but skip the worker rebuild.
+
+**Key detail:** `cfg.whisper.bin` is never read in production code (`WhisperBackend::from_config` calls `find_whisper_server("whisper-server")` with a hardcoded string). First save after cold start still invalidates (safe fallback — `Config::default()` comparison).
+
 ## CoreML-dyld-init-hang
 Building whisper.cpp with `WHISPER_COREML=1` links `libwhisper.coreml.dylib` into
 `libwhisper.1.dylib`, which pulls in `CoreML.framework` at **dyld load time** — before

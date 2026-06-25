@@ -1,6 +1,6 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-06-22 (tray icon consolidation)  
+**Last updated:** 2026-06-24 (gate worker invalidation on backend-affecting fields only)  
 **Current state:** IOHID keyboard fallback is active and user-proven for the ad-hoc `/Applications/Turbo Talk.app`. Right Option dictation works through Input Monitoring. Ad-hoc macOS auto-paste is user-proven via Session tap. Large overlay mode now has an audio-driven glyph/text preview: live speech appears as word-shaped pills, paused segment commits become readable text, and the live pill cursor continues from the committed edge. Live pill widths use a lorem-ipsum word-length sequence, preview/audio panels are both fixed to 984px, and the live pill rate now adapts after segment commits instead of assuming one speaking speed.
 
 ## Next action
@@ -114,6 +114,18 @@ the flag is `flaky=true` (full rejection — still pasted with stronger warning)
 
 This matches the existing "flaky" philosophy at the original lines 1163-1191:
 "the garbage text is still more useful than appearing to have done nothing."
+
+## This session (2026-06-24) — gate worker invalidation
+
+**Gate worker invalidation on backend-affecting fields only:** `save_config` now
+captures the previous config via `settings::load()` before saving, then compares
+only the backend-affecting fields (`backend`, `backend_variant`, `whisper.model`,
+`whisper.vad_enabled`, `cleanup.vocabulary`). Non-backend fields (theme, sound,
+overlay, cursor dot, etc.) still persist to disk and update the cache but no
+longer destroy the warm transcription worker. First save after cold start
+defaults to invalidating (safe fallback via `Config::default()`).
+
+**Proof:** `cargo check --manifest-path src-tauri/Cargo.toml` passed. `cargo clippy` passed (no new warnings).
 
 ## This session (2026-06-22)
 
