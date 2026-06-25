@@ -1,43 +1,56 @@
 use crate::diagnostic_log;
 use super::keyboard_layout;
-use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
-use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+use std::ffi::c_void;
+
+// ── Raw CGEvent FFI — bypasses the core-graphics crate wrappers because
+// CGEventSourceCreate() crashes with EXC_BREAKPOINT on macOS 26 when
+// called from an ad-hoc signed binary.  All three entry points accept
+// NULL for the source (documented as valid by Apple).
+
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGEventCreateKeyboardEvent(
+        source: *const c_void, // CGEventSourceRef — NULL is valid
+        virtualKey: u16,
+        keyDown: bool,
+    ) -> *mut c_void; // CGEventRef
+
+    fn CGEventSetFlags(event: *mut c_void, flags: u64);
+    fn CGEventPost(tapLocation: u32, event: *mut c_void);
+    fn CFRelease(cf: *const c_void);
+}
+
+// CoreGraphics constants from CGEventTypes.h:
+// kCGHIDEventTap = 0, kCGSessionEventTap = 1, kCGAnnotatedSessionEventTap = 2
+const K_CG_SESSION_EVENT_TAP: u32 = 1;
+// kCGEventFlagMaskCommand
+const K_CG_EVENT_FLAG_COMMAND: u64 = 1 << 20;
 
 pub fn post_cmd_v() {
     diagnostic_log::emergency_trace("[synth] v_keycode");
     let v_keycode = keyboard_layout::v_keycode();
 
-    diagnostic_log::emergency_trace("[synth] CGEventSource::new");
-    // Use CombinedSessionState instead of HIDSystemState — the HID state
-    // requires CoreGraphics entitlements that ad-hoc builds lack on
-    // macOS 26.  CombinedSessionState injects into the GUI session, which
-    // is what we want for Cmd+V anyway.
-    let source = match CGEventSource::new(CGEventSourceStateID::CombinedSessionState) {
-        Ok(s) => s,
-        Err(()) => {
-            tracing::error!("[synthetic_keys] CGEventSource creation failed");
-            diagnostic_log::emergency_trace("[synth] CGEventSource failed");
-            return;
-        }
-    };
-
+    // Create both events with NULL source — avoids CGEventSourceCreate
+    // which crashes on macOS 26 ad-hoc builds.
     diagnostic_log::emergency_trace("[synth] key_down event");
-    if let Ok(key_down) = CGEvent::new_keyboard_event(source.clone(), v_keycode, true) {
-        diagnostic_log::emergency_trace("[synth] set_flags");
-        key_down.set_flags(CGEventFlags::CGEventFlagCommand);
-        diagnostic_log::emergency_trace("[synth] post key_down");
-        // Use Session tap location — the HID tap requires Accessibility
-        // trust on macOS 26 when used from an ad-hoc signed binary, while
-        // the Session tap posts to the current GUI session without extra
-        // entitlements.  This matches hotkey.rs which posts Cmd+V at
-        // kCGSessionEventTap when AX trust is absent.
-        key_down.post(CGEventTapLocation::Session);
+    let key_down = unsafe { CGEventCreateKeyboardEvent(std::ptr::null(), v_keycode, true) };
+    if !key_down.is_null() {
+        diagnostic_log::emergency_trace("[synth] set_flags + post key_down");
+        unsafe {
+            CGEventSetFlags(key_down, K_CG_EVENT_FLAG_COMMAND);
+            CGEventPost(K_CG_SESSION_EVENT_TAP, key_down);
+            CFRelease(key_down);
+        }
     }
 
     diagnostic_log::emergency_trace("[synth] key_up event");
-    if let Ok(key_up) = CGEvent::new_keyboard_event(source, v_keycode, false) {
+    let key_up = unsafe { CGEventCreateKeyboardEvent(std::ptr::null(), v_keycode, false) };
+    if !key_up.is_null() {
         diagnostic_log::emergency_trace("[synth] post key_up");
-        key_up.post(CGEventTapLocation::Session);
+        unsafe {
+            CGEventPost(K_CG_SESSION_EVENT_TAP, key_up);
+            CFRelease(key_up);
+        }
     }
 
     diagnostic_log::emergency_trace("[synth] done");
