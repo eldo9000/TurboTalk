@@ -186,22 +186,33 @@ message-pump thread:
 
 Commit `63d79a0`.
 
-## NSPasteboard main-thread dispatch fix (2026-06-24) — commit 78e5ff1
+## Paste SIGTRAP fix (2026-06-24) — three causes, three fixes
 
-Root cause: `arboard` 3.6.1 calls `NSPasteboard` directly (via `msg_send!`)
-without any main-thread dispatch. The `clipboard.rs` comment claiming "arboard
-handles thread safety internally" was incorrect. On macOS 26.5.1, calling
-`NSPasteboard.writeObjects:` / `stringForType:` from a non-main thread throws
-an uncaught `NSInternalInconsistencyException` which terminates the process
-with `SIGTRAP`. This matches every crash report today — always during paste,
-always on thread 66 (ptt_up worker).
+Three independent crash sources were found and fixed during the paste flow:
 
-Fix: `clipboard.rs` now wraps all three arboard operations (`snapshot`,
-`write_text`, `restore_if_untouched`) in `dispatch_sync_f` to the main queue
-via a generic `run_on_main<T, F>()` helper. If the caller IS the main thread,
-the dispatch is skipped and the closure runs directly. The helper uses an
-`extern "C"` trampoline pattern with a boxed context struct and a
-`parking_lot::Mutex<Option<T>>` result slot.
+### 1. `arboard` / NSPasteboard from background thread
+`arboard` calls NSPasteboard directly without main-thread dispatch. On macOS 26
+this throws NSInternalInconsistencyException → SIGTRAM. **Fix:** replaced arboard
+with `pbcopy`/`pbpaste` subprocess calls in `clipboard.rs` (commit `44cbc80`).
+
+### 2. `CGEventSourceCreate` / `CGEventCreateKeyboardEvent` crash
+Both CoreGraphics event creation functions crash with SIGTRAP on macOS 26 from
+ad-hoc signed binaries. **Fix:** replaced `CGEvent::new_keyboard_event` +
+`CGEventPost` with `osascript -e 'keystroke "v" using command down'` in
+`synthetic_keys.rs` (commit `ca39ccd`).
+
+### 3. `reqwest` shared-client `.expect()` regression
+Introduced in TASK-72 (shared `OnceLock<Client>`). The `.expect()` on builder
+failure was a robustness regression from the original per-call code which handled
+it gracefully. **Fix:** changed `ollama_client()` to return `Option`; each call
+site handles `None` gracefully (commit `4265169`).
+
+### Result
+All three fixes combined — paste flow now works on macOS 26 ad-hoc builds:
+
+1. `clipboard.rs` — pbcopy/pbpaste (no NSPasteboard threading)
+2. `synthetic_keys.rs` — osascript keystroke (no CoreGraphics event creation)
+3. `cleanup.rs` / `ollama.rs` — graceful error handling (no .expect())
 
 ## Shared reqwest client (2026-06-24) — per-call Client::builder eliminated
 
