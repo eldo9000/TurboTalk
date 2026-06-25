@@ -302,10 +302,10 @@ import { invoke } from '@tauri-apps/api/core';
       cursorInZone = e.clientX >= hoverZone.x && e.clientX <= hoverZone.x + hoverZone.w
                   && e.clientY >= hoverZone.y && e.clientY <= hoverZone.y + hoverZone.h;
     }
+    const uns = [];
+
     window.addEventListener('mousemove', onMouseMove, { passive: true });
     uns.push(() => window.removeEventListener('mousemove', onMouseMove));
-
-    const uns = [];
 
     // Backend emits ptt-armed BEFORE ptt-down only when whisper-server is
     // still loading (cold start). On the warm path ptt-down fires directly
