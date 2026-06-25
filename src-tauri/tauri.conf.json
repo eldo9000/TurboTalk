@@ -117,7 +117,7 @@
     "createUpdaterArtifacts": false,
     "externalBin": ["binaries/whisper-cli", "binaries/whisper-server", "binaries/media-toggle"],
     "macOS": {
-      "signingIdentity": "TurboTalk",
+      "signingIdentity": "-",
       "hardenedRuntime": false,
       "entitlements": "entitlements.plist",
       "infoPlist": "Info.plist"

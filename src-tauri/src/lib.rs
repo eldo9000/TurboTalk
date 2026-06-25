@@ -1649,15 +1649,18 @@ pub fn run() {
             // Kill any whisper-server orphans left by a previous SIGKILL or
             // rapid dev-mode restart before this run can build a fresh one.
             transcribe::kill_orphans();
-            // Do not eagerly warm the transcription model on ordinary launch.
-            // large-v3-turbo and the ONNX backends can reserve hundreds of MB
-            // to multiple GB, so a quit/relaunch cycle can push macOS memory
-            // pressure yellow before the user has dictated anything. The
-            // hotkey path already performs the same prewarm on first press and
-            // shows the yellow arming tile while it loads.
+            // Eagerly prewarm the transcription model at startup so the first
+            // dictation press arms instantly without the yellow "connecting"
+            // tile. Memory cost is front-loaded once instead of repeating on
+            // first press, and the user doesn't have to wait.
+            let app_h = app.handle().clone();
+            std::thread::spawn(move || {
+                // Let the splash screen and initial UI render complete (~2s)
+                // before loading the model so startup feels instant.
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                crate::transcribe::prewarm((*crate::settings::load()).clone(), app_h);
+            });
             if crate::permissions::check_readiness().ready {
-                tracing::info!("[transcribe] startup prewarm deferred until first dictation");
-                // All gates green at startup — hotkey can arm immediately.
                 crate::permissions::clear_onboarding_active();
             } else {
                 tracing::info!("[transcribe] startup prewarm skipped until onboarding is complete");

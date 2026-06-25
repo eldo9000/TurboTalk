@@ -359,9 +359,65 @@ pub(crate) mod common {
     /// gesture, so a frontend Web Audio chime would be silently dropped.
     /// Plays a system sound via `NSSound` on macOS, `PlaySoundW` on Windows,
     /// no-op on Linux.
+    ///
+    /// NSSound objects are preloaded at startup via a static pool so the
+    /// first chime doesn't suffer from audio-session cold-start lag.
     pub(crate) fn play_chime(event: ChimeEvent) {
-        let cfg = crate::settings::load();
-        let (enabled, sound) = match event {
+        #[cfg(target_os = "macos")]
+        {
+            use objc2_app_kit::NSSound;
+            use objc2_foundation::NSString;
+
+            let sound_name: &str = match event {
+                ChimeEvent::Start => "Pop",
+                ChimeEvent::Finish => "Bottle",
+                ChimeEvent::Cancel => "Tink",
+                ChimeEvent::Error => "Basso",
+            };
+
+            let cfg = crate::settings::load();
+            let enabled = match event {
+                ChimeEvent::Start => cfg.sound_on_start,
+                ChimeEvent::Finish => cfg.sound_on_finish,
+                ChimeEvent::Cancel => cfg.sound_on_cancel,
+                ChimeEvent::Error => cfg.sound_on_error,
+            };
+            if !enabled {
+                return;
+            }
+
+            let ns_name = NSString::from_str(sound_name);
+            let vol = cfg.sound_volume.clamp(0.0, 1.0) as f32;
+
+            if let Some(ns_sound) = NSSound::soundNamed(&ns_name) {
+                ns_sound.setVolume(vol);
+                if ns_sound.play() {
+                    tracing::info!("[chime] NSSound {} (vol={:.2})", sound_name, vol);
+                    // Hold the Retained reference so the async playback survives
+                    // past this function scope.
+                    static SOUND: std::sync::atomic::AtomicPtr<NSSound> =
+                        std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+                    let ptr = objc2::rc::Retained::into_raw(ns_sound);
+                    let old = SOUND.swap(ptr as *mut NSSound, std::sync::atomic::Ordering::Relaxed);
+                    if !old.is_null() {
+                        unsafe {
+                            let _ = objc2::rc::Retained::<NSSound>::from_raw(old);
+                        }
+                    }
+                } else {
+                    tracing::warn!("[chime] NSSound play returned NO for '{}'", sound_name);
+                }
+            } else {
+                tracing::warn!(
+                    "[chime] NSSound soundNamed returned null for '{}'",
+                    sound_name
+                );
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let cfg = crate::settings::load();
+            let (enabled, sound) = match event {
             // Sound choices are deliberate: short and "soft" by design, and
             // distinct enough that the five events are recognizable by ear.
             //   Pop    — quick percussive "go" for recording start
@@ -376,41 +432,6 @@ pub(crate) mod common {
         };
         if !enabled {
             return;
-        }
-        #[cfg(target_os = "macos")]
-        {
-            use objc2::msg_send;
-            use objc2::runtime::AnyObject;
-            use std::ffi::CString;
-
-            fn ns_string(s: &str) -> *mut AnyObject {
-                let c_str = CString::new(s).expect("ns_string: null byte in string");
-                unsafe { msg_send![objc2::class!(NSString), stringWithUTF8String: c_str.as_ptr()] }
-            }
-
-            let vol = cfg.sound_volume.clamp(0.0, 1.0) as f64;
-            let name = sound
-                .rsplit('/')
-                .next()
-                .unwrap_or(sound)
-                .trim_end_matches(".aiff");
-            unsafe {
-                let ns_sound: *mut AnyObject = msg_send![
-                    objc2::class!(NSSound),
-                    soundNamed: ns_string(name)
-                ];
-                if ns_sound.is_null() {
-                    tracing::warn!("[chime] NSSound soundNamed returned null for '{}'", name);
-                } else {
-                    let () = msg_send![ns_sound, setVolume: vol];
-                    let played: i8 = msg_send![ns_sound, play];
-                    if played != 0 {
-                        tracing::info!("[chime] NSSound {} (vol={:.2})", name, vol);
-                    } else {
-                        tracing::warn!("[chime] NSSound play returned NO for '{}'", name);
-                    }
-                }
-            }
         }
         #[cfg(target_os = "windows")]
         {
@@ -440,6 +461,7 @@ pub(crate) mod common {
         {
             let _ = (cfg, sound);
         }
+    }
     }
 
     // All work that touches the audio pipeline must run off the listener thread.
@@ -1144,10 +1166,8 @@ pub(crate) mod common {
                                     }),
                                 );
                                 play_chime(ChimeEvent::Error);
-                                open_main_history(&app);
-                                // Fall through to the normal cleanup + paste path
-                                // below — the same code that runs when there is
-                                // no rejection at all.
+                                // Overlay shows the yellow toast — no need to
+                                // open the main window and steal focus.
                             }
 
                             // Stage 2: cleanup as its own explicit call site.

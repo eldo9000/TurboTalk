@@ -383,16 +383,12 @@ import { invoke } from '@tauri-apps/api/core';
     // All rejections are now advisory (text is always pasted) — the panel
     // alerts the user to review the output.
     listen('transcription-rejected', (e) => {
-      const payload = e.payload || {};
-      const guarded = skipIfError();
-      logOverlay('event_arrived', { event: 'transcription-rejected', mode, job_id: currentJobId, guarded, flaky: payload.flaky, pasted: payload.pasted });
-      if (guarded) return;
-      // Show for all rejection events — the text was pasted with a warning.
-      if (payload.flaky || payload.pasted === false) {
-        enterError();
-        errorTimer = setTimeout(exitError, 3000);
-        logOverlay('timer_set', { name: 'errorTimer', delay: 3000, reason: 'transcription-rejected', job_id: currentJobId });
-      }
+      const guard = skipIfError();
+      logOverlay('event_arrived', { event: 'transcription-rejected', mode, job_id: currentJobId, guarded: guard, flaky: e.payload?.flaky, pasted: e.payload?.pasted });
+      if (guard) return;
+      enterError();
+      errorTimer = setTimeout(exitError, 3000);
+      logOverlay('timer_set', { name: 'errorTimer', delay: 3000, reason: 'transcription-rejected', job_id: currentJobId });
     }).then(u => uns.push(u));
 
     listen('transcript-error', () => {
@@ -906,11 +902,11 @@ import { invoke } from '@tauri-apps/api/core';
     <div class="pill-inner">
     {#if mode === 'error'}
       <!-- Fixed-size error panel — same regardless of small/medium/large.
-           Auto-dismisses after 3 seconds. The main window opens to History
-           automatically so the user can inspect the problematic text. -->
+           Auto-dismisses after 3 seconds. Only the overlay shows the toast;
+           no main window popup — the text was already pasted in full. -->
       <div class="error-panel">
-        <span class="error-label">Error captured</span>
-        <span class="error-hint">checking history…</span>
+        <span class="error-label">Error detected!</span>
+        <span class="error-hint">Check the output text for errors</span>
       </div>
     {:else if overlaySize === 'small'}
       <canvas

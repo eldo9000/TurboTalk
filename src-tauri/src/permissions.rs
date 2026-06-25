@@ -16,6 +16,7 @@
 // "Open Settings" button calls `open_system_settings` with a pane key.
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Set by `reset_onboarding`, cleared by `clear_force_onboarding`.
@@ -26,6 +27,31 @@ static FORCE_ONBOARDING: AtomicBool = AtomicBool::new(false);
 /// Starts true; cleared when setup completes (all gates green).
 /// The hotkey reads this to silently suppress dictation during setup.
 static ONBOARDING_ACTIVE: AtomicBool = AtomicBool::new(true);
+
+/// Persistent marker file path. When missing, the app forces the onboarding
+/// screen even if TCC permissions carried over from a previous install.
+/// Written by `set_setup_complete` on first successful onboarding.
+fn onboarding_flag_path() -> PathBuf {
+    crate::settings::data_dir().join("onboarding_complete")
+}
+
+/// Whether the onboarding-complete flag exists on disk.
+/// A missing flag forces the welcome screen at startup regardless of
+/// permission state (handles the reinstall-with-stale-TCC case).
+pub fn has_completed_onboarding() -> bool {
+    onboarding_flag_path().exists()
+}
+
+/// Write the onboarding-complete flag so future launches skip the wizard
+/// when permissions are already green.
+pub fn mark_onboarding_complete() {
+    let p = onboarding_flag_path();
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(&p, "");
+    tracing::info!("[onboarding] persistent flag written to {:?}", p);
+}
 
 /// Avoid flooding the logs while the onboarding UI polls readiness.
 #[cfg(target_os = "macos")]
@@ -311,7 +337,7 @@ pub fn check_readiness() -> Readiness {
     let input_monitoring = input_monitoring_status();
     let microphone = microphone_status();
     let model_present = model_present();
-    let force_onboarding = FORCE_ONBOARDING.load(Ordering::SeqCst);
+    let force_onboarding = FORCE_ONBOARDING.load(Ordering::SeqCst) || !has_completed_onboarding();
     // Unsupported means the permission is not applicable on this platform
     // (e.g. all three return Unsupported on Windows). Treat it as non-blocking
     // so `ready` reflects "can the app run" rather than "did every permission
@@ -349,12 +375,14 @@ pub fn check_readiness() -> Readiness {
 
 /// Debug command: set the in-memory force-onboarding flag so the frontend
 /// shows the welcome screen immediately. Also re-enables hotkey suppression
-/// while onboarding is active.
+/// while onboarding is active. Deletes the persistent flag so it takes
+/// effect on the next launch too.
 #[tauri::command]
 #[specta::specta]
 pub fn reset_onboarding() {
     FORCE_ONBOARDING.store(true, Ordering::SeqCst);
     ONBOARDING_ACTIVE.store(true, Ordering::Release);
+    let _ = std::fs::remove_file(onboarding_flag_path());
 }
 
 /// Called by the frontend when onboarding completes, to clear the force flag
@@ -364,6 +392,7 @@ pub fn reset_onboarding() {
 pub fn clear_force_onboarding() {
     FORCE_ONBOARDING.store(false, Ordering::SeqCst);
     clear_onboarding_active();
+    mark_onboarding_complete();
 }
 
 /// Called by the frontend when all setup gates are green (or onboarding
@@ -374,6 +403,7 @@ pub fn clear_force_onboarding() {
 pub fn set_setup_complete() {
     FORCE_ONBOARDING.store(false, Ordering::SeqCst);
     clear_onboarding_active();
+    mark_onboarding_complete();
 }
 
 /// Open a specific pane in macOS System Settings. `pane` is one of:
