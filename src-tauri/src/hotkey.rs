@@ -2138,8 +2138,6 @@ mod imp {
                         CGEventType::FlagsChanged,
                         CGEventType::KeyDown,
                         CGEventType::KeyUp,
-                        CGEventType::TapDisabledByTimeout,
-                        CGEventType::TapDisabledByUserInput,
                     ],
                     move |_proxy, etype, event| {
                         // Handle tap-disable events inline — macOS delivers these

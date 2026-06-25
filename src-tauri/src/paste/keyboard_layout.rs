@@ -29,7 +29,9 @@ pub fn resolve_v_keycode() -> anyhow::Result<u16> {
     #[allow(non_camel_case_types)]
     enum UCKeyboardLayout {}
 
+    #[allow(non_upper_case_globals)]
     const kUCKeyActionDown: u16 = 1;
+    #[allow(non_upper_case_globals)]
     const kUCKeyTranslateNoDeadKeysMask: u32 = 1 << 0;
 
     #[link(name = "Carbon", kind = "framework")]
