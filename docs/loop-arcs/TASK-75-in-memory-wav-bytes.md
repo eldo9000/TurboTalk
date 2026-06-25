@@ -18,5 +18,5 @@ in memory and sending them directly as multipart body bytes.
   receives the same WAV bytes regardless of origin.
 - **FALSIFICATION:** If `cargo check` fails, or if a segment transcription fails
   because the WAV bytes differ from the file-based WAV, the premise is false.
-- **FALSIF-RESULT:** (run by worker before fix)
-- **DISPOSITION:**
+- **FALSIF-RESULT:** `cargo check` + `cargo clippy` clean. Test `wav_bytes_from_samples_round_trips` checks spec (1ch, 16kHz, 16-bit PCM int) and duration.
+- **DISPOSITION:** CONFIRMED — dispatch 1 green. Commit 10e18b7.

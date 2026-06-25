@@ -20,3 +20,4 @@
 | 2026-06-24 | CONFIRMED | dispatch 1/1 — Replace per-call reqwest::blocking::Client construction with a shared OnceLock client; commit a6a84f2 |
 | 2026-06-24 | CONFIRMED | dispatch 1/1 — Gate worker invalidation on backend-affecting fields only in save_config; commit 1aeaacf |
 | 2026-06-24 | CONFIRMED | dispatch 1/1 — Swap settings cache to Arc&lt;Config&gt; + narrow hot-path accessors; commit 2d149c7 |
+| 2026-06-24 | CONFIRMED | dispatch 1/1 — Eliminate temp-file round-trip by building segment WAV bytes in memory; commit 10e18b7 |
