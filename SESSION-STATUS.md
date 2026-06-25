@@ -1,11 +1,11 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-06-24 (NSSound/PlaySoundW chime)  
-**Current state:** TASK-75 complete — segment transcription now builds WAV bytes in memory instead of writing/reading temp files, eliminating N redundant disk round-trips per dictation. IOHID keyboard fallback is active and user-proven for the ad-hoc `/Applications/Turbo Talk.app`. Right Option dictation works through Input Monitoring. Ad-hoc macOS auto-paste is user-proven via Session tap. Large overlay mode now has an audio-driven glyph/text preview: live speech appears as word-shaped pills, paused segment commits become readable text, and the live pill cursor continues from the committed edge. Live pill widths use a lorem-ipsum word-length sequence, preview/audio panels are both fixed to 984px, and the live pill rate now adapts after segment commits instead of assuming one speaking speed.
+**Last updated:** 2026-06-25 (hold/toggle controller separation)  
+**Current state:** Hotkey controller layer refactored — `HoldController` and `ToggleController` are now separate structs with their own lifecycle rules. Hold mode press→start/release→stop is handled by its own struct; toggle mode press→toggle has its own arming-cancel and debounce logic. Both share the same `common::ptt_down`/`ptt_up` engine. The old `HotkeyController` enum + `TriggerAction` pattern has been replaced with a `Controller` enum that wraps struct-based dispatch. `arm_hold_cancel` no longer needs a `toggle_mode` parameter — suppression is now the controller's responsibility.
 
 ## Next action
 
-Run one large-overlay dictation by eye: speak slow and fast pause-separated lines; success signal is live pill count stays plausible across speaking speeds, no leading red cursor pill, compact preview bubble, aligned top/bottom panel edges, committed text appears on pauses, and dictation still pastes normally.
+Test hold mode and toggle mode remain functional: press-to-start/release-to-stop in hold; press-to-toggle in toggle. Verify no regressions in quick tap, arming cancel, hold-to-cancel, or focus change tracking. `cargo check` passes.
 
 ## Latest session proof
 

@@ -2,11 +2,11 @@
 //!
 //! Installs a global low-level keyboard hook on a dedicated message-pumping
 //! thread. The hook callback processes each keyboard event, matches the
-//! configured PTT hotkey and Escape cancel, and dispatches to the common
-//! lifecycle layer via `HotkeyController`.
+//! configured PTT hotkey and Escape cancel, and dispatches to the
+//! `Controller` layer.
 
 use super::common;
-use super::{HotkeyController, TriggerAction};
+use super::Controller;
 use crate::recorder::Recorder;
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -167,9 +167,9 @@ unsafe extern "system" fn hook_callback(code: i32, w_param: WPARAM, l_param: LPA
                     ESC_CANCEL_COUNT.fetch_add(1, Ordering::Relaxed);
                     let controller = {
                         let hk = ctx.hotkey_state.read();
-                        HotkeyController::from_mode(&hk.mode)
+                        Controller::from_mode(&hk.mode, &ctx.recorder, &ctx.tray_icon, &ctx.app)
                     };
-                    controller.cancel_if_busy(&ctx.recorder, &ctx.tray_icon, &ctx.app);
+                    controller.cancel_if_busy();
                 }
             }
             WM_KEYUP | WM_SYSKEYUP => {
@@ -188,38 +188,21 @@ unsafe extern "system" fn hook_callback(code: i32, w_param: WPARAM, l_param: LPA
 
     let controller = {
         let hk = ctx.hotkey_state.read();
-        HotkeyController::from_mode(&hk.mode)
+        Controller::from_mode(&hk.mode, &ctx.recorder, &ctx.tray_icon, &ctx.app)
     };
 
     match w_param as u32 {
         WM_KEYDOWN | WM_SYSKEYDOWN => {
             if !PTT_KEY_HELD.swap(true, Ordering::AcqRel) {
-                if cancel_on_hold && common::should_arm_hold_cancel(&ctx.recorder) {
-                    controller.arm_hold_cancel(&ctx.recorder, &ctx.tray_icon, &ctx.app);
+                if cancel_on_hold {
+                    controller.arm_hold_cancel_if_busy();
                 }
-                match controller.press_action(ctx.recorder.is_recording()) {
-                    TriggerAction::Start => {
-                        common::ptt_down(&ctx.recorder, &ctx.tray_icon, &ctx.app);
-                    }
-                    TriggerAction::Stop => {
-                        common::ptt_up(&ctx.recorder, &ctx.tray_icon, &ctx.app);
-                    }
-                    TriggerAction::Noop => {}
-                }
+                controller.press();
             }
         }
         WM_KEYUP | WM_SYSKEYUP => {
             if PTT_KEY_HELD.swap(false, Ordering::AcqRel) {
-                common::disarm_hold_cancel();
-                match controller.release_action() {
-                    TriggerAction::Start => {
-                        common::ptt_down(&ctx.recorder, &ctx.tray_icon, &ctx.app);
-                    }
-                    TriggerAction::Stop => {
-                        common::ptt_up(&ctx.recorder, &ctx.tray_icon, &ctx.app);
-                    }
-                    TriggerAction::Noop => {}
-                }
+                controller.release();
             }
         }
         _ => {}
