@@ -23,5 +23,5 @@ guard on Windows.
 - **FALSIFICATION:** If `cargo check` fails at any macOS call site (type mismatch
   with native module), or if the Windows `GetClipboardSequenceNumber` symbol doesn't
   resolve, the premise is false.
-- **FALSIF-RESULT:** (run by worker before fix)
-- **DISPOSITION:**
+- **FALSIF-RESULT:** `cargo check` + `cargo clippy` clean. macOS native NSPasteboard wired via `dispatch_native` helper with main-thread sync. Windows `GetClipboardSequenceNumber` guard added.
+- **DISPOSITION:** CONFIRMED — dispatch 1 green. Commit 3e4075d.
