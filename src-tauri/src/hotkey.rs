@@ -1528,7 +1528,8 @@ mod imp {
         CGEventType, EventField,
     };
     use std::os::raw::c_void;
-    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use crossbeam_channel::bounded;
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
     use std::sync::Arc;
 
     use tauri::{tray::TrayIcon, AppHandle};
@@ -1536,9 +1537,6 @@ mod imp {
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
         fn AXIsProcessTrusted() -> bool;
-
-        /// Returns true if the event tap is currently enabled.
-        fn CGEventTapIsEnabled(tap: *const c_void) -> bool;
 
         /// Enable or disable an event tap.
         fn CGEventTapEnable(tap: *const c_void, enable: bool);
@@ -1624,6 +1622,19 @@ mod imp {
     /// granted even when `IOHIDCheckAccess` returns Unknown (TCC can lag
     /// briefly after a binary update while it re-verifies the code signature).
     static IOHID_LISTENER_RUNNING: AtomicBool = AtomicBool::new(false);
+
+    /// Minimal event data captured from the CGEventTap callback and shipped to
+    /// the processing thread. Keeping this small ensures the callback returns
+    /// near-instantly (no heap allocation beyond the channel send).
+    struct TapEvent {
+        keycode: i64,
+        flags: CGEventFlags,
+        etype: CGEventType,
+    }
+
+    /// Raw Mach port pointer for the CGEventTap, written once after tap creation
+    /// and read in the callback to re-enable a tap that macOS disabled.
+    static TAP_MACH_PORT_RAW: AtomicUsize = AtomicUsize::new(0);
 
     pub fn iohid_listener_running() -> bool {
         IOHID_LISTENER_RUNNING.load(Ordering::Acquire)
@@ -1934,6 +1945,136 @@ mod imp {
         }
     }
 
+    /// Process a single CGEventTap event on the dedicated processor thread.
+    /// Extracted from the old inline callback body so the CGEventTap callback
+    /// itself is minimal (capture + channel send).
+    fn process_tap_event(
+        event: TapEvent,
+        recorder: &Arc<Recorder>,
+        tray: &TrayIcon,
+        app: &AppHandle,
+        hotkey_state: &Arc<parking_lot::RwLock<crate::settings::HotkeyConfig>>,
+    ) {
+        let keycode = event.keycode;
+        let flags = event.flags;
+        let etype = event.etype;
+
+        // Read current config (RwLock read — nanoseconds, uncontended)
+        let (target_keycode, target_flag, controller, cancel_on_esc, cancel_on_hold, fkey_code, is_mouse_key) = {
+            let hk = hotkey_state.read();
+            let (kc, f) = key_for_name(&hk.key);
+            let fkc = fkey_code_for_name(&hk.key);
+            (
+                kc,
+                f,
+                HotkeyController::from_mode(&hk.mode),
+                hk.cancel_on_esc,
+                hk.cancel_on_hold,
+                fkc,
+                hid_mouse_usage_for_name(&hk.key).is_some(),
+            )
+        };
+
+        // Escape → cancel any in-flight recording. Read-only while idle so
+        // it never swallows Escape from the focused app outside dictation.
+        if let CGEventType::KeyDown = etype {
+            if cancel_on_esc && keycode == ESCAPE_KEYCODE {
+                controller.cancel_if_busy(recorder, tray, app);
+            }
+
+            // DEBUG: F19 (0x50 = 80) triggers simulated error panel.
+            // Cancels any active recording first so the error accurately
+            // simulates a real rejection during dictation.
+            if keycode == 80 {
+                controller.cancel_if_busy(recorder, tray, app);
+                use tauri::Emitter;
+                tracing::info!("[debug] F19 — cancel + emit simulated rejection");
+                let _ = app.emit(
+                    "transcription-rejected",
+                    serde_json::json!({
+                        "text": "[Debug] F19 triggered error",
+                        "reason": "Debug trigger via F19 key",
+                        "label": "Error detected",
+                        "pasted": true,
+                        "flaky": true,
+                    }),
+                );
+                common::play_chime(common::ChimeEvent::Error);
+                common::open_main_history(app);
+            }
+        }
+
+        if let Some(fkc) = fkey_code {
+            // F-key PTT path. KeyDown → ptt_down (dedup autorepeat with
+            // FKEY_DOWN); KeyUp → ptt_up.
+            match etype {
+                CGEventType::KeyDown => {
+                    if keycode == fkc && !FKEY_DOWN.swap(true, Ordering::AcqRel) {
+                        if cancel_on_hold && common::should_arm_hold_cancel(recorder) {
+                            controller.arm_hold_cancel(recorder, tray, app);
+                        }
+                        match controller.press_action(recorder.is_recording()) {
+                            TriggerAction::Start => {
+                                common::ptt_down(recorder, tray, app);
+                            }
+                            TriggerAction::Stop => {
+                                common::ptt_up(recorder, tray, app);
+                            }
+                            TriggerAction::Noop => {}
+                        }
+                    }
+                }
+                CGEventType::KeyUp => {
+                    if keycode == fkc {
+                        FKEY_DOWN.store(false, Ordering::Release);
+                        common::disarm_hold_cancel();
+                        match controller.release_action() {
+                            TriggerAction::Start => {
+                                common::ptt_down(recorder, tray, app);
+                            }
+                            TriggerAction::Stop => {
+                                common::ptt_up(recorder, tray, app);
+                            }
+                            TriggerAction::Noop => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        } else if is_mouse_key {
+            // Mouse button handled by IOHIDManager raw HID listener
+            // (which runs on its own background thread). Skip the
+            // CGEventTap so the modifier handler below doesn't
+            // accidentally match Right Option (the default fallback
+            // in key_for_name) when a mouse button is configured.
+        } else if let CGEventType::FlagsChanged = etype {
+            // Modifier key PTT path (Right Option, Control, etc.).
+            if keycode == target_keycode {
+                let is_key_down = flags.contains(target_flag);
+                if is_key_down {
+                    if cancel_on_hold && common::should_arm_hold_cancel(recorder) {
+                        controller.arm_hold_cancel(recorder, tray, app);
+                    }
+                } else {
+                    common::disarm_hold_cancel();
+                }
+                match if is_key_down {
+                    controller.press_action(recorder.is_recording())
+                } else {
+                    controller.release_action()
+                } {
+                    TriggerAction::Start => {
+                        common::ptt_down(recorder, tray, app);
+                    }
+                    TriggerAction::Stop => {
+                        common::ptt_up(recorder, tray, app);
+                    }
+                    TriggerAction::Noop => {}
+                }
+            }
+        }
+    }
+
     pub fn spawn(
         recorder: Arc<Recorder>,
         tray_icon: TrayIcon,
@@ -1967,11 +2108,27 @@ mod imp {
             let mut trusted_failure_retries = 0u32;
             const MAX_TRUSTED_FAILURE_RETRIES: u32 = 6; // ~30 s of 5 s sleeps
 
+            // Create channel for event processing (bounded to 64 to limit
+            // callback backpressure).
+            let (evt_tx, evt_rx) = bounded::<TapEvent>(64);
+
+            // Spawn processing thread — serializes all PTT events in order
+            // so the callback returns near-instantly.
+            let proc_recorder = recorder.clone();
+            let proc_tray = tray_icon.clone();
+            let proc_app = app.clone();
+            let proc_hk = hotkey_state.clone();
+            std::thread::Builder::new()
+                .name("turbotalk-ptt-processor".into())
+                .spawn(move || {
+                    for event in evt_rx {
+                        process_tap_event(event, &proc_recorder, &proc_tray, &proc_app, &proc_hk);
+                    }
+                })
+                .expect("ptt processor thread");
+
             loop {
-                let recorder_cb = recorder.clone();
-                let tray_cb = tray_icon.clone();
-                let app_cb = app.clone();
-                let hk_cb = hotkey_state.clone();
+                let evt_tx_cb = evt_tx.clone();
 
                 let tap_result = CGEventTap::new(
                     CGEventTapLocation::Session,
@@ -1981,147 +2138,30 @@ mod imp {
                         CGEventType::FlagsChanged,
                         CGEventType::KeyDown,
                         CGEventType::KeyUp,
+                        CGEventType::TapDisabledByTimeout,
+                        CGEventType::TapDisabledByUserInput,
                     ],
                     move |_proxy, etype, event| {
+                        // Handle tap-disable events inline — macOS delivers these
+                        // on the tap's runloop thread, so re-enable immediately
+                        // and return. No polling watchdog needed.
+                        match etype {
+                            CGEventType::TapDisabledByTimeout
+                            | CGEventType::TapDisabledByUserInput => {
+                                let raw = TAP_MACH_PORT_RAW.load(Ordering::Acquire)
+                                    as *const c_void;
+                                if !raw.is_null() {
+                                    unsafe { CGEventTapEnable(raw, true) };
+                                }
+                                return None;
+                            }
+                            _ => {}
+                        }
+
                         let keycode =
                             event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE);
                         let flags = event.get_flags();
-
-                        // Read current config (RwLock read — nanoseconds, uncontended)
-                        let (
-                            target_keycode,
-                            target_flag,
-                            controller,
-                            cancel_on_esc,
-                            cancel_on_hold,
-                            fkey_code,
-                            is_mouse_key,
-                        ) = {
-                            let hk = hk_cb.read();
-                            let (kc, f) = key_for_name(&hk.key);
-                            let fkc = fkey_code_for_name(&hk.key);
-                            (
-                                kc,
-                                f,
-                                HotkeyController::from_mode(&hk.mode),
-                                hk.cancel_on_esc,
-                                hk.cancel_on_hold,
-                                fkc,
-                                hid_mouse_usage_for_name(&hk.key).is_some(),
-                            )
-                        };
-
-                        // Escape → cancel any in-flight recording. Read-only
-                        // while idle so it never swallows Escape from the
-                        // focused app outside dictation.
-                        if let CGEventType::KeyDown = etype {
-                            if cancel_on_esc && keycode == ESCAPE_KEYCODE {
-                                controller.cancel_if_busy(&recorder_cb, &tray_cb, &app_cb);
-                            }
-
-                            // DEBUG: F19 (0x50 = 80) triggers simulated error panel.
-                            // Cancels any active recording first so the error
-                            // accurately simulates a real rejection during dictation.
-                            if keycode == 80 {
-                                // Cancel any in-flight recording
-                                controller.cancel_if_busy(&recorder_cb, &tray_cb, &app_cb);
-
-                                // Then emit the error event
-                                use tauri::Emitter;
-                                tracing::info!("[debug] F19 — cancel + emit simulated rejection");
-                                let _ = app_cb.emit(
-                                    "transcription-rejected",
-                                    serde_json::json!({
-                                        "text": "[Debug] F19 triggered error",
-                                        "reason": "Debug trigger via F19 key",
-                                        "label": "Error detected",
-                                        "pasted": true,
-                                        "flaky": true,
-                                    }),
-                                );
-                                common::play_chime(common::ChimeEvent::Error);
-                                common::open_main_history(&app_cb);
-                            }
-                        }
-
-                        if let Some(fkc) = fkey_code {
-                            // F-key PTT path. KeyDown → ptt_down (dedup autorepeat
-                            // with FKEY_DOWN); KeyUp → ptt_up.
-                            match etype {
-                                CGEventType::KeyDown => {
-                                    if keycode == fkc && !FKEY_DOWN.swap(true, Ordering::AcqRel) {
-                                        if cancel_on_hold
-                                            && common::should_arm_hold_cancel(&recorder_cb)
-                                        {
-                                            controller.arm_hold_cancel(
-                                                &recorder_cb,
-                                                &tray_cb,
-                                                &app_cb,
-                                            );
-                                        }
-                                        match controller.press_action(recorder_cb.is_recording()) {
-                                            TriggerAction::Start => {
-                                                common::ptt_down(&recorder_cb, &tray_cb, &app_cb);
-                                            }
-                                            TriggerAction::Stop => {
-                                                common::ptt_up(&recorder_cb, &tray_cb, &app_cb);
-                                            }
-                                            TriggerAction::Noop => {}
-                                        }
-                                    }
-                                }
-                                CGEventType::KeyUp => {
-                                    if keycode == fkc {
-                                        FKEY_DOWN.store(false, Ordering::Release);
-                                        common::disarm_hold_cancel();
-                                        match controller.release_action() {
-                                            TriggerAction::Start => {
-                                                common::ptt_down(&recorder_cb, &tray_cb, &app_cb);
-                                            }
-                                            TriggerAction::Stop => {
-                                                common::ptt_up(&recorder_cb, &tray_cb, &app_cb);
-                                            }
-                                            TriggerAction::Noop => {}
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        } else if is_mouse_key {
-                            // Mouse button handled by IOHIDManager raw HID listener
-                            // (which runs on its own background thread). Skip the
-                            // CGEventTap so the modifier handler below doesn't
-                            // accidentally match Right Option (the default fallback
-                            // in key_for_name) when a mouse button is configured.
-                        } else if let CGEventType::FlagsChanged = etype {
-                            // Modifier key PTT path (Right Option, Control, etc.).
-                            if keycode == target_keycode {
-                                let is_key_down = flags.contains(target_flag);
-                                if is_key_down {
-                                    if cancel_on_hold
-                                        && common::should_arm_hold_cancel(&recorder_cb)
-                                    {
-                                        controller.arm_hold_cancel(&recorder_cb, &tray_cb, &app_cb);
-                                    }
-                                } else {
-                                    common::disarm_hold_cancel();
-                                }
-                                match if is_key_down {
-                                    controller.press_action(recorder_cb.is_recording())
-                                } else {
-                                    controller.release_action()
-                                } {
-                                    TriggerAction::Start => {
-                                        common::ptt_down(&recorder_cb, &tray_cb, &app_cb);
-                                    }
-                                    TriggerAction::Stop => {
-                                        common::ptt_up(&recorder_cb, &tray_cb, &app_cb);
-                                    }
-                                    TriggerAction::Noop => {}
-                                }
-                            }
-                        }
-
+                        let _ = evt_tx_cb.send(TapEvent { keycode, flags, etype });
                         None
                     },
                 );
@@ -2133,10 +2173,12 @@ mod imp {
                                 "[hotkey] CGEventTap rebuilt after Accessibility permission grant"
                             );
                         }
-                        // Clone the CFMachPort before it is borrowed by
-                        // create_runloop_source, so the watchdog thread can
-                        // inspect and re-enable it independently.
-                        let mach_port = tap.mach_port.clone();
+                        // Store raw Mach port pointer so the callback can
+                        // re-enable the tap if macOS disables it.
+                        TAP_MACH_PORT_RAW.store(
+                            tap.mach_port.as_concrete_TypeRef() as usize,
+                            Ordering::Release,
+                        );
                         let source = match tap.mach_port.create_runloop_source(0) {
                             Ok(s) => s,
                             Err(()) => {
@@ -2166,45 +2208,12 @@ mod imp {
                             .add_source(&source, unsafe { kCFRunLoopCommonModes });
                         tap.enable();
 
-                        // Watchdog thread: macOS disables an event tap that is
-                        // slow to respond (e.g. under system load, debugger pause,
-                        // heavy swap).  Once disabled the tap silently stops
-                        // delivering events — dictation is dead until app restart.
-                        // This watchdog polls the tap every 8 s and re-enables it
-                        // if macOS has disabled it (kCGEventTapDisabledByTimeout
-                        // or kCGEventTapDisabledByUserInput).
-                        // Extract raw pointer before spawning — CFMachPort is not Send
-                        let tap_raw = mach_port.as_concrete_TypeRef() as usize;
-                        let shutdown = Arc::new(AtomicBool::new(false));
-                        let shutdown_flag = shutdown.clone();
-                        std::thread::spawn(move || {
-                            let raw = tap_raw as *const c_void;
-                            loop {
-                                std::thread::sleep(std::time::Duration::from_secs(8));
-                                if shutdown_flag.load(Ordering::Acquire) {
-                                    return;
-                                }
-                                // SAFETY: raw points to a CFMachPort that
-                                // outlives this thread (the parent thread
-                                // runs CFRunLoop::run_current and holds
-                                // mach_port alive).
-                                let enabled = unsafe { CGEventTapIsEnabled(raw) };
-                                if !enabled {
-                                    tracing::warn!(
-                                        "[hotkey] CGEventTap was disabled by macOS — re-enabling"
-                                    );
-                                    unsafe { CGEventTapEnable(raw, true) };
-                                }
-                            }
-                        });
-
                         // Gate IOHID keyboard handling: while CGEventTap is
                         // active both paths would fire for the same keypress,
                         // causing the immediate-discard race in toggle mode.
                         CGEVENTTAP_ACTIVE.store(true, Ordering::Release);
                         CFRunLoop::run_current();
                         CGEVENTTAP_ACTIVE.store(false, Ordering::Release);
-                        shutdown.store(true, Ordering::Release);
                         return;
                     }
                     Err(()) => {

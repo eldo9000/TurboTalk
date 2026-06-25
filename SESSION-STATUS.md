@@ -297,6 +297,28 @@ Commit `a6a84f2`.
 
 **Proof:** `cargo check` passes, `cargo clippy` passes (no new warnings). Zero `afplay` or `powershell` references remain in `play_chime`. Same system sounds, same async fire-and-forget behavior.
 
+## This session (2026-06-24) — channel-backed PTT processor + tap-disable inline
+
+**Moved CGEventTap work out of the callback into a channel-backed processing thread.**
+The CGEventTap callback body had been doing RwLock reads, string matching, and
+dispatch ladders inline, risking `kCGEventTapDisabledByTimeout` under load.
+Replaced the inline callback body with a bounded channel + dedicated
+`turbotalk-ptt-processor` thread that calls `process_tap_event` (the extracted
+body). The callback now captures only keycode/flags/etype and sends them over the
+channel, handling `TapDisabledByTimeout` / `TapDisabledByUserInput` inline by
+re-enabling the tap through a statically stored raw Mach port pointer.
+
+**Changes in `src-tauri/src/hotkey.rs`:**
+- Added `TapEvent` struct, `TAP_MACH_PORT_RAW` static, `process_tap_event`
+  function (extracted callback body), channel creation + processor thread spawn
+- CGEventTap event mask extended to include `TapDisabledByTimeout` and
+  `TapDisabledByUserInput`
+- Removed the 8-second polling watchdog thread (`CGEventTapIsEnabled` loop)
+- Removed `CGEventTapIsEnabled` extern declaration, unused `Receiver`/`Sender`
+  imports, and unused per-loop closure clones
+
+**Proof:** `cargo check` passes. `cargo clippy` passes (no new warnings).
+
 ## Outstanding
 - Tray icon may still not be visible on user's display — needs user confirmation. Check both monitors and any Bartender/Ice/Hidden Bar software.
 - Tray icon pixel size for macOS should be 22×22 (not 44×44) — low priority now that title text is visible.
