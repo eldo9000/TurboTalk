@@ -26,5 +26,5 @@ affects the transcription worker changes.
   triggers `invalidate_worker()` in logs, the premise is false (logic error).
   If changing VAD or vocabulary does NOT trigger invalidation, the field list
   is incomplete.
-- **FALSIF-RESULT:** (run by worker before fix)
-- **DISPOSITION:**
+- **FALSIF-RESULT:** `cargo check` passed (pre-existing warnings only), then `cargo clippy` passed with no new warnings.
+- **DISPOSITION:** CONFIRMED — dispatch 1 green. Commit 1aeaacf.

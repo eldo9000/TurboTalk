@@ -18,4 +18,4 @@
 | 2026-06-16 | MIGRATED | History comments stripped from source — ~55 TASK-XX references across 10+ source files migrated to docs/reference/KNOWN-BUG-CLASSES.md, TRUTH.md, and this log. Inline comments preserve invariants only. |
 | 2026-06-24 | CONFIRMED | dispatch 1/3 — Replace Windows GetAsyncKeyState polling with WH_KEYBOARD_LL hook + dedicated message-pump thread; commit 63d79a0 |
 | 2026-06-24 | CONFIRMED | dispatch 1/1 — Replace per-call reqwest::blocking::Client construction with a shared OnceLock client; commit a6a84f2 |
-| 2026-06-24 | OPEN | dispatch 1/1 — Gate worker invalidation on backend-affecting fields only in save_config |
+| 2026-06-24 | CONFIRMED | dispatch 1/1 — Gate worker invalidation on backend-affecting fields only in save_config; commit 1aeaacf |
