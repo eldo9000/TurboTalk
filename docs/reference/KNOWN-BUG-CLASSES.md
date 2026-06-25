@@ -109,6 +109,21 @@ The callback receives a `KBDLLHOOKSTRUCT` with `vkCode`, `flags` (including
 
 **Key detail:** `cfg.whisper.bin` is never read in production code (`WhisperBackend::from_config` calls `find_whisper_server("whisper-server")` with a hardcoded string). First save after cold start still invalidates (safe fallback — `Config::default()` comparison).
 
+## unconditional-clipboard-restore
+The pbcopy/pbpaste-based clipboard path always restores unconditionally (no
+changeCount guard), silently clobbering the user's clipboard if they copy during
+the 200 ms paste window. On macOS the `clipboard.rs` `restore_if_untouched` only
+checks whether `prior_text` is `Some` — it never checks the NSPasteboard changeCount.
+On Windows `win_clipboard::restore` has no sequence-number check.
+
+**Fix (TASK-N/A):** macOS now dispatches the already-written native NSPasteboard
+module (`clipboard::native`) to the main thread via `app.run_on_main_thread()`
+with a channel-based sync. The native module reads `changeCount` at snapshot time
+and compares on restore. Falls back to pbcopy/pbpaste on dispatch failure.
+
+Windows now captures `GetClipboardSequenceNumber()` at snapshot time and checks
+it before restoring. Returns `Ok(false)` when the clipboard changed.
+
 ## config-clone-not-a-bug-class
 `settings::load()` used to deep-clone the entire `Config` struct on every call.
 Swapped to `RwLock<Option<Arc<Config>>>` + narrow field accessors for hot-path

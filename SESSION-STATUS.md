@@ -1,6 +1,6 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-06-24 (TASK-75 — in-memory WAV bytes for segment transcription)  
+**Last updated:** 2026-06-24 (NSPasteboard changeCount guard + Windows GetClipboardSequenceNumber)  
 **Current state:** TASK-75 complete — segment transcription now builds WAV bytes in memory instead of writing/reading temp files, eliminating N redundant disk round-trips per dictation. IOHID keyboard fallback is active and user-proven for the ad-hoc `/Applications/Turbo Talk.app`. Right Option dictation works through Input Monitoring. Ad-hoc macOS auto-paste is user-proven via Session tap. Large overlay mode now has an audio-driven glyph/text preview: live speech appears as word-shaped pills, paused segment commits become readable text, and the live pill cursor continues from the committed edge. Live pill widths use a lorem-ipsum word-length sequence, preview/audio panels are both fixed to 984px, and the live pill rate now adapts after segment commits instead of assuming one speaking speed.
 
 ## Next action
@@ -118,6 +118,28 @@ the flag is `flaky=true` (full rejection — still pasted with stronger warning)
 
 This matches the existing "flaky" philosophy at the original lines 1163-1191:
 "the garbage text is still more useful than appearing to have done nothing."
+
+## This session (2026-06-24) — NSPasteboard changeCount guard + Windows GetClipboardSequenceNumber
+
+**Native NSPasteboard main-thread dispatch:** Wired the already-written native
+NSPasteboard module (`clipboard.rs` `native` submodule) into the macOS paste
+path via `dispatch_native()` — a generic helper that dispatches a closure to
+the main thread via `app.run_on_main_thread()` and syncs the result back
+through an `mpsc` channel. The native module reads `NSPasteboard.changeCount`
+at snapshot time and compares on restore; if the clipboard changed during the
+200 ms paste window, restore is skipped (`Ok(false)`).
+
+Falls back to pbcopy/pbpaste on dispatch failure (e.g. app shutting down).
+
+**Windows GetClipboardSequenceNumber guard:** Added `GetClipboardSequenceNumber`
+to `win_clipboard.rs`. `ClipboardSnapshot` now has a `seq_num: u32` field
+captured before opening the clipboard. `restore()` checks the current sequence
+number against the snapshot; returns `Ok(false)` if the clipboard changed.
+
+**Files changed:** `paste/mod.rs`, `paste/win_clipboard.rs`, `paste/win_paste.rs`,
+`hotkey.rs`, `docs/reference/KNOWN-BUG-CLASSES.md`.
+
+**Proof:** `cargo check` and `cargo clippy` pass (no new warnings).
 
 ## This session (2026-06-24) — Arc<Config> cache + narrow hot-path accessors
 

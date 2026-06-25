@@ -840,7 +840,7 @@ pub(crate) mod common {
             "[paste] start job_id={job_id_opt:?} chars={}",
             final_text.chars().count()
         ));
-        match crate::paste::paste(&paste_text) {
+        match crate::paste::paste(&paste_text, app) {
             Ok(true) => {
                 crate::diagnostic_log::emergency_trace(format!(
                     "[paste] ok job_id={job_id_opt:?}"
@@ -1317,7 +1317,7 @@ pub(crate) mod common {
                                         "[paste] seg-recovery start job_id={job_id_opt:?} chars={}",
                                         final_text.chars().count()
                                     ));
-                                    match crate::paste::paste(&paste_text) {
+                                    match crate::paste::paste(&paste_text, &app) {
                                         Ok(true) => {
                                             crate::diagnostic_log::emergency_trace(format!(
                                                 "[paste] seg-recovery ok job_id={job_id_opt:?}"

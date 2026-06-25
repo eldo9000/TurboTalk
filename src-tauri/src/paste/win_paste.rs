@@ -61,10 +61,14 @@ pub fn paste(text: &str) -> anyhow::Result<bool> {
     // Small delay for paste to land
     std::thread::sleep(std::time::Duration::from_millis(100));
 
-    // 5. Restore clipboard from snapshot
+    // 5. Restore clipboard from snapshot (with sequence-number guard)
     if let Some(snapshot) = snapshot {
-        if let Err(e) = win_clipboard::restore(&snapshot) {
-            tracing::warn!("[win_paste] clipboard restore failed: {e}");
+        match win_clipboard::restore(&snapshot) {
+            Ok(true) => tracing::info!("[win_paste] clipboard restored"),
+            Ok(false) => tracing::warn!(
+                "[win_paste] clipboard changed during paste, restore skipped"
+            ),
+            Err(e) => tracing::warn!("[win_paste] clipboard restore failed: {e}"),
         }
     }
 

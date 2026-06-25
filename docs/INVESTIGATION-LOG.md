@@ -21,3 +21,4 @@
 | 2026-06-24 | CONFIRMED | dispatch 1/1 — Gate worker invalidation on backend-affecting fields only in save_config; commit 1aeaacf |
 | 2026-06-24 | CONFIRMED | dispatch 1/1 — Swap settings cache to Arc&lt;Config&gt; + narrow hot-path accessors; commit 2d149c7 |
 | 2026-06-24 | CONFIRMED | dispatch 1/1 — Eliminate temp-file round-trip by building segment WAV bytes in memory; commit 10e18b7 |
+| 2026-06-24 | OPEN | dispatch 1/1 — Wire native NSPasteboard changeCount guard + Windows GetClipboardSequenceNumber guard |

@@ -7,11 +7,12 @@ use winapi::um::winbase::{
 };
 use winapi::um::winuser::{
     CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData,
-    OpenClipboard, SetClipboardData, CF_UNICODETEXT,
+    GetClipboardSequenceNumber, OpenClipboard, SetClipboardData, CF_UNICODETEXT,
 };
 
 /// Full snapshot of every clipboard format at a point in time.
 pub struct ClipboardSnapshot {
+    pub seq_num: u32,
     pub formats: Vec<ClipboardFormat>,
 }
 
@@ -46,6 +47,7 @@ impl Drop for ClipboardGuard {
 
 /// Save every format currently on the clipboard.
 pub fn snapshot() -> anyhow::Result<ClipboardSnapshot> {
+    let seq_num = unsafe { GetClipboardSequenceNumber() };
     let _guard = ClipboardGuard::open()?;
 
     let mut formats: Vec<ClipboardFormat> = Vec::new();
@@ -81,7 +83,7 @@ pub fn snapshot() -> anyhow::Result<ClipboardSnapshot> {
         formats.push(ClipboardFormat { format, data });
     }
 
-    Ok(ClipboardSnapshot { formats })
+    Ok(ClipboardSnapshot { seq_num, formats })
 }
 
 /// Clear the clipboard and write `text` as CF_UNICODETEXT.
@@ -126,7 +128,19 @@ pub fn write_text(text: &str) -> anyhow::Result<()> {
 }
 
 /// Restore a previously-saved clipboard snapshot.
-pub fn restore(snapshot: &ClipboardSnapshot) -> anyhow::Result<()> {
+///
+/// Returns `Ok(true)` if restore happened, `Ok(false)` if clipboard was
+/// modified since the snapshot was taken (restore skipped).
+pub fn restore(snapshot: &ClipboardSnapshot) -> anyhow::Result<bool> {
+    let current_seq = unsafe { GetClipboardSequenceNumber() };
+    if current_seq != snapshot.seq_num {
+        tracing::warn!(
+            "[win_clipboard] clipboard changed (seq {}) during paste — restore skipped",
+            current_seq,
+        );
+        return Ok(false);
+    }
+
     let _guard = ClipboardGuard::open()?;
 
     unsafe {
@@ -173,5 +187,5 @@ pub fn restore(snapshot: &ClipboardSnapshot) -> anyhow::Result<()> {
         }
     }
 
-    Ok(())
+    Ok(true)
 }
