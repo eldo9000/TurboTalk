@@ -489,7 +489,7 @@
             <div class="flex flex-col gap-0.5">
               <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Download the Parakeet model</h2>
               <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
-                Fast English dictation — runs fully on your device. Whisper and Moonshine are available in Settings after setup.
+                Fast English dictation — runs fully on your device. Whisper is available in Settings after setup.
               </p>
             </div>
             {#if stepStates.model === 'active' || stepStates.model === 'done'}

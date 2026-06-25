@@ -51,12 +51,11 @@ Most voice tools make you hunt for a model, configure a server, and figure out w
 
 ## Models
 
-The app ships with three transcription engines. Parakeet is the default — it's the fastest and downloads automatically.
+The app ships with two transcription engines. Parakeet is the default — it's the fastest and downloads automatically.
 
 | Engine | Default model | Size | Best for |
 |---|---|---|---|
 | **Parakeet** *(default)* | Parakeet TDT 0.6B v2 | ~660 MB | Fast English dictation. Ships as the default. |
-| Moonshine | Moonshine Tiny | ~290 MB | Lower hallucination on silence. English only. |
 | Whisper | large-v3-turbo | 1.6 GB | Best multilingual accuracy. |
 
 You can switch engines and swap models in the Models tab. The app downloads whatever you choose — no manual file hunting.

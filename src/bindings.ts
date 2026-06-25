@@ -245,8 +245,8 @@ export type AudioConfig = {
 /**
  *  Which transcription backend family to use.
  * 
- *  Persisted as lowercase ("whisper" / "parakeet"). Legacy "moonshine"
- *  configs are accepted on load and normalized to Parakeet.
+ *  Persisted as lowercase ("whisper" / "parakeet").
+ *  Legacy "moonshine" configs are accepted on load and normalized to Parakeet.
  */
 export type BackendFamily = "whisper" | "parakeet";
 

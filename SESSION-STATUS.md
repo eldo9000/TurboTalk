@@ -1,7 +1,7 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-06-25 (hold/toggle controller separation)  
-**Current state:** Hotkey controller layer refactored — `HoldController` and `ToggleController` are now separate structs with their own lifecycle rules. Hold mode press→start/release→stop is handled by its own struct; toggle mode press→toggle has its own arming-cancel and debounce logic. Both share the same `common::ptt_down`/`ptt_up` engine. The old `HotkeyController` enum + `TriggerAction` pattern has been replaced with a `Controller` enum that wraps struct-based dispatch. `arm_hold_cancel` no longer needs a `toggle_mode` parameter — suppression is now the controller's responsibility.
+**Last updated:** 2026-06-25 (TASK-69 — remove Moonshine)  
+**Current state:** Moonshine backend fully removed. Feature flag, Cargo default, code comments, and user-facing docs cleaned up. Only Whisper and Parakeet remain as supported backends. Backward-compat deserialization of `"moonshine"` → Parakeet kept for existing configs.
 
 ## Next action
 
@@ -33,7 +33,6 @@ Test hold mode and toggle mode remain functional: press-to-start/release-to-stop
 
 - **Parakeet** — fastest English; raw output lowercase/unpunctuated (Chaperone normalizes)
 - **Whisper** — multilingual, best accuracy; Silero VAD pre-filter when model bundled
-- **Moonshine** — retired; legacy configs normalize to Parakeet
 
 ## Recent commits
 

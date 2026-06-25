@@ -23,7 +23,7 @@ transcription ran longer than 30 s (≈ 3 min of dense speech) silently failed
 with `"error sending request"` because the transcribe HTTP client inherited
 reqwest's blocking-client default 30 s timeout. Now set to an explicit 120 s.
 
-**Backend selector — current support: Whisper / Parakeet only.** `BackendFamily` now persists as `backend = "parakeet"` for new installs. Legacy `backend = "moonshine"` configs normalize to Parakeet on load so retired installs do not break. Recommended starter model per family: Parakeet TDT 0.6B v2, Whisper Large v3 Turbo.
+**Backend selector — supported: Whisper / Parakeet.** `BackendFamily` persists as `backend = "parakeet"` for new installs. Remnants of the retired Moonshine backend are still accepted on load via backward-compat deserialization and silently mapped to Parakeet. Recommended starter model per family: Parakeet TDT 0.6B v2, Whisper Large v3 Turbo.
 
 **Parakeet backend — end-to-end confirmed 2026-05-26:** Full dictation loop works with int8 ONNX from `istupakov/parakeet-tdt-0.6b-v2-onnx` (~660 MB). Hold Right Alt → speak → release → transcript pasted. Output may be lowercase/unpunctuated (CTC architecture); Chaperone cleanup normalizes it.
 

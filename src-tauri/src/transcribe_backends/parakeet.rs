@@ -29,7 +29,7 @@
 //
 // ── ONNX Runtime dylib ───────────────────────────────────────────────────────
 //
-// Parakeet uses the same ONNX Runtime as Moonshine:
+// Parakeet uses ONNX Runtime:
 //   macOS arm64: libonnxruntime.dylib (~30 MB), declared in tauri.macos.conf.json.
 // Download from: https://github.com/microsoft/onnxruntime/releases
 // (match the version required by the resolved `ort` crate — currently rc.12).

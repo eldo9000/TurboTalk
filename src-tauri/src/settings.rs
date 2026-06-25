@@ -120,8 +120,8 @@ pub struct WhisperConfig {
 
 /// Which transcription backend family to use.
 ///
-/// Persisted as lowercase ("whisper" / "parakeet"). Legacy "moonshine"
-/// configs are accepted on load and normalized to Parakeet.
+/// Persisted as lowercase ("whisper" / "parakeet").
+/// Legacy "moonshine" configs are accepted on load and normalized to Parakeet.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum BackendFamily {
@@ -141,7 +141,7 @@ impl<'de> Deserialize<'de> for BackendFamily {
             type Value = BackendFamily;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str(r#"one of "whisper", "parakeet", or legacy "moonshine""#)
+                formatter.write_str(r#"one of "whisper" or "parakeet""#)
             }
 
             fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
@@ -150,6 +150,7 @@ impl<'de> Deserialize<'de> for BackendFamily {
             {
                 match value {
                     "whisper" => Ok(BackendFamily::Whisper),
+                    // "moonshine" accepted for backward compat — maps to Parakeet.
                     "parakeet" | "moonshine" => Ok(BackendFamily::Parakeet),
                     other => Err(E::unknown_variant(other, &["whisper", "parakeet"])),
                 }
@@ -737,19 +738,6 @@ fn migrate_file_if_newer(old_dir: &std::path::Path, new_dir: &std::path::Path, n
     }
 }
 
-fn migrate_legacy_backend(cfg: &mut Config, raw: &toml::Value) -> bool {
-    let Some(backend) = raw.get("backend").and_then(|v| v.as_str()) else {
-        return false;
-    };
-    if backend != "moonshine" {
-        return false;
-    }
-    tracing::info!("[settings] migrating legacy moonshine backend → parakeet");
-    cfg.backend = BackendFamily::Parakeet;
-    cfg.backend_variant.clear();
-    true
-}
-
 fn copy_dir_recursively(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
     if !dst.exists() {
         std::fs::create_dir_all(dst)?;
@@ -777,23 +765,12 @@ pub fn load_detailed() -> LoadConfigResult {
             parse_error: None,
         };
     };
-    let raw_value = toml::from_str::<toml::Value>(&contents).ok();
-
     // First attempt: strict parse.
     let strict_err = match toml::from_str::<Config>(&contents) {
         Ok(mut cfg) => {
             if migrate_platform_defaults(&mut cfg) {
                 if let Err(e) = save(&cfg) {
                     tracing::warn!("[settings] failed to persist platform migration: {e}");
-                }
-            }
-            if let Some(raw) = raw_value.as_ref() {
-                if migrate_legacy_backend(&mut cfg, raw) {
-                    if let Err(e) = save(&cfg) {
-                        tracing::warn!(
-                            "[settings] failed to persist legacy backend migration: {e}"
-                        );
-                    }
                 }
             }
             return LoadConfigResult {
@@ -814,7 +791,6 @@ pub fn load_detailed() -> LoadConfigResult {
     // with default, and try again. This catches the common case where an old
     // `mode = "<typo>"` makes the new `CleanupMode` enum reject the file.
     if let Ok(mut value) = toml::from_str::<toml::Value>(&contents) {
-        let raw_for_migration = value.clone();
         if let Some(table) = value.as_table_mut() {
             if table.contains_key("cleanup") {
                 tracing::warn!(
@@ -827,11 +803,6 @@ pub fn load_detailed() -> LoadConfigResult {
             if migrate_platform_defaults(&mut cfg) {
                 if let Err(e) = save(&cfg) {
                     tracing::warn!("[settings] failed to persist platform migration: {e}");
-                }
-            }
-            if migrate_legacy_backend(&mut cfg, &raw_for_migration) {
-                if let Err(e) = save(&cfg) {
-                    tracing::warn!("[settings] failed to persist legacy backend migration: {e}");
                 }
             }
             // Recovery succeeded — surface the original strict-parse error so
@@ -955,25 +926,6 @@ mod tests {
             serde_json::from_str::<BackendFamily>("\"moonshine\"").unwrap(),
             BackendFamily::Parakeet
         );
-    }
-
-    #[test]
-    fn legacy_moonshine_backend_migrates_to_parakeet() {
-        let mut cfg = Config {
-            backend: BackendFamily::Parakeet,
-            backend_variant: "tdt-0.6b-v2".into(),
-            ..Config::default()
-        };
-        let raw: toml::Value = toml::from_str(
-            r#"
-backend = "moonshine"
-backend_variant = "tiny"
-"#,
-        )
-        .expect("raw toml");
-        assert!(migrate_legacy_backend(&mut cfg, &raw));
-        assert_eq!(cfg.backend, BackendFamily::Parakeet);
-        assert_eq!(cfg.backend_variant, "");
     }
 
     #[test]

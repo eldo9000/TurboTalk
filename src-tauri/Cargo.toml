@@ -7,20 +7,17 @@ edition = "2021"
 rust-version = "1.77"
 
 # ── Feature flags ─────────────────────────────────────────────────────────────
-# `moonshine` — enable the Moonshine ONNX transcription backend (TASK-58).
 # `parakeet`  — enable the Parakeet TDT ONNX transcription backend (TASK-59).
 #
-# Both backends depend on `transcribe-rs`, which pins ort = "=2.0.0-rc.12".
+# Parakeet depends on `transcribe-rs`, which pins ort = "=2.0.0-rc.12".
 # The old `vad-rs` dep pinned ort = "=2.0.0-rc.9" and blocked this.
 # Resolution (TASK-62): vad-rs replaced with a direct ort rc.12 VAD in vad.rs.
 # Now both VAD and the ONNX backends share the same ort pin — Cargo can unify.
 #
-# `transcribe-rs` is optional so users can still build without Moonshine/Parakeet
-# by omitting those features. The dev build enables both by default.
+# `transcribe-rs` is optional so users can still build without Parakeet
+# by omitting the feature. The dev build enables it by default.
 [features]
-default = ["moonshine", "parakeet"]
-# `moonshine` activates MoonshineBackend in transcribe_backends/moonshine.rs.
-moonshine = ["dep:transcribe-rs"]
+default = ["parakeet"]
 # `parakeet` activates ParakeetBackend in transcribe_backends/parakeet.rs.
 parakeet  = ["dep:transcribe-rs"]
 # `dev-telegram-bugreport` enables Telegram uploads for bug reports.
@@ -62,8 +59,8 @@ crossbeam-channel = "0.5"
 # VAD: Silero v4 ONNX model run directly via `ort` rc.12. The `download-binaries`
 # default feature pulls the onnxruntime native lib at build time — no system
 # onnxruntime install required. vad-rs (which pinned ort rc.9) has been replaced
-# by a direct ort rc.12 integration in vad.rs so both the VAD and the Moonshine/
-# Parakeet ONNX backends share a single ort pin. We use ort's raw (shape, slice)
+# by a direct ort rc.12 integration in vad.rs so both VAD and the Parakeet
+# ONNX backend share a single ort pin. We use ort's raw (shape, slice)
 # tensor API to avoid ndarray version conflicts — transcribe-rs uses ndarray 0.17
 # while a direct `ndarray` dep here would pull in 0.15 as a separate crate.
 ort             = { version = "=2.0.0-rc.12", features = ["download-binaries"] }
@@ -79,7 +76,7 @@ tokio           = { version = "1", features = ["rt-multi-thread", "macros", "pro
 reqwest         = { version = "0.12", features = ["json", "blocking", "multipart", "rustls-tls"], default-features = false }
 url             = "2"
 
-# TASK-58/59: Moonshine + Parakeet ONNX backends via transcribe-rs.
+# Parakeet ONNX backend via transcribe-rs.
 # Conflict resolved in TASK-62: vad-rs replaced with direct ort rc.12 in vad.rs.
 # Both ort rc.12 (above) and transcribe-rs (below) now unify on the same pin.
 transcribe-rs   = { version = "0.3.11", features = ["onnx"], optional = true }
