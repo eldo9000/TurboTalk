@@ -186,6 +186,23 @@ message-pump thread:
 
 Commit `63d79a0`.
 
+## NSPasteboard main-thread dispatch fix (2026-06-24) — commit 78e5ff1
+
+Root cause: `arboard` 3.6.1 calls `NSPasteboard` directly (via `msg_send!`)
+without any main-thread dispatch. The `clipboard.rs` comment claiming "arboard
+handles thread safety internally" was incorrect. On macOS 26.5.1, calling
+`NSPasteboard.writeObjects:` / `stringForType:` from a non-main thread throws
+an uncaught `NSInternalInconsistencyException` which terminates the process
+with `SIGTRAP`. This matches every crash report today — always during paste,
+always on thread 66 (ptt_up worker).
+
+Fix: `clipboard.rs` now wraps all three arboard operations (`snapshot`,
+`write_text`, `restore_if_untouched`) in `dispatch_sync_f` to the main queue
+via a generic `run_on_main<T, F>()` helper. If the caller IS the main thread,
+the dispatch is skipped and the closure runs directly. The helper uses an
+`extern "C"` trampoline pattern with a boxed context struct and a
+`parking_lot::Mutex<Option<T>>` result slot.
+
 ## Shared reqwest client (2026-06-24) — per-call Client::builder eliminated
 
 Four Ollama HTTP call sites now share a single `OnceLock<reqwest::blocking::Client>`
