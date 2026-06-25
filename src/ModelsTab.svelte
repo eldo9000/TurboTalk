@@ -1,4 +1,7 @@
 <script>
+  import { KNOWN_FILENAMES, altModelVariant, altModelActive } from './lib/catalog';
+  import { seg } from './lib/utils';
+
   const ENGINE_OPTIONS = [
     ['parakeet', 'Parakeet'],
     ['whisper', 'Whisper'],
@@ -29,38 +32,24 @@
     },
   ];
 
-  const KNOWN_FILENAMES = [RECOMMENDED_MODEL, ...MODEL_CATALOG].map(m => m.name + '.bin');
-
-  let { state, actions } = $props();
-
-  function altModelVariant(m) {
-    return m.id.replace(/^parakeet-/, '');
-  }
-
-  function altModelActive(m) {
-    return altModelVariant(m) === (state.cfgBackendVariant || (state.cfgBackend === 'parakeet' ? 'tdt-0.6b-v2' : ''));
-  }
+  let {
+    cfgBackend, cfgModels, cfgModel, downloadProgress,
+    altModels, newModelPath, modelConfigured, cfgBackendVariant,
+    actions,
+  } = $props();
 
   const customPath = $derived(
-    state.cfgModels.find(p => !KNOWN_FILENAMES.some(fn => p.endsWith(fn))) ?? ''
+    cfgModels.find(p => !KNOWN_FILENAMES.some(fn => p.endsWith(fn))) ?? ''
   );
-
-  function seg(active, i, total) {
-    const base  = 'tt-seg-btn';
-    const first = i === 0         ? ' tt-seg-first' : '';
-    const last  = i === total - 1 ? ' tt-seg-last'  : '';
-    const on    = active          ? ' tt-seg-on'    : '';
-    return base + first + last + on;
-  }
 </script>
 
 {#snippet modelRow(m)}
   {@const filename      = m.name + '.bin'}
-  {@const installedPath = state.cfgModels.find(p => p.endsWith(filename))}
+  {@const installedPath = cfgModels.find(p => p.endsWith(filename))}
   {@const isInstalled   = !!installedPath}
-  {@const isSelected    = isInstalled && state.cfgModel === installedPath}
-  {@const isDownloading = m.name in state.downloadProgress}
-  {@const pct           = state.downloadProgress[m.name] ?? 0}
+  {@const isSelected    = isInstalled && cfgModel === installedPath}
+  {@const isDownloading = m.name in downloadProgress}
+  {@const pct           = downloadProgress[m.name] ?? 0}
   <div class="tt-model-row group">
     <div class="tt-row-info">
       <div class="tt-model-name-row">
@@ -86,10 +75,10 @@
 {/snippet}
 
 {#snippet altModelActions(m, accent = false)}
-  {@const isDownloading = m.id in state.downloadProgress}
-  {@const pct           = state.downloadProgress[m.id] ?? 0}
+  {@const isDownloading = m.id in downloadProgress}
+  {@const pct           = downloadProgress[m.id] ?? 0}
   {@const isInstalled   = m.installed}
-  {@const isActive      = altModelActive(m)}
+  {@const isActive      = altModelActive(m, cfgBackendVariant, cfgBackend)}
   {#if isDownloading}
     <span class="tt-model-pct" class:tt-model-pct-lg={accent}>{pct}%</span>
     <button onclick={() => actions.cancelAltDownload(m)} class="tt-btn" class:tt-btn-md={accent} class:tt-btn-danger={accent}>Cancel</button>
@@ -105,7 +94,7 @@
 {/snippet}
 
 {#snippet altModelRow(m, accent = false)}
-  {@const isActive = altModelActive(m)}
+  {@const isActive = altModelActive(m, cfgBackendVariant, cfgBackend)}
   {#if accent}
     <div class="tt-model-card group" class:tt-model-card-selected={isActive}>
       <div class="tt-model-card-hd">
@@ -145,24 +134,24 @@
     <div class="tt-row tt-row-field" data-tip="Which local transcription engine to use. Download a model below after switching.">
       <div class="tt-seg tt-seg-wide">
         {#each ENGINE_OPTIONS as [v, lbl], i}
-          <button onclick={() => actions.setTranscriptionEngine(v)} class={seg(state.cfgBackend === v, i, ENGINE_OPTIONS.length)}>{lbl}</button>
+          <button onclick={() => actions.setTranscriptionEngine(v)} class={seg(cfgBackend === v, i, ENGINE_OPTIONS.length)}>{lbl}</button>
         {/each}
       </div>
     </div>
-    {#if state.cfgBackend === 'parakeet'}
+    {#if cfgBackend === 'parakeet'}
       <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">Recommended default · English-only · fastest. Download the model below.</p>
     {:else}
       <p class="px-3 pb-2 text-[10px] text-[var(--text-secondary)] leading-snug">Multilingual · most accurate. Model managed below.</p>
     {/if}
   </div>
 
-  {#if state.cfgBackend === 'whisper'}
+  {#if cfgBackend === 'whisper'}
     {@const rmFilename      = RECOMMENDED_MODEL.name + '.bin'}
-    {@const rmInstalledPath = state.cfgModels.find(p => p.endsWith(rmFilename))}
+    {@const rmInstalledPath = cfgModels.find(p => p.endsWith(rmFilename))}
     {@const rmIsInstalled   = !!rmInstalledPath}
-    {@const rmIsSelected    = rmIsInstalled && state.cfgModel === rmInstalledPath}
-    {@const rmIsDownloading = RECOMMENDED_MODEL.name in state.downloadProgress}
-    {@const rmPct           = state.downloadProgress[RECOMMENDED_MODEL.name] ?? 0}
+    {@const rmIsSelected    = rmIsInstalled && cfgModel === rmInstalledPath}
+    {@const rmIsDownloading = RECOMMENDED_MODEL.name in downloadProgress}
+    {@const rmPct           = downloadProgress[RECOMMENDED_MODEL.name] ?? 0}
     <div class="tt-section">
       <div class="subsection-hd"><span class="subsection-hd-title">Recommended</span></div>
       <div class="tt-row tt-row-field">
@@ -217,9 +206,9 @@
       {:else}
         <div class="tt-row tt-row-field">
           <input
-            value={state.newModelPath}
+            value={newModelPath}
             oninput={(e) => actions.setNewModelPath(e.currentTarget.value)}
-            onkeydown={(e) => e.key === 'Enter' && actions.setCustomModel(state.newModelPath)}
+            onkeydown={(e) => e.key === 'Enter' && actions.setCustomModel(newModelPath)}
             placeholder="Paste path to .bin file…"
             class="tt-input"
             spellcheck="false"
@@ -227,21 +216,21 @@
           <button onclick={actions.browseCustomModel} class="tt-btn">Browse</button>
         </div>
       {/if}
-      {#if !state.modelConfigured}
+      {#if !modelConfigured}
         <div class="tt-row">
           <p class="tt-warn">No model selected — transcription will fail.</p>
         </div>
       {/if}
     </div>
   {:else}
-    {#if state.altModels.length === 0}
+    {#if altModels.length === 0}
       <div class="tt-section">
         <div class="subsection-hd"><span class="subsection-hd-title">Parakeet Models</span></div>
         <div class="tt-row"><p class="tt-desc">Loading…</p></div>
       </div>
     {:else}
-      {@const recAltModel = state.altModels.find(m => m.recommended)}
-      {@const altCatalog  = state.altModels.filter(m => !m.recommended)}
+      {@const recAltModel = altModels.find(m => m.recommended)}
+      {@const altCatalog  = altModels.filter(m => !m.recommended)}
       {#if recAltModel}
         <div class="tt-section">
           <div class="subsection-hd"><span class="subsection-hd-title">Recommended</span></div>
@@ -261,13 +250,13 @@
     {/if}
 
     <div class="tt-section tt-section-last">
-      {#if !state.modelConfigured}
+      {#if !modelConfigured}
         <div class="tt-row">
           <p class="tt-warn">No model selected — transcription will fail.</p>
         </div>
       {/if}
       <div class="tt-row tt-row-col">
-        <p class="tt-desc">Models are stored in <code class="tt-code">~/.config/turbotalk/models/{state.cfgBackend}/</code>.</p>
+        <p class="tt-desc">Models are stored in <code class="tt-code">~/.config/turbotalk/models/{cfgBackend}/</code>.</p>
       </div>
     </div>
   {/if}

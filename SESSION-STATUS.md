@@ -319,6 +319,48 @@ re-enabling the tap through a statically stored raw Mach port pointer.
 
 **Proof:** `cargo check` passes. `cargo clippy` passes (no new warnings).
 
+## This session (2026-06-24) — Frontend refactor: dedup constants, fix reactivity, debounce, Overlay perf
+
+**Extracted duplicated constants into shared modules:**
+- `src/lib/prompts.ts` — PROMPT_PRESETS, DEFAULT_CLASSIFIER_PROMPT, four prompt templates
+- `src/lib/catalog.ts` — KNOWN_FILENAMES, altModelVariant, altModelActive
+- `src/lib/utils.ts` — seg() helper
+- ModesTab.svelte and ModelsTab.svelte now import from these shared modules (no local copies)
+
+**Fix Reactivity (state objects → individual props):**
+- HistoryTab, ModelsTab, ModesTab now receive individual `$state`/`$derived` props instead of
+  state-object factory functions (`historyState()`, `modelsState()`, `modesState()` removed)
+- Tab components only re-render when their specific props change, not on any app state change
+
+**Remove redundant IPC round-trips:**
+- `saveSettings()`/`saveModes()`/`saveModels()` build full config from local state via
+  `buildFullConfig()` — no `getConfig()` IPC call before every save
+- `openModels()` no longer calls `getConfig()` (only `listModelsForFamily` if backend ≠ whisper)
+- `openModes()` no longer calls `getConfig()` (local state initialized from backend on mount)
+- `selectAltModel()` uses `buildFullConfig()` instead of `getConfig()`+mutate+save
+- All cfg state variables now initialized from `initialCfg` in onMount
+
+**Debounce hot-path operations:**
+- `trackWindowHeight` debounced at 150ms via `resizeTimeout`
+- Focus-based `recheckReadiness` debounced at 250ms via `readinessTimeout`
+
+**Overlay performance:**
+- Cursor position polling (setInterval at 100ms → IPC every frame) replaced with
+  passive mousemove event listener (no IPC)
+- `levels` array rebuild (`[...levels.slice(1), v]`) replaced with ring buffer
+  (`levels[levelsHead] = v; levelsHead = (levelsHead + 1) % HISTORY`)
+- Removed unused import of `cursorPosition`, `primaryMonitor` from `@tauri-apps/api/window`
+
+**Timeout cleanup:**
+- All `setTimeout` calls in `applyBackendEvent`, `copyHistoryItem`, and `startDownload`
+  now track IDs in `pendingTimeouts` Set; all cleared on component unmount
+
+**Files changed:** `src/App.svelte`, `src/ModesTab.svelte`, `src/ModelsTab.svelte`,
+`src/HistoryTab.svelte`, `src/Overlay.svelte`, `src/lib/prompts.ts` (new),
+`src/lib/catalog.ts` (new), `src/lib/utils.ts` (new)
+
+**Proof:** `npm run typecheck` passes. `npm run build` passes.
+
 ## Outstanding
 - Tray icon may still not be visible on user's display — needs user confirmation. Check both monitors and any Bartender/Ice/Hidden Bar software.
 - Tray icon pixel size for macOS should be 22×22 (not 44×44) — low priority now that title text is visible.

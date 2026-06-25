@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow, cursorPosition, primaryMonitor } from '@tauri-apps/api/window';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { commands } from './bindings.ts';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -150,6 +150,7 @@ import { invoke } from '@tauri-apps/api/core';
   const MEDIUM_COLS = 78;
 
   let levels = Array(HISTORY).fill(0);
+  let levelsHead = $state(0);
   let cursorInZone = $state(false);
   // Peek-through (dim the pill so you can see what's behind it) is disabled in
   // 'large' mode: the window is tall to hold the transcript bubble, so the
@@ -230,20 +231,21 @@ import { invoke } from '@tauri-apps/api/core';
     // MEDIUM_COLS columns of the same buffer, so the same audio scrolls ~8×
     // faster across the narrower meter.
     const cols   = overlaySize === 'large' ? HISTORY : MEDIUM_COLS;
-    const start  = HISTORY - cols;
+    const start  = (levelsHead - cols + HISTORY) % HISTORY;
     const stepX  = W / (cols - 1);
     const color  = mode === 'recording' ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.30)';
 
     // Draw a smooth mirrored waveform — continuous filled path
-    // instead of discrete bars, for a clean modern look.
+    // instead of discrete bars, for a clean modern look. Ring buffer:
+    // levels start at `start` and wrap around HISTORY.
     ctx.beginPath();
     ctx.moveTo(0, midY);
     for (let i = 0; i < cols; i++) {
-      const norm = visualLevel(levels[start + i]); // gentle perceptual curve
+      const norm = visualLevel(levels[(start + i) % HISTORY]); // gentle perceptual curve
       ctx.lineTo(i * stepX, midY - norm * midY);
     }
     for (let i = cols - 1; i >= 0; i--) {
-      const norm = visualLevel(levels[start + i]);
+      const norm = visualLevel(levels[(start + i) % HISTORY]);
       ctx.lineTo(i * stepX, midY + norm * midY);
     }
     ctx.closePath();
@@ -280,15 +282,6 @@ import { invoke } from '@tauri-apps/api/core';
     // `reposition_overlay_to_cursor_monitor` in src-tauri/src/lib.rs.
     // The frontend only mirrors the resulting frame to compute the
     // cursor-peek-through hoverZone.
-    //
-    // Coordinate-space note (macOS multi-monitor):
-    //   cursorPosition() → NSPoint × primarySf  (primary-monitor-scaled physical px)
-    //   outerPosition()  → NSPoint × windowSf   (window-monitor-scaled physical px)
-    // On a single Retina display these are the same; on Retina + 1× external
-    // they differ. Normalise both to NSPoints before comparing.
-    const primary = await primaryMonitor();
-    const primarySf = primary?.scaleFactor ?? dpr;
-
     let hoverZone = { x: 0, y: 0, w: 0, h: 0 }; // NSPoints
 
     async function refreshHoverZone() {
@@ -301,19 +294,16 @@ import { invoke } from '@tauri-apps/api/core';
     }
     await refreshHoverZone();
 
-    const cursorTimer = setInterval(async () => {
+    function onMouseMove(e) {
       if (mode !== 'recording') {
         cursorInZone = false;
         return;
       }
-      try {
-        const cur = await cursorPosition();
-        const nsX = cur.x / primarySf;
-        const nsY = cur.y / primarySf;
-        cursorInZone = nsX >= hoverZone.x && nsX <= hoverZone.x + hoverZone.w
-                    && nsY >= hoverZone.y && nsY <= hoverZone.y + hoverZone.h;
-      } catch (_) {}
-    }, 100);
+      cursorInZone = e.clientX >= hoverZone.x && e.clientX <= hoverZone.x + hoverZone.w
+                  && e.clientY >= hoverZone.y && e.clientY <= hoverZone.y + hoverZone.h;
+    }
+    window.addEventListener('mousemove', onMouseMove, { passive: true });
+    uns.push(() => window.removeEventListener('mousemove', onMouseMove));
 
     const uns = [];
 
@@ -323,6 +313,7 @@ import { invoke } from '@tauri-apps/api/core';
     listen('ptt-down', () => {
       logOverlay('event_arrived', { event: 'ptt-down', mode, job_id: currentJobId, accepted: true });
       levels = Array(HISTORY).fill(0);
+      levelsHead = 0;
       speechFrames = 0;
       wordCount = 0;
       liveGlyphWordCount = 0;
@@ -534,7 +525,8 @@ import { invoke } from '@tauri-apps/api/core';
     listen('audio-level', (e) => {
       if (mode !== 'recording') return;
       const v = Math.min(1.0, e.payload);
-      levels = [...levels.slice(1), v];
+      levels[levelsHead] = v;
+      levelsHead = (levelsHead + 1) % HISTORY;
 
       // Visual AGC: responsive target, smoothed display scale.
       if (v > meterPeak) {
@@ -596,7 +588,6 @@ import { invoke } from '@tauri-apps/api/core';
 
     return () => {
       logOverlay('component_destroy', { mode, job_id: currentJobId });
-      clearInterval(cursorTimer);
       clearInterval(elapsedTimer);
       clearTimeout(flashTimer);
       clearTimeout(errorTimer);

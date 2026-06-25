@@ -166,6 +166,24 @@ stream.
 `stop()` reconstructs the full recording from `samples_accum` + any remaining
 data in the ring consumer. No recording is lost.
 
+## dedup-reactivity-constants
+Duplicated TypeScript constants (PROMPT_PRESETS, KNOWN_FILENAMES, seg helper)
+across App.svelte/ModesTab/ModelsTab cause drift risk. Save handlers call
+redundant getConfig IPC. Tab switch handlers re-fetch config unnecessarily.
+trackWindowHeight not debounced. Overlay polls cursorPosition via IPC every
+100ms. Overlay rebuilds levels array per frame (slice+spread).
+
+**Fix (TASK-79):**
+- Extract shared constants into `src/lib/prompts.ts`, `src/lib/catalog.ts`,
+  `src/lib/utils.ts`; all consumers import from there.
+- Replace state-object factory functions (`historyState()`, `modelsState()`,
+  `modesState()`) with individual $state/$derived props on tab components.
+- Build full config from local state in save handlers (no getConfig IPC).
+- Debounce trackWindowHeight at 150ms and focus-based recheckReadiness at 250ms.
+- Replace Overlay cursorPosition polling with mousemove event listener.
+- Replace Overlay levels slice+spread with ring buffer (levelsHead index).
+- Track all setTimeout IDs in `pendingTimeouts` Set; clear on unmount.
+
 ## CoreML-dyld-init-hang
 Building whisper.cpp with `WHISPER_COREML=1` links `libwhisper.coreml.dylib` into
 `libwhisper.1.dylib`, which pulls in `CoreML.framework` at **dyld load time** — before
