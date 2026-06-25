@@ -566,6 +566,18 @@ pub trait TranscriptionBackend: Send + Sync {
     /// Callers inspect `TranscriptOutcome.rejection` to decide whether to paste.
     fn transcribe(&self, wav: &Path) -> anyhow::Result<TranscriptOutcome>;
 
+    /// Transcribe WAV bytes directly (in-memory, no temp file). Default impl
+    /// writes to a temp file and delegates to `transcribe`. Override for
+    /// backends that can work with bytes directly.
+    fn transcribe_bytes(&self, wav_bytes: &[u8]) -> anyhow::Result<TranscriptOutcome> {
+        let path = std::env::temp_dir().join("turbotalk-bytes-fallback.wav");
+        std::fs::write(&path, wav_bytes)
+            .map_err(|e| anyhow::anyhow!("failed to write temp WAV for bytes fallback: {}", e))?;
+        let result = self.transcribe(&path);
+        let _ = std::fs::remove_file(&path);
+        result
+    }
+
     /// Cancel any in-flight work the backend can safely interrupt.
     fn abort(&self);
 
@@ -673,6 +685,50 @@ pub struct WhisperBackend {
 /// the single test that constructs a bare struct literal (see `abort_noop_when_idle`).
 #[allow(dead_code)]
 pub type TranscriptionWorker = WhisperBackend;
+
+/// Common response handler shared by `transcribe` and `transcribe_bytes`.
+/// Parses the JSON body, normalizes text, runs hallucination detection.
+fn handle_transcribe_response(
+    response: reqwest::blocking::Response,
+    t_start: std::time::Instant,
+) -> anyhow::Result<TranscriptOutcome> {
+    if !response.status().is_success() {
+        anyhow::bail!("whisper-server returned {}", response.status());
+    }
+
+    let json: serde_json::Value = response.json()?;
+    let raw = json["text"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("whisper-server response missing 'text' field"))?
+        .trim()
+        .to_string();
+    let normalized = normalize_whisper_text(&raw);
+    let text = strip_trailing_filler(&normalized);
+
+    let whisper_ms = t_start.elapsed().as_millis();
+    tracing::info!("[transcribe] whisper took {} ms", whisper_ms);
+    // Never log transcript content to the session log — it can contain anything
+    // the user dictated and that log is bundled into uploaded bug reports.
+    tracing::info!(
+        "[transcribe] transcript ready ({} chars)",
+        text.chars().count()
+    );
+
+    // Post-hoc hallucination detection on the cleaned text.
+    let rejection = detect_garbage(&text);
+
+    // Full transcript -> local-only debug log (never uploaded). Temporary.
+    crate::diagnostic_log::record_transcript("whisper", &text, &format!("{rejection:?}"));
+    if let Some(ref reason) = rejection {
+        tracing::warn!(
+            "[transcribe] hallucination detected ({:?}) — text will not be pasted ({} chars)",
+            reason,
+            text.chars().count()
+        );
+    }
+
+    Ok(TranscriptOutcome { text, rejection })
+}
 
 impl WhisperBackend {
     /// Build a worker from a snapshot of the current settings. Validates the
@@ -939,42 +995,59 @@ impl WhisperBackend {
                 e
             })?;
 
-        if !response.status().is_success() {
-            anyhow::bail!("whisper-server returned {}", response.status());
+        handle_transcribe_response(response, t_whisper_start)
+    }
+
+    /// POST WAV bytes directly (in-memory, no temp file) to `/inference`.
+    /// Computes audio_ctx from the byte length instead of opening a file.
+    /// Shares response handling with `transcribe`.
+    pub fn transcribe_bytes(&self, wav_bytes: &[u8]) -> anyhow::Result<TranscriptOutcome> {
+        let _guard = self.spawn_lock.lock().unwrap_or_else(|e| e.into_inner());
+
+        let t_whisper_start = Instant::now();
+
+        // Compute audio_ctx from byte length: 44 byte WAV header, then 2 bytes
+        // per 16-bit sample. Matches the logic in `transcribe` which reads the
+        // same spec from the file header.
+        let sample_count = wav_bytes.len().saturating_sub(44) / 2;
+        let secs = sample_count as f32 / 16_000.0;
+        let effective_audio_ctx = if secs <= 8.0 { self.audio_ctx } else { 0 };
+
+        let mut form = reqwest::blocking::multipart::Form::new()
+            .part(
+                "file",
+                reqwest::blocking::multipart::Part::bytes(wav_bytes.to_vec())
+                    .file_name("file.wav")
+                    .mime_str("audio/wav")?,
+            )
+            .text("temperature", "0.0")
+            .text("temperature_inc", "0.0")
+            .text("suppress_nst", "true")
+            .text("no_context", "true")
+            .text("beam_size", "5");
+        if effective_audio_ctx > 0 {
+            form = form.text("audio_ctx", effective_audio_ctx.to_string());
         }
-
-        let json: serde_json::Value = response.json()?;
-        let raw = json["text"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("whisper-server response missing 'text' field"))?
-            .trim()
-            .to_string();
-        let normalized = normalize_whisper_text(&raw);
-        let text = strip_trailing_filler(&normalized);
-
-        let whisper_ms = t_whisper_start.elapsed().as_millis();
-        tracing::info!("[transcribe] whisper took {} ms", whisper_ms);
-        // Never log transcript content to the session log — it can contain anything
-        // the user dictated and that log is bundled into uploaded bug reports.
-        tracing::info!(
-            "[transcribe] transcript ready ({} chars)",
-            text.chars().count()
-        );
-
-        // Post-hoc hallucination detection on the cleaned text.
-        let rejection = detect_garbage(&text);
-
-        // Full transcript → local-only debug log (never uploaded). Temporary.
-        crate::diagnostic_log::record_transcript("whisper", &text, &format!("{rejection:?}"));
-        if let Some(ref reason) = rejection {
-            tracing::warn!(
-                "[transcribe] hallucination detected ({:?}) — text will not be pasted ({} chars)",
-                reason,
-                text.chars().count()
-            );
+        if !self.vocabulary.is_empty() {
+            form = form.text("prompt", self.vocabulary.join(", "));
         }
+        let response = self
+            .http_client
+            .post(format!("http://127.0.0.1:{}/inference", self.server_port))
+            .multipart(form)
+            .send()
+            .map_err(|e| {
+                if e.is_connect() || e.is_timeout() {
+                    tracing::warn!(
+                        "[transcribe] whisper-server appears dead ({}): invalidating cached worker",
+                        e
+                    );
+                    invalidate_worker();
+                }
+                e
+            })?;
 
-        Ok(TranscriptOutcome { text, rejection })
+        handle_transcribe_response(response, t_whisper_start)
     }
 
     /// Kill the whisper-server subprocess. Best-effort: logs at warn on
@@ -998,6 +1071,10 @@ impl WhisperBackend {
 impl TranscriptionBackend for WhisperBackend {
     fn transcribe(&self, wav: &Path) -> anyhow::Result<TranscriptOutcome> {
         WhisperBackend::transcribe(self, wav)
+    }
+
+    fn transcribe_bytes(&self, wav_bytes: &[u8]) -> anyhow::Result<TranscriptOutcome> {
+        WhisperBackend::transcribe_bytes(self, wav_bytes)
     }
 
     fn abort(&self) {
@@ -1325,30 +1402,89 @@ pub fn run_raw(wav: &Path) -> anyhow::Result<TranscriptOutcome> {
     }
 }
 
-// ── Segment transcription queue ───────────────────────────────────────────────
-
-/// Write a slice of 16 kHz mono f32 samples to a temporary WAV file using the
-/// same 16-bit PCM contract as the tail WAV (`audio::write_transcription_wav`).
-fn write_segment_wav(samples: &[f32], seg_index: usize) -> anyhow::Result<std::path::PathBuf> {
-    let path = std::env::temp_dir().join(format!("turbotalk-seg-{}.wav", seg_index));
-    crate::audio::write_transcription_wav(&path, samples)?;
-    Ok(path)
+/// Run whisper transcription on in-memory WAV bytes (no temp file).
+/// Same retry + worker-rebuild logic as `run_raw` but uses
+/// `transcribe_bytes` instead of `transcribe`, avoiding the disk round-trip.
+///
+/// On connection-level failure the dead worker is invalidated and a fresh
+/// server is started for a single inline retry. If the retry also fails,
+/// the error propagates.
+pub fn run_raw_bytes(wav_bytes: &[u8]) -> anyhow::Result<TranscriptOutcome> {
+    let cfg = crate::settings::load();
+    let worker = worker_for(&cfg)?;
+    match worker.transcribe_bytes(wav_bytes) {
+        Ok(outcome) => Ok(outcome),
+        Err(e) => {
+            if is_connection_error(&e) {
+                tracing::warn!(
+                    "[transcribe] whisper-server connection lost, retrying after worker rebuild"
+                );
+                // worker was already invalidated inside transcribe_bytes() above;
+                // worker_for will build a fresh backend.
+                let worker = worker_for(&cfg)?;
+                worker.transcribe_bytes(wav_bytes)
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
-/// Transcribe one segment: write WAV, call `run_raw` with one retry on
-/// failure, clean up the temp file. Returns an empty string on final failure
-/// so the assembly step can still produce a partial transcript.
+// ── Segment transcription queue ───────────────────────────────────────────────
+
+/// Build 16-bit PCM WAV bytes from 16 kHz mono f32 samples in memory.
+/// Uses the same WAV contract as `audio::write_transcription_wav` but writes
+/// directly to a `Vec<u8>` instead of a file (no hound dependency needed for
+/// 16-bit PCM). Returns the WAV bytes, ready for direct HTTP multipart upload.
+fn wav_bytes_from_samples(samples: &[f32]) -> anyhow::Result<Vec<u8>> {
+    let sample_count = samples.len();
+    let data_size = sample_count * 2; // 16-bit = 2 bytes per sample
+    let file_size = 44 + data_size;
+
+    let mut bytes = Vec::with_capacity(file_size);
+
+    // RIFF header
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(file_size as u32 - 8).to_le_bytes());
+    bytes.extend_from_slice(b"WAVE");
+
+    // fmt chunk (PCM 16-bit mono 16 kHz)
+    bytes.extend_from_slice(b"fmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes()); // chunk size
+    bytes.extend_from_slice(&1u16.to_le_bytes());  // audio format (PCM)
+    bytes.extend_from_slice(&1u16.to_le_bytes());  // channels (mono)
+    bytes.extend_from_slice(&16_000u32.to_le_bytes()); // sample rate
+    bytes.extend_from_slice(&32_000u32.to_le_bytes()); // byte rate (16000 * 1 * 2)
+    bytes.extend_from_slice(&2u16.to_le_bytes());  // block align
+    bytes.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+
+    // data chunk
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&(data_size as u32).to_le_bytes());
+
+    // Sample data
+    for &s in samples {
+        let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        bytes.extend_from_slice(&v.to_le_bytes());
+    }
+
+    Ok(bytes)
+}
+
+/// Transcribe one segment: build WAV bytes in memory, call `run_raw_bytes`
+/// with one retry on failure, clean up the temp file. Returns an empty string
+/// on final failure so the assembly step can still produce a partial transcript.
 ///
 /// Note: per-segment hallucination rejection is NOT applied here — rejection
 /// is applied to the final assembled transcript in the hotkey pipeline after
 /// all segments and the tail are joined. Individual silence-boundary
 /// segments may legitimately look repetitive in isolation.
 fn transcribe_one_segment(seg: &crate::audio_finalizer::SegmentEmit) -> String {
-    let wav_path = match write_segment_wav(&seg.samples, seg.index) {
-        Ok(p) => p,
+    let wav_bytes = match wav_bytes_from_samples(&seg.samples) {
+        Ok(b) => b,
         Err(e) => {
             tracing::warn!(
-                "[seg-transcriber] WAV write failed for segment {}: {} — skipping",
+                "[seg-transcriber] WAV build failed for segment {}: {} — skipping",
                 seg.index,
                 e
             );
@@ -1356,16 +1492,14 @@ fn transcribe_one_segment(seg: &crate::audio_finalizer::SegmentEmit) -> String {
         }
     };
 
-    let result = run_raw(&wav_path).or_else(|e| {
+    let result = run_raw_bytes(&wav_bytes).or_else(|e| {
         tracing::warn!(
             "[seg-transcriber] segment {} first attempt failed: {} — retrying once",
             seg.index,
             e
         );
-        run_raw(&wav_path)
+        run_raw_bytes(&wav_bytes)
     });
-
-    let _ = std::fs::remove_file(&wav_path);
 
     match result {
         Ok(outcome) => {
@@ -1685,24 +1819,29 @@ mod tests {
         assert_eq!(result, "hello world");
     }
 
-    /// write_segment_wav round-trips: the produced WAV is readable by hound
-    /// and transcribe-rs (16 kHz mono 16-bit PCM — same as tail WAV).
+    /// wav_bytes_from_samples round-trips: the produced WAV bytes are readable
+    /// by hound and transcribe-rs (16 kHz mono 16-bit PCM — same as tail WAV).
     #[test]
-    fn write_segment_wav_round_trips() {
+    fn wav_bytes_from_samples_round_trips() {
         let samples: Vec<f32> = (0..1600).map(|i| (i as f32 / 1600.0) * 0.5).collect();
-        let path = write_segment_wav(&samples, 999).expect("write ok");
-        let reader = hound::WavReader::open(&path).expect("read ok");
+        let wav_bytes = wav_bytes_from_samples(&samples).expect("bytes ok");
+        let reader = hound::WavReader::new(std::io::Cursor::new(&wav_bytes[..]))
+            .expect("read ok");
         let spec = reader.spec();
         assert_eq!(spec.channels, 1);
         assert_eq!(spec.sample_rate, 16_000);
         assert_eq!(spec.bits_per_sample, 16);
         assert!(matches!(spec.sample_format, hound::SampleFormat::Int));
         assert_eq!(reader.duration(), samples.len() as u32);
+        // Write to a temp file so transcribe-rs (which reads from Path) can
+        // verify it's compatible.
         #[cfg(feature = "parakeet")]
         {
-            transcribe_rs::audio::read_wav_samples(&path).expect("transcribe-rs read");
+            let temp = std::env::temp_dir().join("turbotalk-test-bytes-round-trip.wav");
+            let _ = std::fs::write(&temp, &wav_bytes);
+            transcribe_rs::audio::read_wav_samples(&temp).expect("transcribe-rs read");
+            let _ = std::fs::remove_file(&temp);
         }
-        let _ = std::fs::remove_file(&path);
     }
 
     // ── detect_garbage unit tests ─────────────────────────────────────────

@@ -1,7 +1,7 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-06-24 (Arc<Config> cache, narrow hot-path accessors)  
-**Current state:** IOHID keyboard fallback is active and user-proven for the ad-hoc `/Applications/Turbo Talk.app`. Right Option dictation works through Input Monitoring. Ad-hoc macOS auto-paste is user-proven via Session tap. Large overlay mode now has an audio-driven glyph/text preview: live speech appears as word-shaped pills, paused segment commits become readable text, and the live pill cursor continues from the committed edge. Live pill widths use a lorem-ipsum word-length sequence, preview/audio panels are both fixed to 984px, and the live pill rate now adapts after segment commits instead of assuming one speaking speed.
+**Last updated:** 2026-06-24 (TASK-75 — in-memory WAV bytes for segment transcription)  
+**Current state:** TASK-75 complete — segment transcription now builds WAV bytes in memory instead of writing/reading temp files, eliminating N redundant disk round-trips per dictation. IOHID keyboard fallback is active and user-proven for the ad-hoc `/Applications/Turbo Talk.app`. Right Option dictation works through Input Monitoring. Ad-hoc macOS auto-paste is user-proven via Session tap. Large overlay mode now has an audio-driven glyph/text preview: live speech appears as word-shaped pills, paused segment commits become readable text, and the live pill cursor continues from the committed edge. Live pill widths use a lorem-ipsum word-length sequence, preview/audio panels are both fixed to 984px, and the live pill rate now adapts after segment commits instead of assuming one speaking speed.
 
 ## Next action
 
@@ -43,6 +43,10 @@ Run one large-overlay dictation by eye: speak slow and fast pause-separated line
 - `9c6b3ca` — chore(release): bump to 0.9.8
 
 ## This session
+
+**Event (TASK-75):** Eliminated the temp-file round-trip for segment WAV writing. Added `wav_bytes_from_samples` helper that builds 16-bit PCM WAV bytes directly in memory (no hound dependency — manual RIFF header), `WhisperBackend::transcribe_bytes` method that POSTs them via `Part::bytes(...).file_name(...)`, `run_raw_bytes` with the same connection-failure retry logic as `run_raw`, and updated `transcribe_one_segment` to use the all-in-memory path. Added `transcribe_bytes` with a default fallback impl to the `TranscriptionBackend` trait; `WhisperBackend` overrides it. Extracted `handle_transcribe_response` to share response parsing between `transcribe` and `transcribe_bytes`.
+
+**Proof:** `cargo check --manifest-path src-tauri/Cargo.toml` clean. `cargo test -- wav_bytes_from_samples_round_trips` passes (reads back via `hound::WavReader::new(Cursor)` — header, duration, format all correct). All 137 other tests pass (2 pre-existing `detect_garbage` failures unrelated).
 
 **Event:** Continued the Sequoia/ad-hoc Accessibility investigation from handoff. Confirmed release app launches, logs `AXIsProcessTrusted()` false, CGEventTap fails, and IOHIDManager starts. Source cleanup: AX fallback warning is one-shot, and CGEventTap retry no longer emits the misleading Accessibility toast when IOHID/Input Monitoring is intended. Follow-up: fixed IOHID keyboard duplicate press handling that made recording flicker away in toggle mode. Tray follow-up: template-image tray attempt was still invisible, so idle tray icon is now a dark filled badge with white `TT`.
 
