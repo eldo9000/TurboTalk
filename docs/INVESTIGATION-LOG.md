@@ -19,3 +19,4 @@
 | 2026-06-24 | CONFIRMED | dispatch 1/3 — Replace Windows GetAsyncKeyState polling with WH_KEYBOARD_LL hook + dedicated message-pump thread; commit 63d79a0 |
 | 2026-06-24 | CONFIRMED | dispatch 1/1 — Replace per-call reqwest::blocking::Client construction with a shared OnceLock client; commit a6a84f2 |
 | 2026-06-24 | CONFIRMED | dispatch 1/1 — Gate worker invalidation on backend-affecting fields only in save_config; commit 1aeaacf |
+| 2026-06-24 | CONFIRMED | dispatch 1/1 — Swap settings cache to Arc&lt;Config&gt; + narrow hot-path accessors; commit 2d149c7 |
