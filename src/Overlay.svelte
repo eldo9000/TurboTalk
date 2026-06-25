@@ -151,12 +151,6 @@ import { invoke } from '@tauri-apps/api/core';
 
   let levels = Array(HISTORY).fill(0);
   let levelsHead = $state(0);
-  let cursorInZone = $state(false);
-  // Peek-through (dim the pill so you can see what's behind it) is disabled in
-  // 'large' mode: the window is tall to hold the transcript bubble, so the
-  // hover zone would cover most of the screen and over-trigger — and in large
-  // mode the whole point is to read the transcript, not see through it.
-  let isPeeking = $derived(mode === 'recording' && cursorInZone && overlaySize !== 'large');
 
   // Visual AGC — track a rolling target RMS so quiet mics still show
   // full-scale bars, then ease the visual scale toward that target. The
@@ -278,34 +272,7 @@ import { invoke } from '@tauri-apps/api/core';
       overlayPosition  = cfg.overlay_position ?? 'bottom';
     } catch (_) { /* keep defaults */ }
 
-    // Window placement is owned entirely by the Rust side — see
-    // `reposition_overlay_to_cursor_monitor` in src-tauri/src/lib.rs.
-    // The frontend only mirrors the resulting frame to compute the
-    // cursor-peek-through hoverZone.
-    let hoverZone = { x: 0, y: 0, w: 0, h: 0 }; // NSPoints
-
-    async function refreshHoverZone() {
-      try {
-        const pos  = await win.outerPosition();
-        const size = await win.outerSize();
-        const wsf  = window.devicePixelRatio || 1;
-        hoverZone = { x: pos.x / wsf, y: pos.y / wsf, w: size.width / wsf, h: size.height / wsf };
-      } catch (_) { /* leave previous zone in place */ }
-    }
-    await refreshHoverZone();
-
-    function onMouseMove(e) {
-      if (mode !== 'recording') {
-        cursorInZone = false;
-        return;
-      }
-      cursorInZone = e.clientX >= hoverZone.x && e.clientX <= hoverZone.x + hoverZone.w
-                  && e.clientY >= hoverZone.y && e.clientY <= hoverZone.y + hoverZone.h;
-    }
     const uns = [];
-
-    window.addEventListener('mousemove', onMouseMove, { passive: true });
-    uns.push(() => window.removeEventListener('mousemove', onMouseMove));
 
     // Backend emits ptt-armed BEFORE ptt-down only when whisper-server is
     // still loading (cold start). On the warm path ptt-down fires directly
@@ -346,11 +313,7 @@ import { invoke } from '@tauri-apps/api/core';
       clearTimeout(flashTimer);
       flashTimer = setTimeout(() => { justConnected = false; }, 560);
       draw();
-      // Backend has just repositioned the window onto the cursor's monitor
-      // (see reposition_overlay_to_cursor_monitor). Pick up the new frame
-      // so the cursor-peek-through hoverZone matches reality. Slight delay
-      // so the post-set_position frame has settled.
-      setTimeout(() => { refreshHoverZone(); }, 200);
+
     }).then(u => uns.push(u));
 
     listen('ptt-up', () => {
@@ -581,9 +544,6 @@ import { invoke } from '@tauri-apps/api/core';
     listen('config-update', (e) => {
       overlaySize      = e.payload?.overlay_size ?? 'medium';
       overlayPosition  = e.payload?.overlay_position ?? 'bottom';
-      // Rust repositions the window on save; refresh hoverZone so peek-
-      // through detection picks up the new frame.
-      setTimeout(() => { refreshHoverZone(); }, 200);
     }).then(u => uns.push(u));
 
     return () => {
@@ -909,7 +869,6 @@ import { invoke } from '@tauri-apps/api/core';
     <div
       class="seg-preview"
       class:below={overlayPosition === 'top'}
-      style:opacity={isPeeking ? 0.12 : 1}
     >
       {#if previewUnits.length > 0}
         <div class="glyph-preview" aria-hidden="true">
@@ -940,11 +899,9 @@ import { invoke } from '@tauri-apps/api/core';
     class:transcribing={mode === 'transcribing'}
     class:warn={mode === 'recording' && wordCount >= WARN_WORDS && wordCount < ALERT_WORDS}
     class:alert={mode === 'recording' && wordCount >= ALERT_WORDS}
-    class:peek={isPeeking}
-    style:background={isPeeking ? 'rgba(16,16,16,0.12)' : 'rgba(16,16,16,0.87)'}
-    style:backdrop-filter={isPeeking ? 'blur(1px) saturate(100%)' : 'blur(18px) saturate(160%)'}
-    style:-webkit-backdrop-filter={isPeeking ? 'blur(1px) saturate(100%)' : 'blur(18px) saturate(160%)'}
-    style:opacity={mode === 'idle' ? 0 : isPeeking ? 0.24 : 1}
+    style:background={'rgba(16,16,16,0.87)'}
+    style:backdrop-filter={'blur(18px) saturate(160%)'}
+    style:-webkit-backdrop-filter={'blur(18px) saturate(160%)'}
   >
     <div class="pill-inner">
     {#if mode === 'error'}
