@@ -73,8 +73,10 @@ pub fn paste(text: &str) -> anyhow::Result<bool> {
     // Standard pasteboard path: save clipboard, write transcript, activate the
     // target app, send Cmd+V, then restore clipboard with changeCount guard.
 
+    crate::diagnostic_log::emergency_trace("[paste-tier2] focus_capture::snapshot");
     let focus = focus_capture::snapshot();
     if focus.pid > 0 {
+        crate::diagnostic_log::emergency_trace("[paste-tier2] focus_capture::activate_app");
         tracing::debug!(
             "[paste] activating app pid={} ({} {})",
             focus.pid,
@@ -84,19 +86,24 @@ pub fn paste(text: &str) -> anyhow::Result<bool> {
         focus_capture::activate_app(&focus);
     }
 
+    crate::diagnostic_log::emergency_trace("[paste-tier2] clipboard::snapshot");
     let pb_snapshot = clipboard::snapshot().unwrap_or_else(|e| {
         tracing::warn!("[paste] clipboard snapshot failed (continuing): {e}");
         clipboard::PasteboardSnapshot::empty()
     });
 
+    crate::diagnostic_log::emergency_trace("[paste-tier2] clipboard::write_text");
     if let Err(e) = clipboard::write_text(text) {
         tracing::warn!("[paste] clipboard write_text failed: {e}");
     }
 
+    crate::diagnostic_log::emergency_trace("[paste-tier2] synthetic_keys::post_cmd_v");
     synthetic_keys::post_cmd_v();
 
     if ax_trusted {
+        crate::diagnostic_log::emergency_trace("[paste-tier2] sleep 200ms");
         std::thread::sleep(std::time::Duration::from_millis(200));
+        crate::diagnostic_log::emergency_trace("[paste-tier2] clipboard::restore_if_untouched");
         match clipboard::restore_if_untouched(&pb_snapshot) {
             Ok(true) => tracing::info!("[paste] Tier 2 — clipboard restored"),
             Ok(false) => tracing::warn!(
