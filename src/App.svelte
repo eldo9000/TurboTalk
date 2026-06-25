@@ -6,14 +6,19 @@
   import { LogicalSize, PhysicalPosition } from '@tauri-apps/api/dpi';
   import { open as openFilePicker } from '@tauri-apps/plugin-dialog';
   import { initTheme } from '@libre/ui/src/theme.js';
-  import Select from '@libre/ui/src/components/Select.svelte';
-  import UpdateManager from './UpdateManager.svelte';
   import HistoryTab from './HistoryTab.svelte';
   import ModelsTab from './ModelsTab.svelte';
   import ModesTab from './ModesTab.svelte';
+  import Onboarding from './Onboarding.svelte';
+  import ErrorToast from './ErrorToast.svelte';
+  import TitleBar from './TitleBar.svelte';
+  import SettingsTab from './SettingsTab.svelte';
+  import AboutModal from './AboutModal.svelte';
+  import NoModelPopup from './NoModelPopup.svelte';
+  import ResetModal from './ResetModal.svelte';
+  import BottomBar from './BottomBar.svelte';
   import { PROMPT_PRESETS, DEFAULT_CLASSIFIER_PROMPT } from './lib/prompts';
   import { KNOWN_FILENAMES, altModelVariant, altModelActive } from './lib/catalog';
-  import { seg } from './lib/utils';
 
   const HOTKEY_KEY_ITEMS_MAC = [
     { category: 'Keyboard' },
@@ -76,7 +81,6 @@
   // structs in `src-tauri/src/settings.rs`. Adding/removing/renaming a field
   // there produces a TypeScript error here.
   import { commands } from './bindings.ts';
-  import Onboarding from './Onboarding.svelte';
 
   // First-launch readiness gate. Set to true on mount and on every window
   // focus if any prerequisite (Accessibility, Input Monitoring, Microphone,
@@ -456,8 +460,6 @@
     }
     readinessModelPresent = r.model_present;
   }
-
-  let volumeSaveTimer      = null;
 
   // ── Zoom ──────────────────────────────────────────────────────────────────
 
@@ -1329,45 +1331,12 @@
 <div bind:this={outerEl} class="flex flex-col h-full overflow-hidden bg-[var(--surface-raised)]"
 >
 
-  <!-- ui-error toast stack — fixed top-center. Permission-related kinds
-       deep-link to the relevant System Settings pane on click; everything
-       else just dismisses. -->
-  {#if uiErrors.length > 0}
-    <div class="fixed top-12 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-1.5 pointer-events-none w-[calc(100%-1.5rem)] max-w-[400px]">
-      {#each uiErrors as err (err.id)}
-        <button
-          onclick={async () => {
-            if (err.kind === 'hotkey-permission') {
-              await commands.openSystemSettings('accessibility');
-            } else if (err.kind === 'hotkey-input-monitoring') {
-              await commands.openSystemSettings('input_monitoring');
-            } else if (err.kind === 'mic-permission') {
-              await commands.openSystemSettings('microphone');
-            } else if (err.kind === 'chaperone-fallback') {
-              switchTab('modes');
-            }
-            uiErrors = uiErrors.filter(x => x.id !== err.id);
-          }}
-          class="pointer-events-auto px-3 py-2 rounded-lg flex items-center justify-between gap-2 text-left
-                 bg-red-500/10 border border-red-500/25 backdrop-blur-sm
-                 hover:bg-red-500/15 transition-colors cursor-pointer"
-        >
-          <div class="flex flex-col gap-0.5 min-w-0">
-            <span class="text-[10px] uppercase tracking-wide text-red-400/70 font-mono">{err.kind}</span>
-            <span class="text-[11px] text-red-400 leading-snug">{err.message}</span>
-            {#if err.kind === 'hotkey-permission' || err.kind === 'hotkey-input-monitoring' || err.kind === 'mic-permission'}
-              <span class="text-[10px] text-red-400/60 leading-snug">Click to open System Settings →</span>
-            {/if}
-          </div>
-          <span class="shrink-0 text-red-400/60 hover:text-red-400 text-base leading-none">×</span>
-        </button>
-      {/each}
-    </div>
-  {/if}
+  <ErrorToast
+    bind:uiErrors
+    onDismiss={(id) => { uiErrors = uiErrors.filter(x => x.id !== id); }}
+    onOpenSettings={(tab) => switchTab(tab)}
+  />
 
-  <!-- Readiness gate — shown until Accessibility, Microphone, and a model
-       are all green. Re-mounted when readiness regresses (e.g. user revoked
-       a permission between sessions). -->
   {#if showOnboarding}
     <Onboarding
       onComplete={completeOnboarding}
@@ -1380,528 +1349,95 @@
     />
   {/if}
 
-  <!-- Titlebar -->
-  <div data-tauri-drag-region class="relative h-10 shrink-0 flex items-end select-none bg-white dark:bg-[color-mix(in_srgb,#000_18%,var(--surface-raised))]">
+  <TitleBar {activeTab} {recording} {transcribing} onTabSwitch={switchTab} />
 
-    <!-- Traffic-light spacer (left) -->
-    <div class="w-[76px] shrink-0 h-full" data-tauri-drag-region></div>
-
-    <!-- Drag fill (right) -->
-    <div class="flex-1 h-full" data-tauri-drag-region></div>
-
-    <!-- Recording status dot (right side, doesn't affect centering) -->
-    {#if recording || transcribing}
-      <div class="flex items-center pb-1.5 pr-3">
-        <span class={
-          recording ? 'w-2 h-2 rounded-full bg-red-500 animate-pulse'
-                    : 'w-2 h-2 rounded-full bg-yellow-400 animate-pulse'
-        }></span>
-      </div>
-    {/if}
-
-    <!-- All tabs — centered in the titlebar -->
-    <div class="absolute inset-y-0 left-0 right-0 flex items-end justify-center pointer-events-none">
-      {#each ['history', 'models', 'modes', 'settings'] as tab}
-        <button
-          onclick={() => switchTab(tab)}
-          class="relative px-3 h-full text-[12px] font-medium capitalize transition-[color,opacity] pointer-events-auto
-                 {activeTab === tab
-                   ? 'text-[var(--text-primary)]'
-                   : 'text-[var(--text-secondary)] opacity-40 hover:opacity-90'}"
-        >
-          {tab}
-          {#if activeTab === tab}
-            <span class="absolute bottom-0 left-2 right-2 h-[2px] rounded-t bg-[var(--accent)]"></span>
-          {/if}
-        </button>
-      {/each}
-    </div>
-
-  </div>
-
-  <!-- History tab -->
   {#if activeTab === 'history'}
     <HistoryTab {history} {copiedTs} {transcriptError} {transcriptNotice} {filteredEntry} {recording} {transcribing} hotkeyLabel={hotkeyDisplayName(cfgHotkeyKey)} {cfgHotkeyMode} actions={historyActions()} />
   {/if}
 
-  <!-- Models tab -->
   {#if activeTab === 'models'}
     <ModelsTab {cfgBackend} {cfgModels} {cfgModel} {downloadProgress} {altModels} {newModelPath} {modelConfigured} {cfgBackendVariant} actions={modelsActions()} />
   {/if}
 
-  <!-- Modes tab -->
   {#if activeTab === 'modes'}
     <ModesTab {cfgBackend} {cfgCleanupMode} {cfgStripFillers} {cfgAppendPeriod} {cfgStripArtifacts} {cfgOllamaUrl} {cfgLlmModel} {cfgVocabulary} {cfgAntiVocabulary} {cfgClassifierPrompt} {activePresetId} {cfgVadEnabled} {ollamaReachable} {ollamaModelPresent} {ollamaModelPartial} {ollamaPullState} actions={modesActions()} />
   {/if}
 
-  <!-- Settings tab -->
   {#if activeTab === 'settings'}
     <div class="flex-1 min-h-0 overflow-y-auto pb-0.5 bg-[var(--surface)] text-[12px]">
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <!-- svelte-ignore a11y_mouse_events_have_key_events -->
-      <div class="tt-set" bind:this={settingsContentEl}
-        onmouseover={_onIndicatorOver}
-        onmouseleave={_onIndicatorLeave}>
-
-        <!-- Hotkey -->
-        <div class="tt-section">
-          <div class="subsection-hd"><span class="subsection-hd-title">Hotkey</span></div>
-          <div class="tt-row tt-row-field" data-tip="Which key triggers push-to-talk. Using a foot pedal or macro key? Map it to F13–F19 in your device software, then pick it here.">
-            <div class="tt-seg" class:tt-seg-dim={isUnsidedKey(hotkeyKeyPart)}>
-              {#each [['left','Left'],['right','Right']] as [v, lbl], i}
-                <button onclick={() => { hotkeySide = v; applyHotkeyKey(); }} class={seg(hotkeySide === v, i, 2)}>{lbl}</button>
-              {/each}
-            </div>
-            <div class="tt-key-sel">
-              <Select
-                items={hotkeyKeyItems}
-                bind:value={hotkeyKeyPart}
-                onchange={applyHotkeyKey}
-                variant="flat"
-                size="sm"
-              />
-            </div>
-          </div>
-          {#if hotkeyKeyPart.startsWith('mouse_')}
-            {#if hasLogitechMouse}
-              <div style="margin: 0 8px 6px; padding: 6px 9px; border-radius: 6px; font-size: 11px; line-height: 1.5; color: var(--warning, #c97d00); background: var(--warning-bg, #fff8e0); border: 1px solid color-mix(in srgb, var(--warning, #c97d00) 30%, transparent);">
-                ⚠ Logitech Options+ blocks mouse button events — this hotkey won't trigger recording.<br>
-                <strong>The fix:</strong> in Logi Options+, assign <em>Keystroke → F19</em> to the button, then pick <strong>F19</strong> above. Recording works and no native action fires.
-              </div>
-            {:else}
-              <div style="margin: 0 8px 6px; padding: 6px 9px; border-radius: 6px; font-size: 11px; line-height: 1.5; color: var(--muted, #888); background: var(--bg-muted, #f5f5f5); border: 1px solid var(--border-subtle, #e0e0e0);">
-                ⓘ Your mouse's back/forward action fires alongside recording — both happen at once. For a clean experience, assign <strong>F19</strong> to the button in your mouse software and pick it above.
-              </div>
-            {/if}
-          {/if}
-        </div>
-
-        <!-- Recording -->
-        <div class="tt-section">
-          <div class="subsection-hd"><span class="subsection-hd-title">Recording</span></div>
-          <div class="tt-row tt-row-field" data-tip="Hold: record while key is held. Toggle: press once to start, again to stop">
-            <div class="tt-seg">
-              {#each [['hold','Hold'],['toggle','Toggle']] as [v, lbl], i}
-                <button onclick={() => { cfgHotkeyMode = v; saveSettings(); }} class={seg(cfgHotkeyMode === v, i, 2)}>{lbl}</button>
-              {/each}
-            </div>
-            <div class="tt-key-sel" data-tip="Microphone to record from">
-              <Select
-                items={[
-                  { value: 'default', label: 'System default' },
-                  ...audioDevices.map(d => ({ value: d, label: d })),
-                ]}
-                bind:value={cfgDevice}
-                onchange={() => saveSettings()}
-                variant="flat"
-                size="sm"
-              />
-            </div>
-          </div>
-        </div>
-
-        <!-- Cancel shortcuts -->
-        <div class="tt-section">
-          <div class="subsection-hd"><span class="subsection-hd-title">Cancel shortcuts</span></div>
-          <div class="tt-row tt-row-field" data-tip="How to abort a recording in progress">
-            <span class="tt-lbl">Cancel on</span>
-            <div class="tt-multi">
-              <button
-                onclick={() => { cfgCancelOnEsc = !cfgCancelOnEsc; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgCancelOnEsc}
-                data-tip="Press Escape to cancel the current recording">Escape</button>
-              <button
-                onclick={() => { cfgCancelOnHold = !cfgCancelOnHold; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgCancelOnHold}
-                data-tip="Hold the hotkey for ~1 second during recording to cancel">Hold key</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Theme -->
-        <div class="tt-section">
-          <div class="subsection-hd"><span class="subsection-hd-title">Theme</span></div>
-          <div class="tt-row tt-row-field" data-tip="App color scheme — Auto follows your macOS appearance">
-            <div class="tt-seg tt-seg-wide">
-              {#each [['auto','Auto'],['light','Light'],['dark','Dark']] as [v, lbl], i}
-                <button onclick={() => { cfgTheme = v; saveSettings(); }} class={seg(cfgTheme === v, i, 3)}>{lbl}</button>
-              {/each}
-            </div>
-          </div>
-        </div>
-
-        <!-- UI Zoom -->
-        <div class="tt-section">
-          <div class="subsection-hd"><span class="subsection-hd-title">UI Zoom</span></div>
-          <div class="tt-row tt-row-field" data-tip="Scale the app interface — also adjustable with − / + in the footer">
-            <div class="tt-seg tt-seg-wide">
-              {#each ZOOM_LEVELS as level, i}
-                <button onclick={() => { zoomIdx = i; }} class={seg(zoomIdx === i, i, ZOOM_LEVELS.length)}>{level}%</button>
-              {/each}
-            </div>
-          </div>
-        </div>
-
-        <!-- History -->
-        <div class="tt-section">
-          <div class="subsection-hd"><span class="subsection-hd-title">History</span></div>
-          <div class="tt-row tt-row-field" data-tip="Save transcripts to disk and auto-delete after a set period">
-            <button
-              onclick={() => { cfgSaveHistory = !cfgSaveHistory; saveSettings(); }}
-              class="tt-multi-btn" class:tt-multi-on={cfgSaveHistory}
-              data-tip="Save transcripts to disk between sessions">Save</button>
-            <div class="tt-key-sel" data-tip="Automatically delete saved transcripts older than this">
-              <Select
-                items={HISTORY_AUTO_DELETE_ITEMS}
-                bind:value={cfgHistoryAutoDelete}
-                onchange={() => saveSettings()}
-                disabled={!cfgSaveHistory}
-                variant="flat"
-                size="sm"
-              />
-            </div>
-          </div>
-        </div>
-
-        <!-- Audio indicators (Volume embedded) -->
-        <div class="tt-section">
-          <div class="subsection-hd"><span class="subsection-hd-title">Indicators</span></div>
-          <div class="tt-row tt-row-field" data-tip="Choose how much visual feedback the recording overlay shows">
-            <span class="tt-lbl">Visual Overlay</span>
-            <div class="tt-multi">
-              <button
-                onclick={() => { cfgShowOverlay = true; cfgOverlaySize = 'small'; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgShowOverlay && cfgOverlaySize === 'small'}
-                data-tip="Bare recording dot with timer">Small</button>
-              <button
-                onclick={() => { cfgShowOverlay = true; cfgOverlaySize = 'medium'; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgShowOverlay && cfgOverlaySize === 'medium'}
-                data-tip="Current compact waveform overlay">Medium</button>
-              <button
-                onclick={() => { cfgShowOverlay = true; cfgOverlaySize = 'large'; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgShowOverlay && cfgOverlaySize === 'large'}
-                data-tip="Expanded waveform overlay with stronger status text">Large</button>
-            </div>
-          </div>
-          <div class="tt-row tt-row-field" data-tip="Where the recording overlay anchors on screen">
-            <span class="tt-lbl">Overlay Position</span>
-            <div class="tt-multi">
-              <button
-                onclick={() => { if (cfgShowOverlay) { cfgOverlayPosition = 'bottom'; saveSettings(); } }}
-                class="tt-multi-btn" class:tt-multi-on={cfgOverlayPosition === 'bottom'}
-                disabled={!cfgShowOverlay}
-                data-tip="Pin the overlay near the bottom of the screen">Bottom</button>
-              <button
-                onclick={() => { if (cfgShowOverlay) { cfgOverlayPosition = 'top'; saveSettings(); } }}
-                class="tt-multi-btn" class:tt-multi-on={cfgOverlayPosition === 'top'}
-                disabled={!cfgShowOverlay}
-                data-tip="Pin the overlay near the top of the screen">Top</button>
-            </div>
-          </div>
-          <div class="tt-row tt-row-field" data-tip="Colored dot that follows the cursor while recording is active">
-            <span class="tt-lbl">Cursor Dot</span>
-            <div class="tt-multi">
-              <button
-                onclick={() => { cfgCursorDotIndicator = !cfgCursorDotIndicator; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgCursorDotIndicator}
-                data-tip="Track the cursor with a colored dot while recording">Follow Cursor</button>
-            </div>
-          </div>
-          <div class="tt-row tt-row-field" data-tip="Play audio chimes for recording events">
-            <span class="tt-lbl">Audio Notify</span>
-            <div class="tt-multi">
-              <button
-                onclick={() => { cfgSoundOnStart = !cfgSoundOnStart; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnStart}
-                data-tip="Play a chime when recording begins">on Start</button>
-              <button
-                onclick={() => { cfgSoundOnFinish = !cfgSoundOnFinish; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnFinish}
-                data-tip="Play a chime when transcription completes">on Finish</button>
-              <button
-                onclick={() => { cfgSoundOnCancel = !cfgSoundOnCancel; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnCancel}
-                data-tip="Play a chime when recording is cancelled">on Cancel</button>
-              <button
-                onclick={() => { cfgSoundOnError = !cfgSoundOnError; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgSoundOnError}
-                data-tip="Play a low beep when dictation has errors">on Error</button>
-            </div>
-          </div>
-          <div class="tt-row tt-row-field" data-tip="Pause music/podcasts while dictating and resume after paste">
-            <span class="tt-lbl">Media</span>
-            <div class="tt-multi">
-              <button
-                onclick={() => { cfgPauseMediaOnDictate = !cfgPauseMediaOnDictate; saveSettings(); }}
-                class="tt-multi-btn" class:tt-multi-on={cfgPauseMediaOnDictate}
-                data-tip="Pause playback during dictation, resume after">Pause on Dictate</button>
-            </div>
-          </div>
-          <div class="tt-row tt-row-field tt-row-col" data-tip="Volume for audio notification chimes">
-            <div class="tt-vol-hd">
-              <span class="tt-lbl tt-lbl-fixed">Volume</span>
-              <span class="tt-vol-val">{Math.round(cfgSoundVolume * 100)}%</span>
-            </div>
-            <input
-              type="range"
-              min="0" max="1" step="0.05"
-              bind:value={cfgSoundVolume}
-              oninput={() => { clearTimeout(volumeSaveTimer); volumeSaveTimer = setTimeout(saveSettings, 300); }}
-              class="tt-range"
-              style="--pct:{cfgSoundVolume * 100}%"
-            />
-          </div>
-        </div>
-
-        <!-- System -->
-        <div class="tt-section tt-section-last">
-          <div class="subsection-hd"><span class="subsection-hd-title">System</span></div>
-          <div class="tt-row tt-row-field justify-center" data-tip="Start TurboTalk automatically when you log in to macOS">
-            <button
-              onclick={() => { cfgLaunchLogin = !cfgLaunchLogin; saveSettings(); }}
-              class="tt-multi-btn" class:tt-multi-on={cfgLaunchLogin}>Automatically launch TurboTalk at login</button>
-          </div>
-          <div class="tt-row tt-row-field" data-tip="Reset settings and history, or check for a newer version">
-            <div class="flex gap-2 w-full">
-              <button
-                onclick={() => { resetOpen = true; resetClosing = false; resetError = ''; }}
-                class="tt-btn tt-btn-danger-hover flex-1 justify-center"
-              >
-                Reset / Clear Caches
-              </button>
-              <div class="flex-1">
-                <UpdateManager />
-              </div>
-            </div>
-          </div>
-        </div>
-
-      </div>
+      <SettingsTab
+        bind:cfgHotkeyMode
+        bind:cfgCancelOnEsc
+        bind:cfgCancelOnHold
+        bind:cfgTheme
+        bind:cfgLaunchLogin
+        bind:cfgDevice
+        {audioDevices}
+        bind:cfgSaveHistory
+        bind:cfgHistoryAutoDelete
+        bind:cfgShowOverlay
+        bind:cfgOverlaySize
+        bind:cfgOverlayPosition
+        bind:cfgCursorDotIndicator
+        bind:cfgSoundOnStart
+        bind:cfgSoundOnFinish
+        bind:cfgSoundOnCancel
+        bind:cfgSoundOnError
+        bind:cfgSoundVolume
+        bind:cfgPauseMediaOnDictate
+        {ZOOM_LEVELS}
+        bind:zoomIdx
+        bind:hotkeySide
+        bind:hotkeyKeyPart
+        {hotkeyKeyItems}
+        {hasLogitechMouse}
+        {platform}
+        bind:settingsContentEl
+        onIndicatorOver={_onIndicatorOver}
+        onIndicatorLeave={_onIndicatorLeave}
+        onSaveSettings={saveSettings}
+        onResetOpen={() => { resetOpen = true; resetClosing = false; resetError = ''; }}
+        onApplyHotkey={applyHotkeyKey}
+      />
     </div>
   {/if}
 
-  <!-- About modal -->
-  {#if aboutOpen}
-    <div
-      class="about-backdrop {aboutClosing ? 'about-backdrop-out' : 'about-backdrop-in'}"
-      onclick={(event) => {
-        if (event.target === event.currentTarget) {
-          closeAbout();
-        }
-      }}
-      onkeydown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ' || event.key === 'Escape') {
-          event.preventDefault();
-          closeAbout();
-        }
-      }}
-      role="button"
-      tabindex="0"
-      aria-label="Close about"
-    >
-      <div
-        class="about-card {aboutClosing ? 'about-card-out' : 'about-card-in'}"
-        role="dialog"
-        aria-modal="true"
-        tabindex="-1"
-      >
-        <div class="flex flex-col items-center gap-0.5 pb-3">
-          <span class="text-[18px] font-semibold tracking-tight text-[var(--text-primary)]">Turbo Talk</span>
-          <span class="text-[10px] text-[var(--text-muted)] tabular-nums">v0.9.8</span>
-          <p class="text-[var(--text-secondary)] text-[11px] leading-snug mt-1.5 text-center">
-            Lightweight voice dictation<br>for getting work done.
-          </p>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <AboutModal
+    open={aboutOpen}
+    closing={aboutClosing}
+    onClose={closeAbout}
+  />
 
-  <!-- No-model popup — shown when the user presses Record with no whisper
-       model selected. Yellow, unmissable, click anywhere or Escape to
-       dismiss; the primary CTA jumps straight to the Models tab. -->
-  {#if noModelPopupOpen}
-    <div
-      class="about-backdrop {noModelPopupClosing ? 'about-backdrop-out' : 'about-backdrop-in'}"
-      onclick={(event) => {
-        if (event.target === event.currentTarget) {
-          closeNoModelPopup();
-        }
-      }}
-      onkeydown={(event) => {
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          closeNoModelPopup();
-        }
-      }}
-      role="button"
-      tabindex="0"
-      aria-label="Close no-model alert"
-    >
-      <div
-        class="about-card no-model-card {noModelPopupClosing ? 'about-card-out' : 'about-card-in'}"
-        role="dialog"
-        aria-modal="true"
-        tabindex="-1"
-      >
-        <div class="flex flex-col items-center gap-2 pb-3">
-          <span class="no-model-icon">⚠</span>
-          <span class="no-model-title">NO MODEL INSTALLED</span>
-          <p class="no-model-body">
-            TurboTalk needs a transcription model before it can transcribe. Download one in the Models tab to get started.
-          </p>
-        </div>
-        <div class="flex flex-col gap-2 pt-2">
-          <button
-            onclick={() => { closeNoModelPopup(); switchTab('models'); }}
-            class="no-model-cta"
-          >
-            Open Models
-          </button>
-          <button
-            onclick={closeNoModelPopup}
-            class="no-model-dismiss"
-          >
-            Dismiss
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <NoModelPopup
+    open={noModelPopupOpen}
+    closing={noModelPopupClosing}
+    onClose={closeNoModelPopup}
+    onOpenModels={() => switchTab('models')}
+  />
 
-  <!-- Reset modal -->
-  {#if resetOpen}
-    <div
-      class="about-backdrop {resetClosing ? 'about-backdrop-out' : 'about-backdrop-in'}"
-      onclick={(event) => {
-        if (event.target === event.currentTarget) {
-          closeReset();
-        }
-      }}
-      onkeydown={(event) => {
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          closeReset();
-        }
-      }}
-      role="button"
-      tabindex="0"
-      aria-label="Close reset"
-    >
-      <div
-        class="about-card reset-card {resetClosing ? 'about-card-out' : 'about-card-in'}"
-        role="dialog"
-        aria-modal="true"
-        tabindex="-1"
-      >
-        <button
-          onclick={closeReset}
-          class="reset-close-x"
-          aria-label="Close"
-        >✕</button>
-        <div class="reset-inner">
-        <div class="flex flex-col items-start gap-1 pb-3">
-          <span class="text-[18px] font-semibold tracking-tight text-[var(--text-primary)]">Reset TurboTalk</span>
-          <p class="text-[var(--text-secondary)] text-[11px] leading-snug mt-1.5 w-full">
-            Clear local settings and transcript history,<br>disable Launch at Login, and return to setup.
-          </p>
-          <div class="reset-platform-note">
-            <span class="reset-platform-icon">⚠</span>
-            <span>
-              {#if platform === 'windows'}
-                Microphone permissions stay in Settings › Privacy & security › Microphone.
-              {:else if platform === 'linux'}
-                Microphone permissions are managed through your system's portal or audio settings.
-              {:else}
-                Microphone permissions stay in macOS System Settings.
-              {/if}
-            </span>
-          </div>
-        </div>
-        <div class="flex flex-col gap-1 pt-2.5">
-          <div class="reset-action-row">
-            <button onclick={() => resetTurboTalk(false)} disabled={resetBusy} class="tt-btn reset-action-btn justify-center">
-              Reset, Keep Models
-            </button>
-            <p class="reset-action-desc">Clears settings, transcript history, and warm-up. Keeps downloaded transcription models.</p>
-          </div>
-          <div class="reset-action-row">
-            <button onclick={() => resetTurboTalk(true)} disabled={resetBusy} class="tt-btn tt-btn-danger-hover reset-action-btn justify-center">
-              Reset Everything
-            </button>
-            <p class="reset-action-desc">Clears everything including downloaded models. You'll need to download them again.</p>
-          </div>
-          <div class="reset-action-row">
-            <button onclick={() => { commands.resetOnboarding(); recheckReadiness(); closeReset(); }} disabled={resetBusy} class="tt-btn reset-action-btn justify-center">
-              Re-run Welcome Screen
-            </button>
-            <p class="reset-action-desc">Shows the setup wizard again without clearing any settings or models.</p>
-          </div>
-          <div class="reset-action-row">
-            <button onclick={clearWarmupCache} disabled={resetBusy || warmupResetBusy} class="tt-btn reset-action-btn justify-center">
-              {warmupResetBusy ? 'Clearing…' : 'Clear warmup cache'}
-            </button>
-            <p class="reset-action-desc">Clears the transcription model warm-up so it reloads next time.</p>
-          </div>
+  <ResetModal
+    open={resetOpen}
+    closing={resetClosing}
+    {resetBusy}
+    {resetError}
+    {warmupResetBusy}
+    {warmupResetMsg}
+    bind:bugNote
+    {diagnosticMsg}
+    {platform}
+    onClose={closeReset}
+    onResetTurboTalk={(deleteModels) => resetTurboTalk(deleteModels)}
+    onClearWarmupCache={clearWarmupCache}
+    onCreateBugReport={createBugReport}
+  />
 
-          {#if warmupResetMsg}
-            <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug">{warmupResetMsg}</p>
-          {/if}
-          {#if resetError}
-            <p class="text-[10px] text-red-400 leading-snug">{resetError}</p>
-          {/if}
-
-          <div class="reset-action-row mt-1">
-            <button onclick={createBugReport} class="tt-btn reset-action-btn justify-center">Create Bug Report</button>
-            <textarea
-              id="bug-note"
-              bind:value={bugNote}
-              rows="2"
-              placeholder={"Optional — what happened?\nThe report gathers the technical details."}
-              class="tt-input reset-action-desc"
-            ></textarea>
-          </div>
-          {#if diagnosticMsg}
-            <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug">{diagnosticMsg}</p>
-          {/if}
-        </div>
-        </div>
-      </div>
-    </div>
-  {/if}
-
-  <!-- Bottom bar — zoom left, about right; tooltip hint centered when hovering indicators -->
-  <div class="shrink-0 h-7 flex items-center justify-between px-2
-              select-none relative">
-    <div class="flex items-center gap-1">
-      <button
-        onclick={zoomOut}
-        disabled={zoomIdx === 0}
-        class="w-5 h-5 flex items-center justify-center rounded text-xs
-               text-[var(--text-tertiary,#666)] hover:text-[var(--text-secondary)]
-               disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-      >−</button>
-      <button
-        onclick={() => { zoomIdx = 0; }}
-        title="Reset zoom"
-        class="text-[10px] w-8 text-center text-[var(--text-tertiary,#666)] tabular-nums
-               hover:text-[var(--text-secondary)] transition-colors"
-      >{ZOOM_LEVELS[zoomIdx]}%</button>
-      <button
-        onclick={zoomIn}
-        disabled={zoomIdx === ZOOM_LEVELS.length - 1}
-        class="w-5 h-5 flex items-center justify-center rounded text-xs
-               text-[var(--text-tertiary,#666)] hover:text-[var(--text-secondary)]
-               disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-      >+</button>
-    </div>
-    {#if tipText}
-      <span class="tt-footer-tip">{tipText}</span>
-    {/if}
-    <button
-      onclick={() => { aboutOpen = true; aboutClosing = false; }}
-      class="text-[10px] text-[var(--text-tertiary,#666)] hover:text-[var(--text-secondary)]
-             transition-colors"
-    >about</button>
-  </div>
+  <BottomBar
+    {ZOOM_LEVELS}
+    bind:zoomIdx
+    {tipText}
+    onZoomIn={zoomIn}
+    onZoomOut={zoomOut}
+    onAboutOpen={() => { aboutOpen = true; aboutClosing = false; }}
+  />
 
 </div>

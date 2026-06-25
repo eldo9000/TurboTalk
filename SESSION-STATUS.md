@@ -1,7 +1,7 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-06-25 (TASK-69 — remove Moonshine)  
-**Current state:** Moonshine backend fully removed. Feature flag, Cargo default, code comments, and user-facing docs cleaned up. Only Whisper and Parakeet remain as supported backends. Backward-compat deserialization of `"moonshine"` → Parakeet kept for existing configs.
+**Last updated:** 2026-06-25 (TASK-70 — split App.svelte)  
+**Current state:** `src/App.svelte` split from 1907 lines into a 1444-line orchestrator + 7 focused components: `ErrorToast.svelte`, `TitleBar.svelte`, `SettingsTab.svelte`, `AboutModal.svelte`, `NoModelPopup.svelte`, `ResetModal.svelte`, `BottomBar.svelte`. Visual behavior unchanged. `npm run typecheck` and `npm run build` both pass.
 
 ## Next action
 
