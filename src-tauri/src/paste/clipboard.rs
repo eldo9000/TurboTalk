@@ -183,6 +183,15 @@ pub mod native {
         }
     }
 
+    pub fn current_change_count() -> Result<i64> {
+        unsafe {
+            let pb: *mut AnyObject = msg_send![objc2::class!(NSPasteboard), generalPasteboard];
+            if pb.is_null() { anyhow::bail!("NSPasteboard returned null"); }
+            let count: i64 = msg_send![pb, changeCount];
+            Ok(count)
+        }
+    }
+
     pub fn restore_if_untouched(snapshot: &PasteboardSnapshot) -> Result<bool> {
         unsafe {
             let pb: *mut AnyObject = msg_send![objc2::class!(NSPasteboard), generalPasteboard];

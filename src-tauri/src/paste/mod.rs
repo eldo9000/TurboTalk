@@ -109,7 +109,7 @@ pub fn paste(text: &str, app: &tauri::AppHandle) -> anyhow::Result<bool> {
 
     // Try native NSPasteboard module with main-thread dispatch.
     // If native snapshot fails, fall back to pbcopy for writing and skip restore.
-    let native_snapshot: Option<clipboard::native::PasteboardSnapshot> =
+    let mut native_snapshot: Option<clipboard::native::PasteboardSnapshot> =
         match dispatch_native(app, clipboard::native::snapshot) {
             Ok(s) => {
                 // Native snapshot succeeded — also write via native.
@@ -132,6 +132,14 @@ pub fn paste(text: &str, app: &tauri::AppHandle) -> anyhow::Result<bool> {
                 None
             }
         };
+
+    // Refresh the snapshot's changeCount to the post-write value so the
+    // restore guard detects only *external* clipboard changes, not our own.
+    if let Some(ref mut snapshot) = native_snapshot {
+        if let Ok(cc) = dispatch_native(app, clipboard::native::current_change_count) {
+            snapshot.change_count = cc;
+        }
+    }
 
     synthetic_keys::post_cmd_v();
 
