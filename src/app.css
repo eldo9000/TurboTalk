@@ -675,6 +675,30 @@ html.dark .tt-model-star-lbl { color: #facc15; }
 .tt-warn { color: #f87171; font-size: 11px; }
 html:not(.dark) .tt-warn { color: #dc2626; }
 
+/* Deletion spinner on model × buttons */
+@keyframes tt-spin { to { transform: rotate(360deg); } }
+.tt-model-x-deleting {
+  opacity: 1 !important;
+  pointer-events: auto;
+  cursor: default;
+  background: color-mix(in srgb, #f59e0b 12%, transparent) !important;
+}
+.tt-model-x-deleting:hover { background: color-mix(in srgb, #f59e0b 12%, transparent) !important; }
+.tt-model-spin {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid color-mix(in srgb, #f59e0b 30%, transparent);
+  border-top-color: #f59e0b;
+  border-radius: 50%;
+  animation: tt-spin 0.6s linear infinite;
+}
+.tt-model-x-deleting-lg .tt-model-spin {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+}
+
 /* ── Muted section (backend-gated features) ────────────────────────── */
 .tt-muted { opacity: 0.45; pointer-events: none; }
 

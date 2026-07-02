@@ -319,7 +319,7 @@ fn copy_history_item(text: String) -> Result<(), String> {
 /// (permission denied, .bin extension check failed, etc).
 #[tauri::command]
 #[specta::specta]
-fn delete_model_file(path: String) -> Result<bool, String> {
+async fn delete_model_file(path: String) -> Result<bool, String> {
     let Some(canon_models_dir) = settings::canonical_models_dir() else {
         return Ok(false);
     };
@@ -333,7 +333,11 @@ fn delete_model_file(path: String) -> Result<bool, String> {
     if !canon.extension().is_some_and(|e| e == "bin") {
         return Err(format!("refusing to delete non-.bin file: {}", path));
     }
-    std::fs::remove_file(&canon).map_err(|e| format!("delete failed: {}", e))?;
+    let canon2 = canon.clone();
+    tokio::task::spawn_blocking(move || std::fs::remove_file(&canon2))
+        .await
+        .map_err(|e| format!("delete failed: {}", e))?
+        .map_err(|e| format!("delete failed: {}", e))?;
     tracing::info!("[models] deleted {}", canon.display());
     Ok(true)
 }
@@ -346,7 +350,7 @@ fn delete_model_file(path: String) -> Result<bool, String> {
 /// `Ok(false)` when it was already gone.
 #[tauri::command]
 #[specta::specta]
-fn delete_backend_model(family: String, variant: String) -> Result<bool, String> {
+async fn delete_backend_model(family: String, variant: String) -> Result<bool, String> {
     use crate::settings::BackendFamily;
 
     let (dir, base) = match family.to_lowercase().as_str() {
@@ -375,7 +379,11 @@ fn delete_backend_model(family: String, variant: String) -> Result<bool, String>
         return Err("refusing to delete path outside the models directory".into());
     }
 
-    std::fs::remove_dir_all(&canon).map_err(|e| format!("delete failed: {}", e))?;
+    let canon2 = canon.clone();
+    tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&canon2))
+        .await
+        .map_err(|e| format!("delete failed: {}", e))?
+        .map_err(|e| format!("delete failed: {}", e))?;
     tracing::info!("[models] deleted backend bundle {}", canon.display());
 
     let mut cfg = (*settings::load()).clone();

@@ -278,6 +278,8 @@
   let newModelPath    = $state('');
   // { [modelName: string]: number } — key present = downloading, value = pct 0-99
   let downloadProgress = $state({});
+  // Set of model identifiers currently being deleted (path for whisper, id for alt)
+  let deletingModels  = $state(/** @type {Set<string>} */ (new Set()));
   // Parakeet model descriptors (loaded from backend on tab open)
   let altModels       = $state(/** @type {import('./bindings').ModelDescriptor[]} */ ([]));
 
@@ -694,11 +696,18 @@
 
   async function removeAltModel(m) {
     const variant = altModelVariant(m);
-    const res = await commands.deleteBackendModel(cfgBackend, variant);
-    if (res.status === 'error') return;
-    if (altModelActive(m, cfgBackendVariant, cfgBackend)) cfgBackendVariant = '';
-    altModels = await commands.listModelsForFamily(cfgBackend).catch(() => []);
-    await syncAppStateFromBackend();
+    deletingModels = new Set([...deletingModels, m.id]);
+    try {
+      const res = await commands.deleteBackendModel(cfgBackend, variant);
+      if (res.status === 'error') return;
+      if (altModelActive(m, cfgBackendVariant, cfgBackend)) cfgBackendVariant = '';
+      altModels = await commands.listModelsForFamily(cfgBackend).catch(() => []);
+      await syncAppStateFromBackend();
+    } finally {
+      const next = new Set(deletingModels);
+      next.delete(m.id);
+      deletingModels = next;
+    }
   }
 
   function cancelAltDownload(m) {
@@ -761,10 +770,17 @@
     // gone, custom path outside models dir); only genuine failures (permission,
     // bad extension) come back as errors. Either way we still drop the entry
     // from the user's config so the row disappears from the UI.
-    await commands.deleteModelFile(path);
-    cfgModels = cfgModels.filter(m => m !== path);
-    if (cfgModel === path) cfgModel = '';
-    await saveModels();
+    deletingModels = new Set([...deletingModels, path]);
+    try {
+      await commands.deleteModelFile(path);
+      cfgModels = cfgModels.filter(m => m !== path);
+      if (cfgModel === path) cfgModel = '';
+      await saveModels();
+    } finally {
+      const next = new Set(deletingModels);
+      next.delete(path);
+      deletingModels = next;
+    }
   }
 
   async function saveModels() {
@@ -1356,7 +1372,7 @@
   {/if}
 
   {#if activeTab === 'models'}
-    <ModelsTab {cfgBackend} {cfgModels} {cfgModel} {downloadProgress} {altModels} {newModelPath} {modelConfigured} {cfgBackendVariant} actions={modelsActions()} />
+    <ModelsTab {cfgBackend} {cfgModels} {cfgModel} {downloadProgress} {deletingModels} {altModels} {newModelPath} {modelConfigured} {cfgBackendVariant} actions={modelsActions()} />
   {/if}
 
   {#if activeTab === 'modes'}

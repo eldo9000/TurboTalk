@@ -202,7 +202,8 @@ export const commands = {
 	/**
 	 *  Debug command: set the in-memory force-onboarding flag so the frontend
 	 *  shows the welcome screen immediately. Also re-enables hotkey suppression
-	 *  while onboarding is active.
+	 *  while onboarding is active. Deletes the persistent flag so it takes
+	 *  effect on the next launch too.
 	 */
 	resetOnboarding: () => __TAURI_INVOKE<void>("reset_onboarding"),
 	/**

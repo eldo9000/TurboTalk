@@ -33,7 +33,7 @@
   ];
 
   let {
-    cfgBackend, cfgModels, cfgModel, downloadProgress,
+    cfgBackend, cfgModels, cfgModel, downloadProgress, deletingModels,
     altModels, newModelPath, modelConfigured, cfgBackendVariant,
     actions,
   } = $props();
@@ -65,10 +65,18 @@
     {:else if !isInstalled}
       <button onclick={() => actions.startDownload(m)} class="tt-btn">Download</button>
     {:else if isSelected}
-      <button onclick={() => actions.removeModel(installedPath)} title="Remove" class="tt-model-x">×</button>
+      {#if deletingModels.has(installedPath)}
+        <button disabled class="tt-model-x tt-model-x-deleting"><span class="tt-model-spin"></span></button>
+      {:else}
+        <button onclick={() => actions.removeModel(installedPath)} title="Remove" class="tt-model-x">×</button>
+      {/if}
       <button disabled class="tt-btn tt-btn-success">Selected</button>
     {:else}
-      <button onclick={() => actions.removeModel(installedPath)} title="Remove" class="tt-model-x">×</button>
+      {#if deletingModels.has(installedPath)}
+        <button disabled class="tt-model-x tt-model-x-deleting"><span class="tt-model-spin"></span></button>
+      {:else}
+        <button onclick={() => actions.removeModel(installedPath)} title="Remove" class="tt-model-x">×</button>
+      {/if}
       <button onclick={() => actions.selectModel(installedPath)} class="tt-btn tt-btn-accent">Use</button>
     {/if}
   </div>
@@ -85,10 +93,18 @@
   {:else if !isInstalled}
     <button onclick={() => actions.startAltDownload(m)} class="tt-btn" class:tt-btn-md={accent} class:tt-btn-accent={accent}>Download</button>
   {:else if isActive}
-    <button onclick={() => actions.removeAltModel(m)} title="Remove" class="tt-model-x" class:tt-model-x-lg={accent}>×</button>
+    {#if deletingModels.has(m.id)}
+      <button disabled class="tt-model-x tt-model-x-deleting" class:tt-model-x-lg={accent} class:tt-model-x-deleting-lg={accent}><span class="tt-model-spin"></span></button>
+    {:else}
+      <button onclick={() => actions.removeAltModel(m)} title="Remove" class="tt-model-x" class:tt-model-x-lg={accent}>×</button>
+    {/if}
     <button disabled class="tt-btn" class:tt-btn-md={accent} class:tt-btn-success={accent}>Selected</button>
   {:else}
-    <button onclick={() => actions.removeAltModel(m)} title="Remove" class="tt-model-x" class:tt-model-x-lg={accent}>×</button>
+    {#if deletingModels.has(m.id)}
+      <button disabled class="tt-model-x tt-model-x-deleting" class:tt-model-x-lg={accent} class:tt-model-x-deleting-lg={accent}><span class="tt-model-spin"></span></button>
+    {:else}
+      <button onclick={() => actions.removeAltModel(m)} title="Remove" class="tt-model-x" class:tt-model-x-lg={accent}>×</button>
+    {/if}
     <button onclick={() => actions.selectAltModel(m)} class="tt-btn" class:tt-btn-md={accent} class:tt-btn-accent={!accent}>Use</button>
   {/if}
 {/snippet}
@@ -128,7 +144,8 @@
   {/if}
 {/snippet}
 
-<div class="tt-set flex-1 min-h-0 overflow-y-auto">
+<div class="flex-1 min-h-0 overflow-y-auto bg-[var(--surface)]">
+  <div class="tt-set">
   <div class="tt-section">
     <div class="subsection-hd"><span class="subsection-hd-title">Transcription Engine</span></div>
     <div class="tt-row tt-row-field" data-tip="Which local transcription engine to use. Download a model below after switching.">
@@ -175,10 +192,18 @@
             {:else if !rmIsInstalled}
               <button onclick={() => actions.startDownload(RECOMMENDED_MODEL)} class="tt-btn tt-btn-md tt-btn-accent">Download</button>
             {:else if rmIsSelected}
-              <button onclick={() => actions.removeModel(rmInstalledPath)} title="Remove" class="tt-model-x tt-model-x-lg">×</button>
+              {#if deletingModels.has(rmInstalledPath)}
+                <button disabled class="tt-model-x tt-model-x-lg tt-model-x-deleting tt-model-x-deleting-lg"><span class="tt-model-spin"></span></button>
+              {:else}
+                <button onclick={() => actions.removeModel(rmInstalledPath)} title="Remove" class="tt-model-x tt-model-x-lg">×</button>
+              {/if}
               <button disabled class="tt-btn tt-btn-md tt-btn-success">Selected</button>
             {:else}
-              <button onclick={() => actions.removeModel(rmInstalledPath)} title="Remove" class="tt-model-x tt-model-x-lg">×</button>
+              {#if deletingModels.has(rmInstalledPath)}
+                <button disabled class="tt-model-x tt-model-x-lg tt-model-x-deleting tt-model-x-deleting-lg"><span class="tt-model-spin"></span></button>
+              {:else}
+                <button onclick={() => actions.removeModel(rmInstalledPath)} title="Remove" class="tt-model-x tt-model-x-lg">×</button>
+              {/if}
               <button onclick={() => actions.selectModel(rmInstalledPath)} class="tt-btn tt-btn-md tt-btn-accent">Use</button>
             {/if}
           </div>
@@ -200,7 +225,11 @@
           <div class="tt-custom-pill">
             <span class="tt-custom-name" title={customPath}>{customPath.split('/').at(-1)}</span>
             <span class="tt-custom-status">Connected</span>
-            <button onclick={() => actions.removeModel(customPath)} title="Clear custom model" class="tt-model-x tt-model-x-visible">×</button>
+            {#if deletingModels.has(customPath)}
+              <button disabled class="tt-model-x tt-model-x-visible tt-model-x-deleting"><span class="tt-model-spin"></span></button>
+            {:else}
+              <button onclick={() => actions.removeModel(customPath)} title="Clear custom model" class="tt-model-x tt-model-x-visible">×</button>
+            {/if}
           </div>
         </div>
       {:else}
@@ -260,4 +289,5 @@
       </div>
     </div>
   {/if}
+  </div>
 </div>

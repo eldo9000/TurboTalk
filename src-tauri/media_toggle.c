@@ -3,6 +3,7 @@
 
 #import <Cocoa/Cocoa.h>
 #import <CoreAudio/CoreAudio.h>
+#import <dlfcn.h>
 
 void media_toggle_play_pause(void) {
     @autoreleasepool {
@@ -20,53 +21,76 @@ void media_toggle_play_pause(void) {
         if (cgDown) CGEventPost(kCGSessionEventTap, cgDown);
         [NSThread sleepForTimeInterval:0.01];
         NSEvent *up = [NSEvent otherEventWithType:NSEventTypeSystemDefined
-                                         location:NSZeroPoint
-                                    modifierFlags:0
-                                        timestamp:0
-                                     windowNumber:0
-                                          context:nil
-                                          subtype:8
-                                            data1:((keyCode << 16) | (0xb << 8))
-                                            data2:-1];
+                                        location:NSZeroPoint
+                                   modifierFlags:0
+                                       timestamp:0
+                                    windowNumber:0
+                                         context:nil
+                                         subtype:8
+                                           data1:((keyCode << 16) | (0xb << 8))
+                                           data2:-1];
         CGEventRef cgUp = [up CGEvent];
         if (cgUp) CGEventPost(kCGSessionEventTap, cgUp);
     }
 }
 
-// Returns 1 if ANY output device has active IO (audio is playing).
-// Iterates all devices to handle Bluetooth/aggregate device quirks.
+// Returns 1 if any media app (Music, Spotify, Chrome, etc.) is actively
+// playing content — uses the MediaRemote private framework, same one
+// macOS' own Now Playing widget and media keys rely on.
+// Falls back to CoreAudio default-output-device query.
 int audio_is_playing(void) {
-    // Get list of all audio device IDs
-    AudioObjectPropertyAddress devListAddr = {
-        kAudioHardwarePropertyDevices,
+    static dispatch_once_t onceToken;
+    static void *mediaRemoteHandle = NULL;
+    static void (*getIsPlaying)(dispatch_queue_t, void (^)(BOOL)) = NULL;
+
+    dispatch_once(&onceToken, ^{
+        mediaRemoteHandle = dlopen(
+            "/System/Library/PrivateFrameworks/"
+            "MediaRemote.framework/MediaRemote",
+            RTLD_LAZY | RTLD_LOCAL
+        );
+        if (mediaRemoteHandle) {
+            getIsPlaying = dlsym(mediaRemoteHandle,
+                "MRMediaRemoteGetNowPlayingApplicationIsPlaying");
+        }
+    });
+
+    if (getIsPlaying) {
+        __block BOOL result = NO;
+        __block BOOL done = NO;
+        getIsPlaying(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0),
+            ^(BOOL playing) {
+                result = playing;
+                done = YES;
+            });
+        // Spin-wait up to 1.5 s for the async callback
+        for (int i = 0; i < 150 && !done; i++) {
+            usleep(10000);
+        }
+        if (done) return result ? 1 : 0;
+    }
+
+    // Fallback: check only the default output device (not all devices —
+    // virtual drivers can report spurious "running").
+    AudioObjectPropertyAddress defaultAddr = {
+        kAudioHardwarePropertyDefaultOutputDevice,
         kAudioObjectPropertyScopeOutput,
         kAudioObjectPropertyElementMain
     };
-    UInt32 dataSize = 0;
-    AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &devListAddr, 0, NULL, &dataSize);
-    UInt32 deviceCount = dataSize / sizeof(AudioDeviceID);
-    if (deviceCount == 0) return 0;
-
-    AudioDeviceID *devices = malloc(dataSize);
-    if (!devices) return 0;
-    AudioObjectGetPropertyData(kAudioObjectSystemObject, &devListAddr, 0, NULL, &dataSize, devices);
+    AudioDeviceID defaultDevice = kAudioDeviceUnknown;
+    UInt32 size = sizeof(defaultDevice);
+    OSStatus err = AudioObjectGetPropertyData(
+        kAudioObjectSystemObject, &defaultAddr, 0, NULL, &size, &defaultDevice
+    );
+    if (err != noErr || defaultDevice == kAudioDeviceUnknown) return 0;
 
     AudioObjectPropertyAddress runningAddr = {
         kAudioDevicePropertyDeviceIsRunningSomewhere,
         kAudioObjectPropertyScopeOutput,
         kAudioObjectPropertyElementMain
     };
-
-    int found = 0;
-    for (UInt32 i = 0; i < deviceCount; i++) {
-        UInt32 isRunning = 0;
-        UInt32 size = sizeof(isRunning);
-        OSStatus err = AudioObjectGetPropertyData(devices[i], &runningAddr, 0, NULL, &size, &isRunning);
-        if (err == noErr && isRunning) {
-            found = 1;
-            break;
-        }
-    }
-    free(devices);
-    return found;
+    UInt32 isRunning = 0;
+    size = sizeof(isRunning);
+    err = AudioObjectGetPropertyData(defaultDevice, &runningAddr, 0, NULL, &size, &isRunning);
+    return (err == noErr && isRunning) ? 1 : 0;
 }
