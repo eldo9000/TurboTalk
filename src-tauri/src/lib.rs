@@ -75,11 +75,9 @@ fn save_config(
     settings::save(&cfg).map_err(|e| e.to_string())?;
     settings::update_cache(&cfg);
     *hotkey_state.write() = cfg.hotkey.clone();
-    apply_overlay_visibility(&app, cfg.show_overlay);
-    // Pick up overlay_position changes on the next render — repositioning
-    // now (rather than waiting for the next PTT) keeps the pill out of the
-    // user's way the moment they toggle the setting.
+    // Position before showing so the overlay never renders at a stale location.
     windowing::reposition_overlay_to_cursor_monitor(&app);
+    apply_overlay_visibility(&app, cfg.show_overlay);
     // Rebuild the transcription worker only when backend-affecting config
     // fields change. Non-backend fields (theme, sound, overlay, cursor dot,
     // etc.) still persist to disk and update the cache but do NOT destroy
@@ -1519,9 +1517,6 @@ pub fn run() {
             // ── Overlay — cursor-transparent so clicks always pass through ──
             if let Some(overlay) = app.get_webview_window("overlay") {
                 let _ = overlay.set_ignore_cursor_events(true);
-                if !cfg.show_overlay {
-                    let _ = overlay.hide();
-                }
             }
 
             // ── Cursor dot — cursor-transparent, always starts hidden ──
@@ -1541,6 +1536,7 @@ pub fn run() {
             // first press doesn't have to fight a stale primary-monitor
             // placement from `center: true` in tauri.conf.json.
             windowing::reposition_overlay_to_cursor_monitor(app.handle());
+            apply_overlay_visibility(app.handle(), cfg.show_overlay);
 
             // ── Hotkey ─────────────────────────────────────────────────────
             // Stream opens on first keypress; always re-queries the config device

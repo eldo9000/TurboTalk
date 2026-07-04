@@ -575,6 +575,7 @@ pub(crate) mod common {
 
                 // Pin the overlay to the cursor's monitor up front so the
                 // arming tile never flashes on the wrong display.
+                crate::windowing::reposition_overlay_to_cursor_monitor(&app);
                 emit_critical(&app, "ptt-armed", ());
                 overlay_armed = true;
                 tracing::info!("[hotkey] arming — waiting for whisper-server readiness");
@@ -695,6 +696,7 @@ pub(crate) mod common {
             // and no yellow flash shows.
             if !rec.audio_live() {
                 if !overlay_armed {
+                    crate::windowing::reposition_overlay_to_cursor_monitor(&app);
                     emit_critical(&app, "ptt-armed", ());
                 }
                 crate::diagnostic_log::emergency_trace("[ptt_down] waiting audio_live");
@@ -751,8 +753,8 @@ pub(crate) mod common {
             // audio capture is already running, so moving it after the cue is a
             // pure latency win with no data loss.
             tray::set_tray_icon(&tray, TrayState::Recording);
-            // Single reposition per ptt-down — redundant calls removed to
-            // avoid macOS 26 NSPanel compositor glitch.
+            // Position before ptt-down so the red recording overlay renders on
+            // the monitor currently under the mouse pointer.
             crate::windowing::reposition_overlay_to_cursor_monitor(&app);
             emit_critical(&app, "ptt-down", ());
             emit_stage(&app, job_id, "recording");

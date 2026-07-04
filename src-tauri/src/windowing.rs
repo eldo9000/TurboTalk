@@ -24,8 +24,7 @@
 // false) before the move and restoring afterwards is the known workaround.
 
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition, PhysicalSize,
-    WebviewWindow,
+    AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewWindow,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -191,12 +190,8 @@ fn monitor_logical_bounds(m: &Monitor) -> (f64, f64, f64, f64) {
 /// Safe to call on any platform — on non-macOS it's just set_position.
 #[cfg(target_os = "macos")]
 fn position_nspanel(win: &WebviewWindow, pos: LogicalPosition<f64>) {
-    // Only demote/promote the window level when necessary.  The overlay is
-    // always created with "alwaysOnTop":true (NSFloatingWindowLevel), so on
-    // most calls this is already the case.  Skipping the toggle when possible
-    // avoids a macOS 26 NSPanel edge case where rapid level changes can
-    // cause the window to visually disappear (compositor catches the mid-
-    // demotion frame and the re-promotion races with the next display refresh).
+    // Only demote/promote the window level when necessary. The overlay now uses
+    // a native AppKit frame move, but status/cursor-dot still share this helper.
     let was_top = win.is_always_on_top().unwrap_or(true);
     if was_top {
         let _ = win.set_position(pos);
@@ -209,121 +204,135 @@ fn position_nspanel(win: &WebviewWindow, pos: LogicalPosition<f64>) {
 
 // ── Overlay window ─────────────────────────────────────────────────────────
 
+#[cfg(target_os = "macos")]
+fn appkit_position_overlay_on_cursor_monitor(
+    overlay: &WebviewWindow,
+    position: &str,
+    win_w: f64,
+    win_h: f64,
+) -> bool {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSEvent, NSFloatingWindowLevel, NSScreen, NSWindow};
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        tracing::warn!("[overlay] AppKit overlay positioning called off main thread");
+        return false;
+    };
+
+    let Ok(ns_window_ptr) = overlay.ns_window() else {
+        tracing::warn!("[overlay] ns_window unavailable — cannot position overlay");
+        return false;
+    };
+    if ns_window_ptr.is_null() {
+        tracing::warn!("[overlay] ns_window was null — cannot position overlay");
+        return false;
+    }
+
+    let mouse = NSEvent::mouseLocation();
+    let screens = NSScreen::screens(mtm);
+    let mut target_frame = None;
+    for i in 0..screens.count() {
+        let screen = screens.objectAtIndex(i);
+        let frame = screen.frame();
+        let in_x = mouse.x >= frame.origin.x && mouse.x < frame.origin.x + frame.size.width;
+        let in_y = mouse.y >= frame.origin.y && mouse.y < frame.origin.y + frame.size.height;
+        if in_x && in_y {
+            target_frame = Some(frame);
+            break;
+        }
+    }
+
+    let frame = target_frame
+        .or_else(|| NSScreen::mainScreen(mtm).map(|screen| screen.frame()))
+        .or_else(|| {
+            if screens.count() > 0 {
+                Some(screens.objectAtIndex(0).frame())
+            } else {
+                None
+            }
+        });
+    let Some(screen_frame) = frame else {
+        tracing::warn!("[overlay] no NSScreen available — cannot position overlay");
+        return false;
+    };
+
+    let x = (screen_frame.origin.x + (screen_frame.size.width - win_w) / 2.0)
+        .max(screen_frame.origin.x);
+    let y = if position == "top" {
+        screen_frame.origin.y + screen_frame.size.height - OVERLAY_PILL_TOP_OFFSET - win_h
+    } else {
+        screen_frame.origin.y + OVERLAY_BOTTOM_MARGIN
+    };
+    let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(win_w, win_h));
+
+    unsafe {
+        let ns_window = &*(ns_window_ptr.cast::<NSWindow>());
+        ns_window.setFrame_display(frame, true);
+        ns_window.setLevel(NSFloatingWindowLevel);
+    }
+
+    tracing::debug!(
+        "[overlay] AppKit positioned frame=({:.0},{:.0} {:.0}x{:.0}) mouse=({:.0},{:.0}) screen=({:.0},{:.0} {:.0}x{:.0})",
+        x,
+        y,
+        win_w,
+        win_h,
+        mouse.x,
+        mouse.y,
+        screen_frame.origin.x,
+        screen_frame.origin.y,
+        screen_frame.size.width,
+        screen_frame.size.height,
+    );
+    true
+}
+
 /// Reposition the overlay window so its content lands on whichever monitor the
-/// mouse cursor is currently on. Called from `ptt_down` before the frontend
-/// renders any visible content, and once at app startup. Best-effort —
-/// silently no-ops if any of the platform queries fail.
+/// mouse cursor is currently on. On macOS this uses AppKit's own screen/window
+/// coordinate space (`NSEvent::mouseLocation`, `NSScreen::screens`, and
+/// `NSWindow::setFrame`) instead of Tauri's mixed logical/physical monitor APIs.
 #[cfg(target_os = "macos")]
 pub fn reposition_overlay_to_cursor_monitor(app: &AppHandle) {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
     let Some(overlay) = app.get_webview_window("overlay") else {
         return;
     };
-    let cursor = match app.cursor_position() {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("[overlay] cursor_position failed: {:?}", e);
-            return;
-        }
-    };
-    let monitors = match overlay.available_monitors() {
-        Ok(m) if !m.is_empty() => m,
-        Ok(_) => {
-            tracing::warn!("[overlay] available_monitors empty — skip reposition");
-            return;
-        }
-        Err(e) => {
-            tracing::warn!("[overlay] available_monitors failed: {:?}", e);
-            return;
-        }
-    };
 
-    let primary_scale = overlay
-        .primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| m.scale_factor())
-        .unwrap_or(1.0);
-    let cx = cursor.x / primary_scale;
-    let cy = cursor.y / primary_scale;
-
-    tracing::info!(
-        "[overlay] cursor=({:.0},{:.0}) primary_scale={:.2} → logical=({:.0},{:.0})",
-        cursor.x,
-        cursor.y,
-        primary_scale,
-        cx,
-        cy,
-    );
-    for (i, m) in monitors.iter().enumerate() {
-        let p = m.position();
-        let s = m.size();
-        let scale = m.scale_factor();
-        let lw = s.width as f64 / scale;
-        let lh = s.height as f64 / scale;
-        tracing::info!(
-            "[overlay] monitor[{}] pos=({},{}) size=({},{}) scale={:.2} \
-             logical_bounds=[{:.0},{:.0})x[{:.0},{:.0})",
-            i,
-            p.x,
-            p.y,
-            s.width,
-            s.height,
-            scale,
-            p.x as f64,
-            p.x as f64 + lw,
-            p.y as f64,
-            p.y as f64 + lh,
-        );
-    }
-
-    let monitor = find_cursor_monitor(
-        cursor,
-        &monitors,
-        primary_scale,
-        overlay.current_monitor().ok().flatten(),
-        overlay.primary_monitor().ok().flatten(),
-    );
-    let Some(monitor) = monitor else {
-        return;
-    };
-
-    let (mx, my, mw, mh) = monitor_logical_bounds(&monitor);
     let position = crate::settings::overlay_position();
     let overlay_size = crate::settings::overlay_size();
     let win_h = overlay_height_for_size(&overlay_size);
     let win_w = overlay_width_for_size(&overlay_size);
-    // Center horizontally; clamp so a window wider than the monitor never
-    // starts off the left edge.
-    let x = (mx + (mw - win_w) / 2.0).max(mx);
-    let y = overlay_y_for_position(my, mh, &position, win_h);
 
-    // Size the window for the selected overlay size before positioning, so the
-    // large-mode waveform + transcript bubble have room and the y math (which
-    // depends on height for bottom position) lands the pill correctly.
-    let _ = overlay.set_size(LogicalSize::new(win_w, win_h));
+    if objc2::MainThreadMarker::new().is_some() {
+        let _ = appkit_position_overlay_on_cursor_monitor(&overlay, &position, win_w, win_h);
+        return;
+    }
 
-    let pre = overlay.outer_position().ok();
-    tracing::info!(
-        "[overlay] set_position logical=({:.0},{:.0}) position={} \
-         (target monitor pos=({:.0},{:.0}) scale={:.2}) pre_outer={:?}",
-        x,
-        y,
-        position,
-        mx,
-        my,
-        monitor.scale_factor(),
-        pre,
-    );
+    let overlay_for_main = overlay.clone();
+    let (tx, rx) = mpsc::channel();
+    if let Err(e) = overlay.run_on_main_thread(move || {
+        let ok =
+            appkit_position_overlay_on_cursor_monitor(&overlay_for_main, &position, win_w, win_h);
+        let _ = tx.send(ok);
+    }) {
+        tracing::warn!("[overlay] failed to dispatch AppKit positioning: {:?}", e);
+        return;
+    }
 
-    position_nspanel(&overlay, LogicalPosition::new(x, y));
-
-    if let Ok(post) = overlay.outer_position() {
-        tracing::info!("[overlay] post_outer={:?}", post);
+    match rx.recv_timeout(Duration::from_millis(250)) {
+        Ok(true) => {}
+        Ok(false) => tracing::warn!("[overlay] AppKit positioning did not complete"),
+        Err(_) => tracing::warn!("[overlay] timed out waiting for AppKit positioning"),
     }
 }
 
 #[cfg(not(target_os = "macos"))]
 pub fn reposition_overlay_to_cursor_monitor(app: &AppHandle) {
+    use tauri::LogicalSize;
+
     let Some(overlay) = app.get_webview_window("overlay") else {
         return;
     };

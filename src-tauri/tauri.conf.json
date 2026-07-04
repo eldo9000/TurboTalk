@@ -53,7 +53,7 @@
         "transparent": true,
         "shadow": false,
         "alwaysOnTop": true,
-        "visible": true,
+        "visible": false,
         "focus": false,
         "resizable": false,
         "closable": false,

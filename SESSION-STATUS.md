@@ -1,11 +1,15 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-07-03 (TASK-83 + TASK-84 — IM prompt tracking + runtime permission detection)  
-**Current state:** TASK-83: `input_monitoring_requested` flag persisted to `~/.config/turbotalk/im_prompted`; `request_input_monitoring_permission` skips TCC calls after first request; onboarding button text adapts. TASK-84: watchdog detects runtime Input Monitoring revocation. Both pass `cargo check`, `cargo clippy`, `npm run typecheck`.
+**Last updated:** 2026-07-04 (recording overlay monitor placement fix)
+**Current state:** Recording overlay placement now uses native AppKit on macOS (`NSEvent::mouseLocation`, `NSScreen::screens`, `NSWindow::setFrame`) instead of Tauri monitor/window position APIs. `ptt-armed` and `ptt-down` both reposition before emitting visible overlay events, and the overlay starts hidden until Rust places it.
 
 ## Next action
 
-Manual test: start TurboTalk, open System Settings → Privacy & Security → Input Monitoring, uncheck TurboTalk, wait up to 30s, observe the error toast. Re-check TurboTalk, wait up to 30s, observe the toast can be dismissed and the app returns to ready state.
+Next cleanup: leave the unrelated dirty worktree files alone unless they become part of a separate task; overlay monitor placement is now proven.
+
+## Latest overlay proof
+
+2026-07-04: Implemented native AppKit overlay placement in `src-tauri/src/windowing.rs`, positioned before `ptt-armed` and `ptt-down` in `hotkey.rs`, and changed the overlay window to `visible: false` in `tauri.conf.json` so startup cannot flash the centered stale frame. User confirmed the recording overlay now appears on the monitor containing the mouse pointer. `git diff --check` passed. `cargo check --manifest-path src-tauri/Cargo.toml` passed with only the pre-existing CoreAudio linker warning. `npm run typecheck` passed.
 
 ## Latest session proof
 

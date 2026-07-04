@@ -129,7 +129,7 @@ Model lineup: Recommended = `ggml-large-v3-turbo` (1.6 GB) · Small = `ggml-larg
 - Dynamic tray icon: TT glyph (idle) / red dot (recording) / amber dot (transcribing)
 - Zoom controls: 9 levels 100–180%, ⌘+/⌘-/⌘0, persistent in localStorage
 - Models tab: active model selector, installed model list with add/remove, HuggingFace catalog with download links
-- Recording overlay: always-on-top transparent window, 7-bar waveform animation, never steals focus
+- Recording overlay: always-on-top transparent window, 7-bar waveform animation, never steals focus. macOS placement now uses native AppKit screen/window coordinates and repositions before arming/recording events; user confirmed it appears on the monitor containing the mouse pointer.
 - Overlay peek-through: cursor hover over recording pill dims background alpha + backdrop blur (confirmed 2026-05-04)
 
 ## What is hardcoded / not yet configurable
