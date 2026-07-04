@@ -355,7 +355,7 @@
                 <button onclick={openInputMonitoring}
                   disabled={inputPromptInFlight}
                   class="px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 transition-opacity">
-                  {inputPromptInFlight ? 'Waiting for macOS…' : 'Open System Settings'}
+                  {inputPromptInFlight ? 'Waiting for macOS…' : (readiness?.input_monitoring_requested ? 'Open System Settings' : 'Request Input Monitoring permission')}
                 </button>
                 {#if restartArmed}
                   <button onclick={restart}

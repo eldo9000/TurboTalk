@@ -1,11 +1,11 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-06-25 (TASK-70 — split App.svelte)  
-**Current state:** `src/App.svelte` split from 1907 lines into a 1444-line orchestrator + 7 focused components: `ErrorToast.svelte`, `TitleBar.svelte`, `SettingsTab.svelte`, `AboutModal.svelte`, `NoModelPopup.svelte`, `ResetModal.svelte`, `BottomBar.svelte`. Visual behavior unchanged. `npm run typecheck` and `npm run build` both pass.
+**Last updated:** 2026-07-03 (TASK-83 + TASK-84 — IM prompt tracking + runtime permission detection)  
+**Current state:** TASK-83: `input_monitoring_requested` flag persisted to `~/.config/turbotalk/im_prompted`; `request_input_monitoring_permission` skips TCC calls after first request; onboarding button text adapts. TASK-84: watchdog detects runtime Input Monitoring revocation. Both pass `cargo check`, `cargo clippy`, `npm run typecheck`.
 
 ## Next action
 
-Test hold mode and toggle mode remain functional: press-to-start/release-to-stop in hold; press-to-toggle in toggle. Verify no regressions in quick tap, arming cancel, hold-to-cancel, or focus change tracking. `cargo check` passes.
+Manual test: start TurboTalk, open System Settings → Privacy & Security → Input Monitoring, uncheck TurboTalk, wait up to 30s, observe the error toast. Re-check TurboTalk, wait up to 30s, observe the toast can be dismissed and the app returns to ready state.
 
 ## Latest session proof
 

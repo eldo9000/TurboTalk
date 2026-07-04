@@ -575,7 +575,6 @@ pub(crate) mod common {
 
                 // Pin the overlay to the cursor's monitor up front so the
                 // arming tile never flashes on the wrong display.
-                crate::windowing::reposition_overlay_to_cursor_monitor(&app);
                 emit_critical(&app, "ptt-armed", ());
                 overlay_armed = true;
                 tracing::info!("[hotkey] arming — waiting for whisper-server readiness");
@@ -696,7 +695,6 @@ pub(crate) mod common {
             // and no yellow flash shows.
             if !rec.audio_live() {
                 if !overlay_armed {
-                    crate::windowing::reposition_overlay_to_cursor_monitor(&app);
                     emit_critical(&app, "ptt-armed", ());
                 }
                 crate::diagnostic_log::emergency_trace("[ptt_down] waiting audio_live");
@@ -753,10 +751,8 @@ pub(crate) mod common {
             // audio capture is already running, so moving it after the cue is a
             // pure latency win with no data loss.
             tray::set_tray_icon(&tray, TrayState::Recording);
-            // Pin the overlay window to the cursor's monitor *before* emitting
-            // ptt-down so the recording UI never flashes on the wrong display.
-            // The arming branch above already repositioned, but a second call
-            // is harmless (window position is set unconditionally).
+            // Single reposition per ptt-down — redundant calls removed to
+            // avoid macOS 26 NSPanel compositor glitch.
             crate::windowing::reposition_overlay_to_cursor_monitor(&app);
             emit_critical(&app, "ptt-down", ());
             emit_stage(&app, job_id, "recording");
@@ -2002,6 +1998,44 @@ mod imp {
         });
     }
 
+    /// Watchdog thread that periodically checks if Input Monitoring permission
+    /// has been revoked at runtime. When the user unchecks TurboTalk in
+    /// System Settings → Privacy & Security → Input Monitoring while the app
+    /// is running, the IOHIDManager stops delivering callbacks silently.
+    /// This watchdog detects the loss and emits a ui-error toast so the
+    /// user knows why the hotkey stopped working.
+    fn spawn_im_watchdog(app: AppHandle) {
+        const K_IOHID_REQUEST_TYPE_LISTEN_EVENT: u32 = 1;
+        const K_IOHID_ACCESS_TYPE_GRANTED: u32 = 0;
+        const K_IOHID_ACCESS_TYPE_DENIED: u32 = 1;
+
+        #[link(name = "IOKit", kind = "framework")]
+        extern "C" {
+            fn IOHIDCheckAccess(request_type: u32) -> u32;
+        }
+
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+
+            let status = unsafe { IOHIDCheckAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT) };
+            let is_running = IOHID_LISTENER_RUNNING.load(Ordering::Acquire);
+
+            if status == K_IOHID_ACCESS_TYPE_DENIED && is_running {
+                IOHID_LISTENER_RUNNING.store(false, Ordering::Release);
+                crate::emit_ui_error(
+                    &app,
+                    "user-permission-lost",
+                    "Input Monitoring permission was revoked. TurboTalk hotkeys are disabled. Re-enable in System Settings → Privacy & Security → Input Monitoring.",
+                    false,
+                );
+                tracing::warn!("[hotkey] Input Monitoring permission revoked at runtime — IOHIDManager events blocked");
+            } else if status == K_IOHID_ACCESS_TYPE_GRANTED && !is_running {
+                IOHID_LISTENER_RUNNING.store(true, Ordering::Release);
+                tracing::info!("[hotkey] Input Monitoring permission re-granted — IOHIDManager should resume delivering events");
+            }
+        });
+    }
+
     /// Keyboard/kp usage page from USB HID spec.
     const K_HIDPAGE_KEYBOARD: u32 = 0x07;
 
@@ -2141,6 +2175,11 @@ mod imp {
             app.clone(),
             hotkey_state.clone(),
         );
+
+        // Start the Input Monitoring permission watchdog — detects runtime
+        // revocation (user unchecks TurboTalk in System Settings) and
+        // emits a ui-error toast so the user knows why the hotkey stopped.
+        spawn_im_watchdog(app.clone());
 
         // The IOHIDManager handles both mouse buttons and keyboard hotkeys
         // (see hid_mouse_value_callback which checks both K_HIDPAGE_BUTTON

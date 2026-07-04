@@ -173,6 +173,10 @@ export const commands = {
 	 *  Uses CGRequestListenEventAccess (CoreGraphics, macOS 12+) which is the
 	 *  correct TCC path for Input Monitoring on modern macOS. Falls back to
 	 *  IOHIDRequestAccess for older systems.
+	 * 
+	 *  The TCC calls are dispatched from a background thread so the Tauri command
+	 *  thread is not blocked while the dialog is pending. A 5-second timeout
+	 *  covers the typical TCC prompt window.
 	 */
 	requestInputMonitoringPermission: () => __TAURI_INVOKE<PermissionStatus>("request_input_monitoring_permission"),
 	/**
@@ -518,6 +522,12 @@ export type Readiness = {
 	 *  Frontend shows onboarding regardless of `ready` while this is set.
 	 */
 	force_onboarding: boolean,
+	/**
+	 *  Whether the Input Monitoring TCC prompt has ever been requested.
+	 *  After the first call, TCC APIs are silent no-ops — the frontend
+	 *  can show "Open System Settings" instead of "Request … permission".
+	 */
+	input_monitoring_requested: boolean,
 };
 
 export type WhisperConfig = {

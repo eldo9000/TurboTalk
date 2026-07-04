@@ -13,6 +13,8 @@
             await commands.openSystemSettings('accessibility');
           } else if (err.kind === 'hotkey-input-monitoring') {
             await commands.openSystemSettings('input_monitoring');
+          } else if (err.kind === 'user-permission-lost') {
+            await commands.openSystemSettings('input_monitoring');
           } else if (err.kind === 'mic-permission') {
             await commands.openSystemSettings('microphone');
           } else if (err.kind === 'chaperone-fallback') {
@@ -27,7 +29,7 @@
         <div class="flex flex-col gap-0.5 min-w-0">
           <span class="text-[10px] uppercase tracking-wide text-red-400/70 font-mono">{err.kind}</span>
           <span class="text-[11px] text-red-400 leading-snug">{err.message}</span>
-          {#if err.kind === 'hotkey-permission' || err.kind === 'hotkey-input-monitoring' || err.kind === 'mic-permission'}
+          {#if err.kind === 'hotkey-permission' || err.kind === 'hotkey-input-monitoring' || err.kind === 'user-permission-lost' || err.kind === 'mic-permission'}
             <span class="text-[10px] text-red-400/60 leading-snug">Click to open System Settings →</span>
           {/if}
         </div>

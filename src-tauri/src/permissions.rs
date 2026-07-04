@@ -53,6 +53,42 @@ pub fn mark_onboarding_complete() {
     tracing::info!("[onboarding] persistent flag written to {:?}", p);
 }
 
+/// Persistent flag file tracking whether the Input Monitoring TCC prompt
+/// has already been requested. After the first call, `CGRequestListenEventAccess`
+/// / `IOHIDRequestAccess` are silent no-ops, so we skip them and go straight
+/// to System Settings.
+#[cfg(target_os = "macos")]
+fn im_prompted_flag_path() -> PathBuf {
+    crate::settings::data_dir().join("im_prompted")
+}
+
+/// Whether the `im_prompted` flag exists on disk.
+#[cfg(target_os = "macos")]
+pub fn has_requested_im() -> bool {
+    im_prompted_flag_path().exists()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn has_requested_im() -> bool {
+    false
+}
+
+/// Write the `im_prompted` flag so future calls skip the TCC prompt.
+#[cfg(target_os = "macos")]
+pub fn mark_im_requested() {
+    let p = im_prompted_flag_path();
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(&p, "");
+    tracing::info!("[im_prompted] flag written to {:?}", p);
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn mark_im_requested() {
+    // no-op on non-macOS
+}
+
 /// Avoid flooding the logs while the onboarding UI polls readiness.
 #[cfg(target_os = "macos")]
 static WARNED_AX_FALLBACK: AtomicBool = AtomicBool::new(false);
@@ -94,6 +130,10 @@ pub struct Readiness {
     /// Debug override: true when `reset_onboarding` was called this session.
     /// Frontend shows onboarding regardless of `ready` while this is set.
     pub force_onboarding: bool,
+    /// Whether the Input Monitoring TCC prompt has ever been requested.
+    /// After the first call, TCC APIs are silent no-ops — the frontend
+    /// can show "Open System Settings" instead of "Request … permission".
+    pub input_monitoring_requested: bool,
 }
 
 // ── Accessibility ───────────────────────────────────────────────────────────
@@ -266,11 +306,26 @@ pub async fn request_microphone_permission() -> PermissionStatus {
 /// Uses CGRequestListenEventAccess (CoreGraphics, macOS 12+) which is the
 /// correct TCC path for Input Monitoring on modern macOS. Falls back to
 /// IOHIDRequestAccess for older systems.
+///
+/// The TCC calls are dispatched from a background thread so the Tauri command
+/// thread is not blocked while the dialog is pending. A 5-second timeout
+/// covers the typical TCC prompt window.
 #[tauri::command]
 #[specta::specta]
-pub fn request_input_monitoring_permission() -> PermissionStatus {
+pub async fn request_input_monitoring_permission() -> PermissionStatus {
     #[cfg(target_os = "macos")]
     {
+        // If the TCC prompt was already requested, skip it — subsequent calls
+        // to CGRequestListenEventAccess / IOHIDRequestAccess are silent no-ops.
+        if has_requested_im() {
+            return input_monitoring_status();
+        }
+        // Persist BEFORE the TCC calls so the flag is durable even if the app
+        // crashes or the user force-quits before the calls complete.
+        mark_im_requested();
+
+        use tokio::sync::oneshot;
+
         #[link(name = "CoreGraphics", kind = "framework")]
         extern "C" {
             // Added macOS 12.0 — requests Input Monitoring (listen-event) TCC
@@ -282,13 +337,19 @@ pub fn request_input_monitoring_permission() -> PermissionStatus {
             fn IOHIDRequestAccess(request_type: u32) -> bool;
         }
 
-        unsafe {
-            // Primary: CoreGraphics TCC path (macOS 12+)
-            CGRequestListenEventAccess();
-            // Belt-and-suspenders: IOKit path for older macOS
+        let (tx, rx) = oneshot::channel::<()>();
+        std::thread::spawn(move || {
             const K_IOHID_REQUEST_TYPE_LISTEN_EVENT: u32 = 1;
-            IOHIDRequestAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT);
-        }
+            unsafe {
+                // Primary: CoreGraphics TCC path (macOS 12+)
+                CGRequestListenEventAccess();
+                // Belt-and-suspenders: IOKit path for older macOS
+                IOHIDRequestAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT);
+            }
+            let _ = tx.send(());
+        });
+        // 5s upper bound — the IM TCC dialog is simpler than AVFoundation capture.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), rx).await;
         input_monitoring_status()
     }
     #[cfg(not(target_os = "macos"))]
@@ -370,6 +431,7 @@ pub fn check_readiness() -> Readiness {
         platform: std::env::consts::OS.to_string(),
         ready,
         force_onboarding,
+        input_monitoring_requested: has_requested_im(),
     }
 }
 
@@ -383,6 +445,8 @@ pub fn reset_onboarding() {
     FORCE_ONBOARDING.store(true, Ordering::SeqCst);
     ONBOARDING_ACTIVE.store(true, Ordering::Release);
     let _ = std::fs::remove_file(onboarding_flag_path());
+    #[cfg(target_os = "macos")]
+    let _ = std::fs::remove_file(im_prompted_flag_path());
 }
 
 /// Called by the frontend when onboarding completes, to clear the force flag

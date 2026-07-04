@@ -1086,8 +1086,10 @@
           message: p.message || 'An error occurred',
           recoverable: p.recoverable !== false,
         }];
-        const t1 = window.setTimeout(() => { uiErrors = uiErrors.filter(x => x.id !== id); pendingTimeouts.delete(t1); }, 5000);
-        pendingTimeouts.add(t1);
+        if (p.kind !== 'user-permission-lost') {
+          const t1 = window.setTimeout(() => { uiErrors = uiErrors.filter(x => x.id !== id); pendingTimeouts.delete(t1); }, 5000);
+          pendingTimeouts.add(t1);
+        }
         break;
       }
 
