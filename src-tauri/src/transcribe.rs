@@ -509,7 +509,7 @@ fn validate_model_path(raw_model: &str, canon_models_dir: &Path) -> anyhow::Resu
 /// Strip common Whisper trailing hallucinations ("okay", "yeah", etc.) that
 /// appear when the model decodes trailing silence rather than real speech.
 /// Only the very end of the transcript is trimmed; the body is untouched.
-fn strip_trailing_filler(text: &str) -> String {
+pub(crate) fn strip_trailing_filler(text: &str) -> String {
     // Each entry is matched case-insensitively against the trimmed tail.
     // Punctuation after the filler word is consumed along with it.
     const FILLERS: &[&str] = &[
@@ -525,6 +525,10 @@ fn strip_trailing_filler(text: &str) -> String {
         "uh",
         "um",
         "uh huh",
+        "you know",
+        "i think",
+        "i mean",
+        "you know what i mean",
     ];
     let mut s = text.to_string();
     loop {
@@ -548,7 +552,7 @@ fn strip_trailing_filler(text: &str) -> String {
 /// whisper-server may return segment-bounded text containing literal newlines
 /// every few words. Those are decoder artifacts, not user intent; explicit
 /// voice commands such as "new paragraph" are handled later in cleanup.rs.
-fn normalize_whisper_text(text: &str) -> String {
+pub(crate) fn normalize_whisper_text(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 

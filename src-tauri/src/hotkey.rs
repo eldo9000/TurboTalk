@@ -1068,7 +1068,7 @@ pub(crate) mod common {
                                 .into_iter()
                                 .filter(|s| !s.is_empty())
                                 .collect();
-                            let assembled = parts.join(" ");
+                            let assembled = crate::transcribe::strip_trailing_filler(&parts.join(" "));
                             let rejection = if assembled.is_empty() {
                                 None
                             } else {

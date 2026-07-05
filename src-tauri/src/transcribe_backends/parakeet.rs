@@ -298,7 +298,8 @@ impl TranscriptionBackend for ParakeetBackend {
         // fragment repetition ("war war war warm-up") from ambiguous CTC
         // emissions in low-signal regions. Check only that — the other 4
         // garbage signals apply to Whisper's failure modes only.
-        let text = result.text.trim().to_string();
+        let text = crate::transcribe::normalize_whisper_text(result.text.trim());
+        let text = crate::transcribe::strip_trailing_filler(&text);
         let rejection = crate::transcribe::detect_prefix_fragment(&text);
 
         tracing::info!(
