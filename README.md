@@ -18,21 +18,6 @@
 
 ---
 
-<table>
-  <tr>
-    <td align="center">
-      <p><img src="docs/assets/ss2.jpg" alt="Models tab" /></p>
-      <p><sub>Whisper model selection</sub></p>
-    </td>
-    <td align="center">
-      <p><img src="docs/assets/ss1.jpg" alt="Settings tab" /></p>
-      <p><sub>Hotkey, recording, and system settings</sub></p>
-    </td>
-  </tr>
-</table>
-
----
-
 ## What it does
 
 Free, local voice dictation. Your words appear wherever your cursor was — in any app, any text field.
