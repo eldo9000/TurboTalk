@@ -10,13 +10,13 @@ fn main() {
     // process and inherits the app's Accessibility permissions.
     #[cfg(target_os = "macos")]
     {
+        println!("cargo:rerun-if-changed=media_toggle.c");
         cc::Build::new()
             .file("media_toggle.c")
             .flag("-x")
             .flag("objective-c")
-            .flag("-framework")
-            .flag("CoreAudio")
             .compile("media_toggle");
+        println!("cargo:rustc-link-lib=framework=CoreAudio");
     }
 
     tauri_build::build()

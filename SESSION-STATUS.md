@@ -1,15 +1,27 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-07-04 (recording overlay monitor placement fix)
-**Current state:** Recording overlay placement now uses native AppKit on macOS (`NSEvent::mouseLocation`, `NSScreen::screens`, `NSWindow::setFrame`) instead of Tauri monitor/window position APIs. `ptt-armed` and `ptt-down` both reposition before emitting visible overlay events, and the overlay starts hidden until Rust places it.
+**Last updated:** 2026-07-08 (media pause/resume user-proven)
+**Current state:** TurboTalk's dictation path works with Input Monitoring and System Audio permission granted, and media pause/resume is now user-proven through a CoreAudio process-tap playback-energy probe.
 
 ## Next action
 
-Next cleanup: leave the unrelated dirty worktree files alone unless they become part of a separate task; overlay monitor placement is now proven.
+Next cleanup: trim or gate the verbose process-tap diagnostic payload once confidence is high; ad-hoc rebuilds churn macOS TCC permission identity, so avoid unnecessary rebuilds during follow-up.
 
 ## Latest overlay proof
 
 2026-07-04: Implemented native AppKit overlay placement in `src-tauri/src/windowing.rs`, positioned before `ptt-armed` and `ptt-down` in `hotkey.rs`, and changed the overlay window to `visible: false` in `tauri.conf.json` so startup cannot flash the centered stale frame. User confirmed the recording overlay now appears on the monitor containing the mouse pointer. `git diff --check` passed. `cargo check --manifest-path src-tauri/Cargo.toml` passed with only the pre-existing CoreAudio linker warning. `npm run typecheck` passed.
+
+## Latest media-pause investigation
+
+2026-07-07: Replaced MediaRemote/default-output-device playback detection with a CoreAudio process-tap probe in `src-tauri/media_toggle.c`. The documented-correct idiom is `CATapDescription` + `AudioHardwareCreateProcessTap`, attached to a private aggregate device and sampled through an `AudioDeviceIOProc`; this measures real output sample energy instead of app/session/hardware "running" state. Added `NSAudioCaptureUsageDescription` to `src-tauri/Info.plist` and linked CoreAudio from `build.rs`. `media_control.rs` now distinguishes `Playing`, `Silent`, and `Unavailable`; unavailable detection leaves media alone rather than risk starting a paused app. Proof: `cargo check --manifest-path src-tauri/Cargo.toml` passed; `npm run local-install` built, codesign-verified, and installed `/Applications/Turbo Talk.app`; installed Info.plist contains `NSAudioCaptureUsageDescription`. Remaining proof needed: real user test with Chrome/YouTube playing and with no audio playing. Expected logs are either `[media_control] process tap samples=... playing=1/0` or an explicit process-tap unavailable warning.
+
+2026-07-07 follow-up: User granted the new "record system audio" permission and Input Monitoring became truly granted after TCC reset/relaunch (`input_monitoring=Granted`, IOHID listener running). Fresh dictations at 19:54-19:55 proved hotkeys and paste still work, but media pause classified both attempts as `no playback detected`; the C probe's stderr sample metrics were not captured in the app log. Added explicit telemetry exports from `media_toggle.c` (`samples`, `rms`, `peak`, `status`) and Rust logging in `media_control.rs`, plus `cargo:rerun-if-changed=media_toggle.c` so the Objective-C helper relinks after edits. Proof: `cargo check --manifest-path src-tauri/Cargo.toml` passed; `npm run local-install` rebuilt and codesign-verified the app but returned nonzero because the script's final `open -a Turbo Talk` hit LaunchServices error `-600`; direct `open -a "Turbo Talk"` then succeeded. Remaining proof needed: one playback and one silent trigger with the telemetry build running.
+
+2026-07-07 second follow-up: Changed the process tap from mono global excluding tap to a default-output-device-specific tap (`CATapDescription initExcludingProcesses:andDeviceUID:withStream:`) with the global tap as fallback, then reinstalled and relaunched. User granted the new system-audio permission prompt. Fresh app logs prove `input_monitoring=Granted(ok=true)`, `iohid_running=true`, and two dictations completed, but both media probes returned `result=0 status=0 samples=2048 rms=0.00000000 peak=0.00000000`. This rules out the previous permission/onboarding failure as the active blocker: the tap callback is running and delivering frame buffers, but the sampled aggregate stream is silent. Next investigation should focus on tap/aggregate composition, buffer direction/format, or default-output-device selection.
+
+2026-07-08 diagnostic build: Added one-shot process-tap diagnostics to log the default output device UID/name, tap format (`kAudioTapPropertyFormat`), aggregate input/output stream formats, and separate input/output IOProc buffer energy. The sample reader now decodes common Linear PCM float/double/int16/int32 formats instead of assuming `float *`. Proof: `cargo check --manifest-path src-tauri/Cargo.toml` passed; `npm run local-install` built, codesign-verified, and installed `/Applications/Turbo Talk.app`; relaunched via `open -a "Turbo Talk"`. Runtime blocker: fresh log shows `Input Monitoring permission revoked at runtime — IOHIDManager events blocked`, so the diagnostic probe still needs a user re-enable/relaunch/test before conclusions can be drawn.
+
+2026-07-08 user proof: User re-enabled permissions and confirmed media pause/resume works. Fresh logs show the playback-energy probe succeeding on the Bose Flex 2 output route: `process tap result=1 status=1 samples=2048 rms=0.01482160 peak=0.16679211`, with `tap_fmt=lpcm rate=48000.0 flags=0x9 bytes/frame=4 channels/frame=1 bits/channel=32`; aggregate input had one stream and carried the samples, aggregate output had no streams. TurboTalk then logged `pause — playback detected, toggling`; after dictation job 17 finished, it logged `resume — waiting 800ms then toggling`. A later silent test returned `result=0` and skipped resume, matching intended behavior.
 
 ## Latest session proof
 

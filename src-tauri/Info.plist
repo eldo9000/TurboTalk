@@ -6,6 +6,8 @@
   <true/>
   <key>NSMicrophoneUsageDescription</key>
   <string>Turbo Talk uses the microphone only while you hold the push-to-talk hotkey so it can transcribe your speech locally.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Turbo Talk samples system audio briefly when dictation starts to decide whether it should pause and later resume existing playback.</string>
   <key>NSAppleEventsUsageDescription</key>
   <string>Turbo Talk uses Apple Events to paste the finished transcript into the app you are typing in.</string>
 </dict>

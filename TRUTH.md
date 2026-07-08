@@ -37,6 +37,8 @@ reqwest's blocking-client default 30 s timeout. Now set to an explicit 120 s.
 
 **Ad-hoc macOS auto-paste via Session tap — user-proven 2026-06-21:** `CGEventPost(kCGSessionEventTap, Cmd+V)` works without `AXIsProcessTrusted()` on macOS Sequoia ad-hoc builds. When AX trust is false, TurboTalk now posts the keystroke at the Session tap level instead of the HID level, and leaves the transcript on the clipboard as a Cmd+V backup in case the OS drops the event. User confirmed auto-paste fires into Zed without any manual Cmd+V.
 
+**Pause-media detection — user-proven 2026-07-08:** Pause-on-dictate no longer relies on MediaRemote/Now Playing or CoreAudio "is running" booleans. The installed app uses a CoreAudio process tap to sample actual system output energy before deciding whether to send Play/Pause, and leaves media alone if the tap is unavailable or silent. User confirmed it works. Logs prove active playback on the Bose Flex 2 output route produced `process tap result=1`, `rms=0.01482160`, `peak=0.16679211`, followed by `pause — playback detected, toggling`; after dictation completed, TurboTalk logged `resume — waiting 800ms then toggling`. Silent/no-playback probes still correctly return `result=0`.
+
 **Hotkey modes — both hold and toggle confirmed 2026-06-16:** terminal launch now stays up, and the current hotkey flow works in real use with both press-and-hold and toggle-style operation.
 
 **Terminal launch path — confirmed 2026-06-16:** `npm run tauri dev` now starts on `127.0.0.1:1431`, launches the Rust app, and stays alive. The earlier `::1:1428` bind failure was a localhost port conflict, not a broken app.
