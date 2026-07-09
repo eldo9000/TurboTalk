@@ -4,7 +4,7 @@
 The transcription pipeline runs through a `TranscriptionBackend` trait. The existing whisper.cpp implementation is one concrete impl (`WhisperBackend`) behind the trait. The end-to-end dictation loop behaves identically to before — same anti-hallucination flags, same model swap behavior, same prewarm. This refactor must land green before adding any new backend.
 
 ## Context
-TurboTalk is a personal-use macOS push-to-talk dictation utility. Tier 1 product. Read `CLAUDE.md` at repo root and `~/Downloads/Github/Business-OS/standards/ENGINEERING.md` before starting.
+TurboTalk is a personal-use macOS push-to-talk dictation utility. Tier 1 product. Read `CLAUDE.md` at repo root and `../../Business-OS/standards/Engineering.md` before starting.
 
 Today, all transcription logic lives in `src-tauri/src/transcribe.rs` as a single concrete type `TranscriptionWorker`. Phase 3 of the hallucination plan adds two more backends (Moonshine, Parakeet via the `transcribe-rs` crate). To keep that diff small and reviewable, this task introduces a trait first and refactors the existing whisper.cpp code behind it, with **no functional change**.
 
@@ -34,7 +34,7 @@ The process-wide `WORKER` static at `src-tauri/src/transcribe.rs:551` needs to b
 - Performance changes — the trait may add one `dyn` indirection but must not measurably affect latency
 
 ## Steps
-1. Read `CLAUDE.md`, `~/Downloads/Github/Business-OS/standards/ENGINEERING.md`, `SESSION-STATUS.md`, `TRUTH.md`, `src-tauri/src/transcribe.rs` end-to-end.
+1. Read `CLAUDE.md`, `../../Business-OS/standards/Engineering.md`, `SESSION-STATUS.md`, `TRUTH.md`, `src-tauri/src/transcribe.rs` end-to-end.
 2. Grep for every direct reference to `TranscriptionWorker`, `run_raw`, `WORKER`, `worker_for`, `prewarm`, `invalidate_worker`, `abort_active`, `is_ready`, `prewarm_failed`, `kill_orphans` outside of `transcribe.rs`. Build a list of caller sites.
 3. Draft the trait. Suggested shape:
    ```

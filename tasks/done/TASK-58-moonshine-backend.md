@@ -4,7 +4,7 @@
 A `MoonshineBackend: TranscriptionBackend` impl exists. With a hardcoded backend selector flipped to Moonshine and a downloaded Moonshine ONNX model present, holding PTT and saying "hello world" pastes "hello world" into the focused app. The Whisper code path is unaffected when the selector is flipped back. ONNX runtime dylib ships in the macOS release bundle, code-signed.
 
 ## Context
-TurboTalk is a personal-use macOS push-to-talk dictation utility. Tier 1 product. Read `CLAUDE.md` at repo root and `~/Downloads/Github/Business-OS/standards/ENGINEERING.md` before starting.
+TurboTalk is a personal-use macOS push-to-talk dictation utility. Tier 1 product. Read `CLAUDE.md` at repo root and `../../Business-OS/standards/Engineering.md` before starting.
 
 This task assumes TASK-57 has landed: a `TranscriptionBackend` trait exists and `WhisperBackend` is one impl. This task adds a second impl using Moonshine (small ONNX speech recognition model designed for dictation — see <https://github.com/moonshine-ai/moonshine>).
 
@@ -38,7 +38,7 @@ A hardcoded selector is acceptable for this task — read a `TT_BACKEND` env var
 - Windows or Linux ONNX runtime bundling — wire the path resolution so it could work, but only ship the macOS arm64 dylib
 
 ## Steps
-1. Read `CLAUDE.md`, `~/Downloads/Github/Business-OS/standards/ENGINEERING.md`, `SESSION-STATUS.md`, `TRUTH.md`, current `src-tauri/src/transcribe.rs` (post TASK-57), and `tauri.conf.json`.
+1. Read `CLAUDE.md`, `../../Business-OS/standards/Engineering.md`, `SESSION-STATUS.md`, `TRUTH.md`, current `src-tauri/src/transcribe.rs` (post TASK-57), and `tauri.conf.json`.
 2. Look up the current published version of `transcribe-rs` on crates.io. Verify its Moonshine support and what model files it expects. Note any required system deps.
 3. Add `transcribe-rs` to `Cargo.toml`. `cargo build` to confirm it pulls and compiles on macOS arm64. Address any ORT linker issues — typically requires `ORT_STRATEGY=download` or a vendored binary.
 4. Obtain a Moonshine model. Start with the "tiny" or "base" variant for fastest iteration. Place files manually in `~/.config/librewin/turbotalk/models/moonshine/<variant>/` for first-pass testing. Document the source URLs in code comments.

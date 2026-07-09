@@ -16,3 +16,4 @@ src-tauri/resources/silero_vad.onnx
 
 # macOS
 .DS_Store
+.DS_Store

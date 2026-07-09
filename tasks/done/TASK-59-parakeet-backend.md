@@ -4,7 +4,7 @@
 A `ParakeetBackend: TranscriptionBackend` impl exists. With the hardcoded selector flipped to `parakeet` and a downloaded Parakeet ONNX model present, holding PTT and saying "hello world" pastes "hello world" into the focused app. The Whisper and Moonshine code paths still work when the selector is flipped to either of them.
 
 ## Context
-TurboTalk is a personal-use macOS push-to-talk dictation utility. Tier 1 product. Read `CLAUDE.md` at repo root and `~/Downloads/Github/Business-OS/standards/ENGINEERING.md` before starting.
+TurboTalk is a personal-use macOS push-to-talk dictation utility. Tier 1 product. Read `CLAUDE.md` at repo root and `../../Business-OS/standards/Engineering.md` before starting.
 
 This task assumes TASK-57 (trait abstraction) and TASK-58 (Moonshine backend) have landed. ONNX Runtime dylib is already bundled and signed from TASK-58 — Parakeet uses the same runtime, so most of the plumbing already exists. This task is largely a pattern-match against TASK-58 with a different model loader and storage path.
 
@@ -27,7 +27,7 @@ The `transcribe-rs` crate supports Parakeet alongside Moonshine, using the same 
 - Windows or Linux model bundling — wire path resolution but ship only the macOS arm64 path
 
 ## Steps
-1. Read `CLAUDE.md`, `~/Downloads/Github/Business-OS/standards/ENGINEERING.md`, `SESSION-STATUS.md`, `TRUTH.md`, the now-landed Moonshine impl at `src-tauri/src/transcribe_backends/moonshine.rs`. The Parakeet impl should mirror its structure.
+1. Read `CLAUDE.md`, `../../Business-OS/standards/Engineering.md`, `SESSION-STATUS.md`, `TRUTH.md`, the now-landed Moonshine impl at `src-tauri/src/transcribe_backends/moonshine.rs`. The Parakeet impl should mirror its structure.
 2. Confirm `transcribe-rs` supports Parakeet TDT and which model variant to start with. Use the smallest variant that's known to work cleanly.
 3. Download a Parakeet ONNX model manually into `~/.config/librewin/turbotalk/models/parakeet/<variant>/` for first-pass testing. Document the source URL in code comments.
 4. Create `src-tauri/src/transcribe_backends/parakeet.rs`. Implement `ParakeetBackend`:

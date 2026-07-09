@@ -2,8 +2,8 @@
 
 ## Shared Standards
 
-- **Engineering standards:** `~/Downloads/Github/Business-OS/standards/ENGINEERING.md` — session protocol, investigation logs, commit conventions. Read before any implementation session.
-- **Operating model:** `~/Downloads/Github/Business-OS/bin/SOFTWARE-DEVELOPMENT-OPERATING-MODEL.md` — the portfolio's evidence/ledger discipline. **TurboTalk operates at Tier 1** (see §15): small app, obvious behavior, personal-use scope. Required artifacts are limited to `SESSION-STATUS.md` (status ledger) and `TRUTH.md` (truth ledger). Do **not** add: heavy red-build ladders, observer loops, structured commit notes, milestone gates for every task, or full closure ceremony for every commit. Add weight only if a concrete failure mode appears.
+- **Engineering standards:** `../../Business-OS/standards/Engineering.md` — session protocol, investigation logs, commit conventions. Read before any implementation session.
+- **Operating model:** `../../Business-OS/standards/LIBRE-SOFTWARE-STANDARDS.md` — the portfolio's evidence/ledger discipline. **TurboTalk operates at Tier 1** (see §15): small app, obvious behavior, personal-use scope. Required artifacts are limited to `SESSION-STATUS.md` (status ledger) and `TRUTH.md` (truth ledger). Do **not** add: heavy red-build ladders, observer loops, structured commit notes, milestone gates for every task, or full closure ceremony for every commit. Add weight only if a concrete failure mode appears.
 - **Design language & shared patterns:** local conventions described in this repo — Svelte 5 patterns, Tauri 2 patterns, design tokens.
 
 ## Tier 1 Habits (enforce these)
@@ -57,5 +57,5 @@ This repo participates in the Business-OS portfolio status system. Update `SESSI
 ## Workflow
 
 - macOS personal-use tool. No CI gates for now (add when Windows/Linux stubs are unblocked).
-- The Chaperone Layer (classifier-router LLM via Ollama) is the differentiator. Reference `Business-OS/memory/project_chaperone_layer.md` for the pattern.
+- The Chaperone Layer (classifier-router LLM via Ollama) is the differentiator.
 - Promote to public product trigger: "I use this every day for 2 weeks."

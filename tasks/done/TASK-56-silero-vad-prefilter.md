@@ -4,7 +4,7 @@
 whisper-server is launched with Silero VAD enabled, so silent regions of the recorded WAV are skipped before the decoder runs. Holding PTT through 3s of silence + 2s of speech produces a transcript covering only the speech portion. A settings toggle exposes the VAD on/off so a false-negative regression can be diagnosed without rebuilding.
 
 ## Context
-TurboTalk is a personal-use macOS push-to-talk dictation utility. Tier 1 product. Read `CLAUDE.md` at repo root and `~/Downloads/Github/Business-OS/standards/ENGINEERING.md` before starting.
+TurboTalk is a personal-use macOS push-to-talk dictation utility. Tier 1 product. Read `CLAUDE.md` at repo root and `../../Business-OS/standards/Engineering.md` before starting.
 
 This task assumes Phase 1 (TASK-55, the post-hoc hallucination filter) has already landed. VAD is the second line of defense: rather than detecting garbage after Whisper invents it, VAD prevents Whisper from being asked to transcribe silence in the first place. whisper.cpp's server binary supports `--vad` + `--vad-model <path>` with a Silero ONNX model (~2 MB). Reference: <https://github.com/ggml-org/whisper.cpp> — search the server README for "VAD".
 
@@ -26,7 +26,7 @@ Settings live in `src-tauri/src/settings.rs` with persistence under `~/.config/l
 - Bundling VAD for non-macOS platforms — wire the path resolution so it could work, but only ship the macOS arm64 file for now
 
 ## Steps
-1. Read `CLAUDE.md`, `~/Downloads/Github/Business-OS/standards/ENGINEERING.md`, `SESSION-STATUS.md`, `TRUTH.md`, `src-tauri/src/transcribe.rs`, `src-tauri/src/settings.rs`.
+1. Read `CLAUDE.md`, `../../Business-OS/standards/Engineering.md`, `SESSION-STATUS.md`, `TRUTH.md`, `src-tauri/src/transcribe.rs`, `src-tauri/src/settings.rs`.
 2. Confirm whisper.cpp/server in your current `binaries/` build supports `--vad` — run `./src-tauri/binaries/whisper-server --help | grep -i vad`. If the bundled build is too old, plan a binary refresh as part of this task and note it.
 3. Obtain the Silero VAD model file from the whisper.cpp `models/download-vad-model.sh` script or upstream release. Place it in `src-tauri/binaries/` with a stable filename.
 4. Add a `vad_model_candidates()` sibling to `server_sidecar_candidates()` and a `find_vad_model()` sibling to `find_whisper_server()` in `transcribe.rs`, reusing the existing allow-list logic.

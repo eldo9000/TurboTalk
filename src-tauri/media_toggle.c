@@ -23,6 +23,8 @@ static double g_last_probe_rms = 0.0;
 static float g_last_probe_peak = 0.0f;
 static int g_last_probe_status = -99;
 static char g_last_probe_diag[1024] = "not-run";
+static char g_route_baseline[1024] = "";
+static char g_route_last_diag[1024] = "not-run";
 
 void media_toggle_play_pause(void) {
     @autoreleasepool {
@@ -411,6 +413,173 @@ static void turbotalk_first_stream_format(
     char format_diag[256];
     turbotalk_format_diag(&format, format_diag, sizeof(format_diag));
     snprintf(out, out_len, "streams=%u first=%u %s", stream_count, streams[0], format_diag);
+}
+
+static int turbotalk_u32_property(
+    AudioObjectID object_id,
+    AudioObjectPropertySelector selector,
+    AudioObjectPropertyScope scope,
+    UInt32 *value
+) {
+    AudioObjectPropertyAddress address = {
+        selector,
+        scope,
+        kAudioObjectPropertyElementMain
+    };
+    UInt32 size = sizeof(*value);
+    OSStatus err = AudioObjectGetPropertyData(object_id, &address, 0, NULL, &size, value);
+    return err == noErr ? 0 : (int)err;
+}
+
+static int turbotalk_double_property(
+    AudioObjectID object_id,
+    AudioObjectPropertySelector selector,
+    AudioObjectPropertyScope scope,
+    Float64 *value
+) {
+    AudioObjectPropertyAddress address = {
+        selector,
+        scope,
+        kAudioObjectPropertyElementMain
+    };
+    UInt32 size = sizeof(*value);
+    OSStatus err = AudioObjectGetPropertyData(object_id, &address, 0, NULL, &size, value);
+    return err == noErr ? 0 : (int)err;
+}
+
+static void turbotalk_output_route_fingerprint(char *out, size_t out_len) {
+    AudioDeviceID output_id = turbotalk_default_output_device_id();
+    if (output_id == kAudioObjectUnknown) {
+        snprintf(out, out_len, "output=unknown");
+        return;
+    }
+
+    char output_name[256];
+    turbotalk_object_name(output_id, output_name, sizeof(output_name));
+
+    NSString *output_uid = turbotalk_default_output_device_uid();
+
+    UInt32 transport = 0;
+    int transport_err = turbotalk_u32_property(
+        output_id,
+        kAudioDevicePropertyTransportType,
+        kAudioObjectPropertyScopeGlobal,
+        &transport
+    );
+    char transport_fourcc[5];
+    turbotalk_fourcc_to_cstr(transport, transport_fourcc);
+
+    UInt32 running = 0;
+    int running_err = turbotalk_u32_property(
+        output_id,
+        kAudioDevicePropertyDeviceIsRunning,
+        kAudioObjectPropertyScopeOutput,
+        &running
+    );
+
+    UInt32 running_somewhere = 0;
+    int running_somewhere_err = turbotalk_u32_property(
+        output_id,
+        kAudioDevicePropertyDeviceIsRunningSomewhere,
+        kAudioObjectPropertyScopeGlobal,
+        &running_somewhere
+    );
+
+    Float64 nominal_rate = 0.0;
+    int rate_err = turbotalk_double_property(
+        output_id,
+        kAudioDevicePropertyNominalSampleRate,
+        kAudioObjectPropertyScopeGlobal,
+        &nominal_rate
+    );
+
+    char input_format[320];
+    char output_format[320];
+    turbotalk_first_stream_format(output_id,
+                                  kAudioObjectPropertyScopeInput,
+                                  input_format,
+                                  sizeof(input_format));
+    turbotalk_first_stream_format(output_id,
+                                  kAudioObjectPropertyScopeOutput,
+                                  output_format,
+                                  sizeof(output_format));
+
+    snprintf(out,
+             out_len,
+             "id=%u uid=%s name=%s transport=%s/0x%x(err=%d) nominal_rate=%.1f(err=%d) running_out=%u(err=%d) running_any=%u(err=%d) input={%s} output={%s}",
+             output_id,
+             output_uid.UTF8String ?: "(nil)",
+             output_name,
+             transport_fourcc,
+             transport,
+             transport_err,
+             nominal_rate,
+             rate_err,
+             running,
+             running_err,
+             running_somewhere,
+             running_somewhere_err,
+             input_format,
+             output_format);
+}
+
+int audio_route_capture_output_baseline(void) {
+    @autoreleasepool {
+        turbotalk_output_route_fingerprint(g_route_baseline, sizeof(g_route_baseline));
+        snprintf(g_route_last_diag,
+                 sizeof(g_route_last_diag),
+                 "baseline={%s}",
+                 g_route_baseline);
+        fprintf(stderr, "[media_control] route baseline %s\n", g_route_last_diag);
+        return g_route_baseline[0] == '\0' || strstr(g_route_baseline, "output=unknown") ? 0 : 1;
+    }
+}
+
+int audio_route_wait_for_output_baseline(int max_wait_ms) {
+    if (g_route_baseline[0] == '\0') {
+        snprintf(g_route_last_diag, sizeof(g_route_last_diag), "no-baseline");
+        return 0;
+    }
+
+    int elapsed_ms = 0;
+    int stable_matches = 0;
+    char current[sizeof(g_route_last_diag)];
+    while (elapsed_ms <= max_wait_ms) {
+        @autoreleasepool {
+            turbotalk_output_route_fingerprint(current, sizeof(current));
+        }
+
+        if (strcmp(current, g_route_baseline) == 0) {
+            stable_matches++;
+            if (stable_matches >= 2) {
+                snprintf(g_route_last_diag,
+                         sizeof(g_route_last_diag),
+                         "matched elapsed_ms=%d current={%s}",
+                         elapsed_ms,
+                         current);
+                fprintf(stderr, "[media_control] route wait %s\n", g_route_last_diag);
+                return 1;
+            }
+        } else {
+            stable_matches = 0;
+        }
+
+        usleep(50000);
+        elapsed_ms += 50;
+    }
+
+    snprintf(g_route_last_diag,
+             sizeof(g_route_last_diag),
+             "timeout elapsed_ms=%d baseline={%s} current={%s}",
+             elapsed_ms,
+             g_route_baseline,
+             current);
+    fprintf(stderr, "[media_control] route wait %s\n", g_route_last_diag);
+    return 0;
+}
+
+const char *audio_route_last_diag(void) {
+    return g_route_last_diag;
 }
 
 static int turbotalk_audio_is_playing_with_process_tap(void) {

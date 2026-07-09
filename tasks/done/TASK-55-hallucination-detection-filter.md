@@ -4,7 +4,7 @@
 Bad Whisper transcriptions (repetition loops, all-zeros, "thanks for watching"-style language-model artifacts on silence) are detected before paste. The user sees the rejected transcript in the TurboTalk window tagged "⚠ filtered" and a toast explaining why, but the clipboard and the focused app are untouched.
 
 ## Context
-TurboTalk is a personal-use macOS push-to-talk dictation utility. Tier 1 product — minimal ceremony, but `SESSION-STATUS.md` and `TRUTH.md` must reflect behavior changes. Read `CLAUDE.md` at repo root and the engineering standards at `~/Downloads/Github/Business-OS/standards/ENGINEERING.md` before starting.
+TurboTalk is a personal-use macOS push-to-talk dictation utility. Tier 1 product — minimal ceremony, but `SESSION-STATUS.md` and `TRUTH.md` must reflect behavior changes. Read `CLAUDE.md` at repo root and the engineering standards at `../../Business-OS/standards/Engineering.md` before starting.
 
 Whisper has a well-known architectural failure mode: when fed silence or low-SNR audio, the autoregressive decoder's language-model prior overwhelms the thin acoustic signal and emits hallucinated text — usually repetition loops ("the the the the"), garbage characters ("0000000"), or training-set artifacts ("thanks for watching", "subscribe to the channel"). Current anti-hallucination flags in `src-tauri/src/transcribe.rs:472-487` (temperature=0.0, temperature_inc=0.0, suppress_nst=true, no_context=true) reduce but do not eliminate this.
 
@@ -35,7 +35,7 @@ Existing toast precedent: `chaperone-fallback` event emitted in `src-tauri/src/c
 - Removing trailing filler stripping (`strip_trailing_filler`) — keep it, run detection on the already-stripped text
 
 ## Steps
-1. Read `CLAUDE.md`, `~/Downloads/Github/Business-OS/standards/ENGINEERING.md`, `SESSION-STATUS.md`, `TRUTH.md`.
+1. Read `CLAUDE.md`, `../../Business-OS/standards/Engineering.md`, `SESSION-STATUS.md`, `TRUTH.md`.
 2. Read `src-tauri/src/transcribe.rs` end-to-end, paying attention to `TranscriptionWorker::transcribe()` and `strip_trailing_filler`.
 3. Search for `chaperone-fallback` to find the existing toast wiring on both sides.
 4. Add a `flate2` (or similar) dependency for gzip if not already present; check `Cargo.toml` first — `reqwest` likely brings it transitively, but the public surface may not expose it.

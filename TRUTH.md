@@ -2,7 +2,7 @@
 
 What this project can honestly claim today. Updated when a claim changes.
 
-**Operating model tier:** Tier 1 (small app, obvious behavior, personal-use scope). See `~/Downloads/Github/Business-OS/bin/SOFTWARE-DEVELOPMENT-OPERATING-MODEL.md` §15.
+**Operating model tier:** Tier 1 (small app, obvious behavior, personal-use scope). See `../Business-OS/standards/LIBRE-SOFTWARE-STANDARDS.md` §15.
 
 ---
 

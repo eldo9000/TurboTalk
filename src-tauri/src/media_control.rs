@@ -10,6 +10,9 @@ use std::{ffi::CStr, os::raw::c_char};
 
 static DID_PAUSE: AtomicBool = AtomicBool::new(false);
 
+const POST_PAUSE_SETTLE_MS: u64 = 250;
+const ROUTE_RESTORE_TIMEOUT_MS: i32 = 2_500;
+
 #[cfg(target_os = "macos")]
 extern "C" {
     fn media_toggle_play_pause();
@@ -19,6 +22,9 @@ extern "C" {
     fn audio_probe_last_peak() -> f64;
     fn audio_probe_last_status() -> i32;
     fn audio_probe_last_diag() -> *const c_char;
+    fn audio_route_capture_output_baseline() -> i32;
+    fn audio_route_wait_for_output_baseline(max_wait_ms: i32) -> i32;
+    fn audio_route_last_diag() -> *const c_char;
 }
 
 #[cfg(target_os = "macos")]
@@ -27,6 +33,18 @@ enum PlaybackProbe {
     Playing,
     Silent,
     Unavailable,
+}
+
+#[cfg(target_os = "macos")]
+fn route_diag() -> String {
+    unsafe {
+        let ptr = audio_route_last_diag();
+        if ptr.is_null() {
+            "(null)".to_string()
+        } else {
+            CStr::from_ptr(ptr).to_string_lossy().into_owned()
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -69,7 +87,13 @@ pub fn pause() {
             PlaybackProbe::Playing => {
                 tracing::info!("[media_control] pause — playback detected, toggling");
                 unsafe { media_toggle_play_pause() }
-                std::thread::sleep(std::time::Duration::from_millis(200));
+                std::thread::sleep(std::time::Duration::from_millis(POST_PAUSE_SETTLE_MS));
+                let baseline_ok = unsafe { audio_route_capture_output_baseline() };
+                tracing::info!(
+                    "[media_control] route baseline captured={} diag={}",
+                    baseline_ok,
+                    route_diag()
+                );
                 DID_PAUSE.store(true, Ordering::Release);
             }
             PlaybackProbe::Silent => {
@@ -94,8 +118,12 @@ pub fn resume() {
             tracing::debug!("[media_control] resume — skipped (nothing was paused)");
             return;
         }
-        tracing::info!("[media_control] resume — waiting 800ms then toggling");
-        std::thread::sleep(std::time::Duration::from_millis(800));
+        let route_ready = unsafe { audio_route_wait_for_output_baseline(ROUTE_RESTORE_TIMEOUT_MS) };
+        tracing::info!(
+            "[media_control] resume — route_ready={} diag={}",
+            route_ready,
+            route_diag()
+        );
         unsafe { media_toggle_play_pause() }
         DID_PAUSE.store(false, Ordering::Release);
     }

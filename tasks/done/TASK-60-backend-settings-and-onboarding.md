@@ -4,7 +4,7 @@
 A user can pick a transcription backend family (Whisper / Moonshine / Parakeet) from the Settings tab. The choice persists, the worker is rebuilt on change, and the new family's models appear in the model picker. The Chaperone guided-setup onboarding flow asks the user which family to use on first run, downloads the appropriate model, and lands the user in a working dictation state. The hardcoded `TT_BACKEND` env-var selector from TASK-58/59 is removed.
 
 ## Context
-TurboTalk is a personal-use macOS push-to-talk dictation utility. Tier 1 product. Read `CLAUDE.md` at repo root and `~/Downloads/Github/Business-OS/standards/ENGINEERING.md` before starting.
+TurboTalk is a personal-use macOS push-to-talk dictation utility. Tier 1 product. Read `CLAUDE.md` at repo root and `../../Business-OS/standards/Engineering.md` before starting.
 
 This task assumes TASK-57, TASK-58, and TASK-59 have all landed. Three backend impls exist behind the `TranscriptionBackend` trait, selectable via an env var. This task replaces the env-var hack with proper UX: a setting that persists, a settings UI to change it, and an onboarding step that walks a new user through the choice.
 
@@ -31,7 +31,7 @@ Settings persistence at `~/.config/librewin/turbotalk/config.toml`. Settings tab
 - Windows or Linux UX paths — focus on macOS arm64
 
 ## Steps
-1. Read `CLAUDE.md`, `~/Downloads/Github/Business-OS/standards/ENGINEERING.md`, `SESSION-STATUS.md`, `TRUTH.md`, `src-tauri/src/settings.rs`, `src-tauri/src/transcribe.rs` (post TASK-57/58/59), `src/Onboarding.svelte`, and the Settings tab component in `src/`.
+1. Read `CLAUDE.md`, `../../Business-OS/standards/Engineering.md`, `SESSION-STATUS.md`, `TRUTH.md`, `src-tauri/src/settings.rs`, `src-tauri/src/transcribe.rs` (post TASK-57/58/59), `src/Onboarding.svelte`, and the Settings tab component in `src/`.
 2. Add `BackendFamily` enum to `settings.rs` (Whisper / Moonshine / Parakeet). Add `backend: BackendFamily` to the config struct, default Whisper. Update default-construction tests.
 3. Decide model catalog shape. Suggested: a `pub const MODEL_CATALOG: &[ModelEntry]` table in a new `src-tauri/src/model_catalog.rs` (or extend `whisper_models.rs` and rename it to `model_catalog.rs`). Entries carry the family tag so the frontend can filter.
 4. Expose a tauri command `list_models(family) -> Vec<ModelEntry>` for the frontend to populate the model picker.

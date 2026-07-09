@@ -170,7 +170,7 @@ The Chaperone is a small local LLM (Llama 3.2 3B or similar) wired as a **classi
 2. **Route** to a deterministic handler per mode. The LLM never freely rewrites — it picks a handler.
 3. **Apply** the handler (regex / template / passthrough) to produce final text.
 
-Closed action space, open input space. Reference: `Business-OS/memory/project_chaperone_layer.md`.
+Closed action space, open input space.
 
 ## Settings Storage
 
