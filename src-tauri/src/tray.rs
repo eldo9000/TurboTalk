@@ -189,30 +189,13 @@ pub fn build(app: &tauri::App) -> tauri::Result<TrayIcon> {
         *slot.lock().unwrap() = Some(launch_item.clone());
     }
     let show_item = MenuItem::with_id(app, "show", "Show TurboTalk", true, None::<&str>)?;
-    let reset_warmup_item = MenuItem::with_id(
-        app,
-        "reset-warmup",
-        "Clear Warmup Cache",
-        true,
-        None::<&str>,
-    )?;
     let restart_item = MenuItem::with_id(app, "restart", "Restart", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
-    let sep3 = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
-        &[
-            &launch_item,
-            &sep1,
-            &show_item,
-            &sep2,
-            &reset_warmup_item,
-            &sep3,
-            &restart_item,
-            &quit_item,
-        ],
+        &[&launch_item, &sep1, &show_item, &sep2, &restart_item, &quit_item],
     )?;
 
     let launch_item_ref = launch_item.clone();
@@ -268,18 +251,35 @@ pub fn build(app: &tauri::App) -> tauri::Result<TrayIcon> {
             "show" => {
                 crate::show_main_window(app, &menu_first_manual_main_show);
             }
-            "reset-warmup" => {
-                let recorder = app.state::<crate::RecorderState>();
-                match crate::reset_warmup_cache_inner(recorder.inner()) {
-                    Ok(()) => {
-                        tracing::info!("[transcribe] warmup cache cleared from tray menu");
-                    }
-                    Err(message) => {
-                        crate::emit_ui_error(app, "warmup-cache", message, true);
+            "restart" => {
+                crate::transcribe::abort_active();
+                #[cfg(not(debug_assertions))]
+                {
+                    app.restart();
+                }
+                #[cfg(debug_assertions)]
+                {
+                    match std::env::current_exe() {
+                        Ok(exe) => {
+                            tracing::info!(
+                                "[tray] restart: spawning {} and exiting in dev mode",
+                                exe.display()
+                            );
+                            let _ = std::process::Command::new(&exe).spawn();
+                            std::process::exit(0);
+                        }
+                        Err(e) => {
+                            tracing::error!("[tray] restart: failed to get current exe: {e}");
+                            crate::emit_ui_error(
+                                app,
+                                "restart-tray",
+                                format!("Restart failed: {e}"),
+                                true,
+                            );
+                        }
                     }
                 }
             }
-            "restart" => app.restart(),
             "quit" => {
                 crate::transcribe::abort_active();
                 app.exit(0);

@@ -537,6 +537,9 @@ pub(crate) mod common {
             if crate::transcribe::prewarm_failed() {
                 crate::diagnostic_log::emergency_trace("[ptt_down] ptt-arm-failed prewarm_failed");
                 tracing::warn!("[hotkey] start ignored — whisper prewarm failed earlier");
+                if let Some(status) = app.get_webview_window("status") {
+                    crate::windowing::reposition_status_to_cursor(&status);
+                }
                 emit_critical(
                     &app,
                     "ptt-arm-failed",
@@ -573,9 +576,12 @@ pub(crate) mod common {
                 );
                 crate::diagnostic_log::emergency_trace("[ptt_down] prewarm started; emit ptt-armed");
 
-                // Pin the overlay to the cursor's monitor up front so the
-                // arming tile never flashes on the wrong display.
+                // Position both transient windows before their frontend events
+                // so neither can flash at its stale startup location.
                 crate::windowing::reposition_overlay_to_cursor_monitor(&app);
+                if let Some(status) = app.get_webview_window("status") {
+                    crate::windowing::reposition_status_to_cursor(&status);
+                }
                 emit_critical(&app, "ptt-armed", ());
                 overlay_armed = true;
                 tracing::info!("[hotkey] arming — waiting for whisper-server readiness");
@@ -623,11 +629,14 @@ pub(crate) mod common {
                         ready,
                         crate::transcribe::prewarm_failed()
                     ));
-                    tracing::warn!("[hotkey] arm timed out waiting for whisper-server");
-                    emit_critical(
+                tracing::warn!("[hotkey] arm timed out waiting for whisper-server");
+                if let Some(status) = app.get_webview_window("status") {
+                    crate::windowing::reposition_status_to_cursor(&status);
+                }
+                emit_critical(
                         &app,
-                        "ptt-arm-failed",
-                        "Dictation model didn't load in time.".to_string(),
+                    "ptt-arm-failed",
+                    "Dictation model didn't load in time.".to_string(),
                     );
                     return;
                 }
@@ -697,6 +706,9 @@ pub(crate) mod common {
             if !rec.audio_live() {
                 if !overlay_armed {
                     crate::windowing::reposition_overlay_to_cursor_monitor(&app);
+                    if let Some(status) = app.get_webview_window("status") {
+                        crate::windowing::reposition_status_to_cursor(&status);
+                    }
                     emit_critical(&app, "ptt-armed", ());
                 }
                 crate::diagnostic_log::emergency_trace("[ptt_down] waiting audio_live");

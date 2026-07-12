@@ -371,42 +371,76 @@ pub fn reposition_overlay_to_cursor_monitor(app: &AppHandle) {
 /// and placed near the top portion of the screen so it's visible but not
 /// obscuring content. The status window is fixed-size (280×80 from conf).
 #[cfg(target_os = "macos")]
-pub fn reposition_status_to_cursor(win: &WebviewWindow) {
-    let Ok(cursor) = win.app_handle().cursor_position() else {
-        return;
+fn appkit_position_status_on_cursor_monitor(status: &WebviewWindow) -> bool {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSEvent, NSWindow};
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return false;
     };
-    let Ok(monitors) = win.available_monitors() else {
-        return;
+    let Ok(ns_window_ptr) = status.ns_window() else {
+        return false;
     };
-    if monitors.is_empty() {
+    if ns_window_ptr.is_null() {
+        return false;
+    }
+
+    let mouse = NSEvent::mouseLocation();
+    let screens = objc2_app_kit::NSScreen::screens(mtm);
+    let mut target_frame = None;
+    for i in 0..screens.count() {
+        let screen = screens.objectAtIndex(i);
+        let frame = screen.visibleFrame();
+        if mouse.x >= frame.origin.x
+            && mouse.x < frame.origin.x + frame.size.width
+            && mouse.y >= frame.origin.y
+            && mouse.y < frame.origin.y + frame.size.height
+        {
+            target_frame = Some(frame);
+            break;
+        }
+    }
+    let Some(frame) = target_frame.or_else(|| {
+        objc2_app_kit::NSScreen::mainScreen(mtm).map(|screen| screen.visibleFrame())
+    }) else {
+        return false;
+    };
+
+    let x = frame.origin.x + ((frame.size.width - STATUS_W) / 2.0).max(0.0);
+    // AppKit coordinates originate at the lower left. Keep the tile about 200
+    // points below the usable top edge, clear of the menu bar/notch.
+    let y = frame.origin.y + (frame.size.height - STATUS_H - 200.0).max(0.0);
+    unsafe {
+        let ns_window = &*(ns_window_ptr.cast::<NSWindow>());
+        ns_window.setFrame_display(
+            NSRect::new(NSPoint::new(x, y), NSSize::new(STATUS_W, STATUS_H)),
+            true,
+        );
+    }
+    true
+}
+
+pub fn reposition_status_to_cursor(status: &WebviewWindow) {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    if objc2::MainThreadMarker::new().is_some() {
+        let _ = appkit_position_status_on_cursor_monitor(status);
         return;
     }
 
-    let primary_scale = win
-        .primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| m.scale_factor())
-        .unwrap_or(1.0);
-
-    let monitor = find_cursor_monitor(
-        cursor,
-        &monitors,
-        primary_scale,
-        None,
-        win.primary_monitor().ok().flatten(),
-    );
-    let Some(m) = monitor else {
+    let status_for_main = status.clone();
+    let (tx, rx) = mpsc::channel();
+    if let Err(e) = status.run_on_main_thread(move || {
+        let _ = tx.send(appkit_position_status_on_cursor_monitor(&status_for_main));
+    }) {
+        tracing::warn!("[status] failed to dispatch cursor placement: {e:?}");
         return;
-    };
-
-    let (mx, my, mw, mh) = monitor_logical_bounds(&m);
-    // Centre horizontally; place ~200 logical pixels below the top edge so it's
-    // prominent but not in the way.
-    let x = (mx + (mw - STATUS_W) / 2.0).max(mx);
-    let y = my + 200.0_f64.min(mh - STATUS_H - 40.0);
-
-    position_nspanel(win, LogicalPosition::new(x, y));
+    }
+    if !matches!(rx.recv_timeout(Duration::from_millis(250)), Ok(true)) {
+        tracing::warn!("[status] cursor placement did not complete");
+    }
 }
 
 /// Non-macOS stub: position is best-effort.
