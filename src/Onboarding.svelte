@@ -4,8 +4,8 @@
   // Polls `commands.checkReadiness()` every second while open so each row
   // flips green the moment the user grants permission in System Settings or
   // a model finishes downloading. Step 1 is Input Monitoring; Step 2 is
-  // Microphone; Step 3 is optional auto-paste; Step 4 is Model selection;
-  // Step 5 is Launch at Login.
+   // Microphone; Step 3 is System Audio; Step 4 is optional auto-paste;
+   // Step 5 is Model selection; Step 6 is Launch at Login.
   //
   // Closes itself by calling `onComplete()` when readiness is fully green.
 
@@ -21,6 +21,7 @@
   let micPromptInFlight  = $state(false);
   let inputPromptInFlight = $state(false);
   let launchPromptInFlight = $state(false);
+  let saPromptInFlight    = $state(false);
   let launchSkipped      = $state(false);
   let launchError        = $state('');
   let downloadingModel   = $state(null);
@@ -176,6 +177,23 @@
     await commands.openSystemSettings('microphone');
   }
 
+  async function grantSystemAudio() {
+    saPromptInFlight = true;
+    try {
+      const status = await commands.requestSystemAudioPermission();
+      if (status === 'denied') {
+        await commands.openSystemSettings('system_audio');
+      }
+    } finally {
+      saPromptInFlight = false;
+      await refresh();
+    }
+  }
+
+  async function openSystemAudioSettings() {
+    await commands.openSystemSettings('system_audio');
+  }
+
   async function enableLaunchAtLogin() {
     launchPromptInFlight = true;
     launchError = '';
@@ -253,16 +271,18 @@
   }
 
   let stepStates = $derived.by(() => {
-    if (!readiness) return { accessibility: 'active', input_monitoring: 'pending', microphone: 'pending', model: 'pending', launch: 'pending' };
+    if (!readiness) return { accessibility: 'active', input_monitoring: 'pending', microphone: 'pending', system_audio: 'pending', model: 'pending', launch: 'pending' };
     const autoPaste = permissionSatisfied(readiness.automatic_paste);
     const i = permissionSatisfied(readiness.input_monitoring);
     const m = permissionSatisfied(readiness.microphone);
+    const sa = permissionSatisfied(readiness.system_audio);
     const p = selectedModelReady;
     // macOS TCC steps only gate model selection; Windows/Linux skip that wait.
     const permissionsReady = readiness.platform === 'macos' ? (i && m) : readiness.platform !== 'linux';
     return {
       input_monitoring: i ? 'done' : 'active',
       microphone:    m ? 'done' : (i ? 'active' : 'pending'),
+      system_audio:  sa ? 'done' : (i && m ? 'active' : 'pending'),
       accessibility: autoPaste ? 'done' : (i && m ? 'active' : 'pending'),
       model:         p ? 'done' : (permissionsReady ? 'active' : 'pending'),
       launch:        (launchAtLogin || launchSkipped) ? 'done' : (i && m && p ? 'active' : 'pending'),
@@ -426,10 +446,46 @@
         <!-- Connector 2 → 3 -->
         <div class="h-3.5 ml-[23px] w-1 rounded-full {connectorClass(stepStates.microphone === 'done')}"></div>
 
-        <!-- Step 3: Auto-paste (optional; ad-hoc builds fall back to clipboard) -->
+        <!-- Step 3: System Audio Recording -->
+        <div class="flex gap-3 {stepStates.system_audio === 'done' ? 'p-3' : 'p-3.5'} rounded-lg border {stepClass(stepStates.system_audio)}">
+          <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.system_audio)}">
+            {stepStates.system_audio === 'done' ? '✓' : '3'}
+          </div>
+          <div class="flex flex-col gap-2 min-w-0 flex-1">
+            <div class="flex flex-col gap-0.5">
+              <h2 class="text-[13px] font-medium leading-tight text-[var(--text-primary)]">Allow Audio Capture</h2>
+              {#if stepStates.system_audio !== 'done'}
+                <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                  Lets Turbo Talk detect and pause media playback while you dictate. Dictation works without this.
+                </p>
+              {/if}
+            </div>
+            {#if stepStates.system_audio === 'active'}
+              {#if readiness.system_audio === 'not_determined'}
+                <button onclick={grantSystemAudio} disabled={saPromptInFlight}
+                  class="self-start px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 disabled:opacity-50 transition-opacity">
+                  {saPromptInFlight ? 'Waiting for prompt…' : 'Grant Audio Capture Access'}
+                </button>
+              {:else}
+                <button onclick={openSystemAudioSettings}
+                  class="self-start px-3 py-1.5 rounded-md bg-[var(--accent)] text-white text-[12px] font-medium hover:opacity-90 transition-opacity">
+                  Open System Settings
+                </button>
+                <p class="text-[11px] text-[var(--text-secondary)] leading-snug">
+                  Toggle Turbo Talk on under Privacy &amp; Security → Audio Capture.
+                </p>
+              {/if}
+            {/if}
+          </div>
+        </div>
+
+        <!-- Connector 3 → 4 -->
+        <div class="h-3.5 ml-[23px] w-1 rounded-full {connectorClass(stepStates.system_audio === 'done')}"></div>
+
+        <!-- Step 4: Auto-paste (optional; ad-hoc builds fall back to clipboard) -->
         <div class="flex gap-3 {stepStates.accessibility === 'done' ? 'p-3' : 'p-3.5'} rounded-lg border {stepClass(stepStates.accessibility)}">
           <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.accessibility)}">
-            {stepStates.accessibility === 'done' ? '✓' : '3'}
+            {stepStates.accessibility === 'done' ? '✓' : '4'}
           </div>
           <div class="flex flex-col gap-2 min-w-0 flex-1">
             <div class="flex flex-col gap-0.5">
@@ -477,13 +533,13 @@
           </div>
         </div>
 
-        <!-- Connector 3 → 4 -->
+        <!-- Connector 4 → 5 -->
         <div class="h-3.5 ml-[23px] w-1 rounded-full {connectorClass(stepStates.accessibility === 'done')}"></div>
 
-        <!-- Step 4: Parakeet model download -->
+        <!-- Step 5: Parakeet model download -->
         <div class="flex gap-3 p-3.5 rounded-lg border {stepClass(stepStates.model)}">
           <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.model)}">
-            {stepStates.model === 'done' ? '✓' : '4'}
+            {stepStates.model === 'done' ? '✓' : '5'}
           </div>
           <div class="flex flex-col gap-2 min-w-0 flex-1">
             <div class="flex flex-col gap-0.5">
@@ -534,13 +590,13 @@
           </div>
         </div>
 
-        <!-- Connector 4 → 5 -->
+        <!-- Connector 5 → 6 -->
         <div class="h-3.5 ml-[23px] w-1 rounded-full {connectorClass(stepStates.model === 'done')}"></div>
 
-        <!-- Step 5: Launch at Login -->
+        <!-- Step 6: Launch at Login -->
         <div class="flex gap-3 p-3.5 rounded-lg border {stepClass(stepStates.launch)}">
           <div class="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-semibold {badgeClass(stepStates.launch)}">
-            {stepStates.launch === 'done' ? '✓' : '5'}
+            {stepStates.launch === 'done' ? '✓' : '6'}
           </div>
           <div class="flex flex-col gap-2 min-w-0 flex-1">
             <div class="flex flex-col gap-0.5">

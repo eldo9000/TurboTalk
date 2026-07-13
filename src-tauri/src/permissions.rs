@@ -121,6 +121,7 @@ pub struct Readiness {
     pub automatic_paste: PermissionStatus,
     pub input_monitoring: PermissionStatus,
     pub microphone: PermissionStatus,
+    pub system_audio: PermissionStatus,
     pub model_present: bool,
     /// Host OS id (`macos`, `windows`, `linux`, …) for platform-aware onboarding UI.
     pub platform: String,
@@ -210,6 +211,19 @@ fn input_monitoring_status() -> PermissionStatus {
 
 // ── Microphone (AVFoundation) ───────────────────────────────────────────────
 
+/// Exposed for callers that need to gate audio-device enumeration (which
+/// triggers the TCC mic prompt on macOS). Non-macOS always returns true.
+pub fn mic_granted() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        matches!(microphone_status(), PermissionStatus::Granted)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn microphone_status() -> PermissionStatus {
     use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio};
@@ -243,6 +257,30 @@ fn microphone_status() -> PermissionStatus {
     //    input stream — no explicit requestAccess call is needed.
     // 3. If cpal fails (denied mic), the error surfaces via audio.rs's
     //    platform-aware mic_permission_help_text() message.
+    PermissionStatus::Unsupported
+}
+
+// ── System Audio (CoreAudio Process Tap) ────────────────────────────────────
+
+/// -1 = never probed, 0 = denied/unavailable, 1 = granted
+#[cfg(target_os = "macos")]
+static SYSTEM_AUDIO_CACHED: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+/// Whether system-audio-capture permission is available (macOS 15+ / Sequoia).
+/// Returns cached result from the last explicit probe via
+/// `request_system_audio_permission`. Never triggers the TCC dialog itself —
+/// the dialog only fires from the explicit request command.
+#[cfg(target_os = "macos")]
+fn system_audio_status() -> PermissionStatus {
+    match SYSTEM_AUDIO_CACHED.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => PermissionStatus::Granted,
+        0 => PermissionStatus::Denied,
+        _ => PermissionStatus::NotDetermined,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn system_audio_status() -> PermissionStatus {
     PermissionStatus::Unsupported
 }
 
@@ -291,6 +329,25 @@ pub async fn request_microphone_permission() -> PermissionStatus {
         // 30s upper bound covers "user walked away from the prompt".
         let _ = tokio::time::timeout(std::time::Duration::from_secs(30), rx).await;
         microphone_status()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        PermissionStatus::Unsupported
+    }
+}
+
+/// Trigger the native macOS system-audio permission prompt by creating a
+/// brief CoreAudio process tap. macOS 15+ / Sequoia shows the "Audio Capture"
+/// TCC dialog on first call; subsequent calls either succeed or fail silently.
+/// Result is cached so future `check_readiness` polls pick it up.
+#[tauri::command]
+#[specta::specta]
+pub async fn request_system_audio_permission() -> PermissionStatus {
+    #[cfg(target_os = "macos")]
+    {
+        let result = crate::media_control::probe_system_audio_permission();
+        SYSTEM_AUDIO_CACHED.store(result, std::sync::atomic::Ordering::Release);
+        system_audio_status()
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -397,6 +454,7 @@ pub fn check_readiness() -> Readiness {
     let automatic_paste = automatic_paste_status();
     let input_monitoring = input_monitoring_status();
     let microphone = microphone_status();
+    let system_audio = system_audio_status();
     let model_present = model_present();
     let force_onboarding = FORCE_ONBOARDING.load(Ordering::SeqCst) || !has_completed_onboarding();
     // Unsupported means the permission is not applicable on this platform
@@ -416,10 +474,13 @@ pub fn check_readiness() -> Readiness {
     // not yet prompted, or AVFoundation's TCC view of a cpal-granted permission
     // is stale. Either way the audio stream will open (or prompt) on first use.
     let microphone_ok = !matches!(microphone, PermissionStatus::Denied);
-    let ready = ok(accessibility) && input_monitoring_ok && microphone_ok && model_present;
+    // System audio: only relevant on macOS 15+. Non-blocking — media pause
+    // gracefully falls back when it's unavailable.
+    let system_audio_ok = !matches!(system_audio, PermissionStatus::Denied);
+    let ready = ok(accessibility) && input_monitoring_ok && microphone_ok && system_audio_ok && model_present;
     tracing::info!(
-        "[readiness] accessibility={:?} input_monitoring={:?}(ok={}) microphone={:?}(ok={}) model_present={} iohid_running={} ready={}",
-        accessibility, input_monitoring, input_monitoring_ok, microphone, microphone_ok,
+        "[readiness] accessibility={:?} input_monitoring={:?}(ok={}) microphone={:?}(ok={}) system_audio={:?}(ok={}) model_present={} iohid_running={} ready={}",
+        accessibility, input_monitoring, input_monitoring_ok, microphone, microphone_ok, system_audio, system_audio_ok,
         model_present, crate::hotkey::iohid_listener_running(), ready
     );
     Readiness {
@@ -427,6 +488,7 @@ pub fn check_readiness() -> Readiness {
         automatic_paste,
         input_monitoring,
         microphone,
+        system_audio,
         model_present,
         platform: std::env::consts::OS.to_string(),
         ready,
@@ -486,6 +548,11 @@ pub fn open_system_settings(pane: String) -> Result<(), String> {
         }
         "input_monitoring" => {
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+        }
+        "system_audio" => {
+            // macOS 15+ Audio Capture pane — falls back to general Privacy tab
+            // if the specific anchor isn't available.
+            "x-apple.systempreferences:com.apple.preference.security?Privacy"
         }
         other => return Err(format!("unknown settings pane: {}", other)),
     };

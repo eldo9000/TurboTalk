@@ -813,6 +813,48 @@ int audio_is_playing(void) {
     return turbotalk_audio_is_playing_with_process_tap();
 }
 
+// Minimal probe: creates + immediately destroys a process tap to test
+// whether system-audio-capture permission is available. This triggers
+// the macOS TCC dialog on first call when permission is not yet granted.
+// Returns 1 = tap creation succeeded, 0 = failed (denied or unavailable),
+// -1 = unsupported (macOS < 14.2).
+int audio_probe_process_tap_available(void) {
+    if (@available(macOS 14.2, *)) {
+        @autoreleasepool {
+            NSString *device_uid = turbotalk_default_output_device_uid();
+            CATapDescription *tap_description = nil;
+            if (device_uid) {
+                tap_description =
+                    [[CATapDescription alloc] initExcludingProcesses:@[]
+                                                        andDeviceUID:device_uid
+                                                          withStream:0];
+            }
+            if (!tap_description) {
+                tap_description =
+                    [[CATapDescription alloc] initMonoGlobalTapButExcludeProcesses:@[]];
+            }
+
+            tap_description.name = @"TurboTalk permission probe";
+            tap_description.UUID = [NSUUID UUID];
+            tap_description.privateTap = YES;
+
+            AudioObjectID tap_id = kAudioObjectUnknown;
+            OSStatus err = AudioHardwareCreateProcessTap(tap_description, &tap_id);
+            if (err != noErr || tap_id == kAudioObjectUnknown) {
+                fprintf(stderr,
+                        "[media_control] permission probe failed err=%d\n",
+                        (int)err);
+                return 0;
+            }
+
+            AudioHardwareDestroyProcessTap(tap_id);
+            fprintf(stderr, "[media_control] permission probe succeeded\n");
+            return 1;
+        }
+    }
+    return -1;
+}
+
 UInt64 audio_probe_last_samples(void) {
     return g_last_probe_samples;
 }

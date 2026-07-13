@@ -9,6 +9,7 @@
     cfgCancelOnHold = $bindable(),
     cfgTheme = $bindable(),
     cfgLaunchLogin = $bindable(),
+    cfgShowSplash = $bindable(),
     cfgDevice = $bindable(),
     audioDevices = [],
     cfgSaveHistory = $bindable(),
@@ -272,10 +273,16 @@
   <!-- System -->
   <div class="tt-section tt-section-last">
     <div class="subsection-hd"><span class="subsection-hd-title">System</span></div>
-    <div class="tt-row tt-row-field justify-center" data-tip="Start TurboTalk automatically when you log in to macOS">
-      <button
-        onclick={() => { cfgLaunchLogin = !cfgLaunchLogin; onSaveSettings(); }}
-        class="tt-multi-btn" class:tt-multi-on={cfgLaunchLogin}>Automatically launch TurboTalk at login</button>
+    <div class="tt-row tt-row-field" data-tip="Start TurboTalk automatically when you log in to macOS">
+      <div class="tt-multi">
+        <button
+          onclick={() => { cfgLaunchLogin = !cfgLaunchLogin; onSaveSettings(); }}
+          class="tt-multi-btn" class:tt-multi-on={cfgLaunchLogin}>Launch at Login</button>
+        <button
+          onclick={() => { cfgShowSplash = !cfgShowSplash; onSaveSettings(); }}
+          class="tt-multi-btn" class:tt-multi-on={cfgShowSplash}
+          data-tip="Show the Turbo Talk splash window at startup">Show Splash</button>
+      </div>
     </div>
     <div class="tt-row tt-row-field" data-tip="Reset settings and history, or check for a newer version">
       <div class="flex gap-2 w-full">

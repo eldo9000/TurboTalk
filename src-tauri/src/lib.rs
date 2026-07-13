@@ -1198,6 +1198,14 @@ fn list_models_for_family(family: String) -> Vec<ModelDescriptor> {
 #[tauri::command]
 #[specta::specta]
 fn list_audio_devices() -> Vec<String> {
+    // Gate on microphone permission so the Settings tab never triggers the
+    // macOS TCC prompt. cpal's input_devices() probes CoreAudio which can
+    // cause the microphone permission dialog to appear immediately. When
+    // permission is not yet granted, return an empty list — the dropdown
+    // still shows "System default".
+    if !crate::permissions::mic_granted() {
+        return vec![];
+    }
     use cpal::traits::{DeviceTrait, HostTrait};
     let host = cpal::default_host();
     match host.input_devices() {
@@ -1347,6 +1355,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         permissions::check_readiness,
         permissions::request_microphone_permission,
         permissions::request_input_monitoring_permission,
+        permissions::request_system_audio_permission,
         permissions::open_system_settings,
         permissions::restart_app,
         permissions::prompt_for_accessibility,
@@ -1432,6 +1441,7 @@ pub fn run() {
             permissions::check_readiness,
             permissions::request_microphone_permission,
             permissions::request_input_monitoring_permission,
+            permissions::request_system_audio_permission,
             permissions::open_system_settings,
             permissions::restart_app,
             permissions::prompt_for_accessibility,
@@ -1473,15 +1483,17 @@ pub fn run() {
             let hotkey_state: HotkeyState = Arc::new(RwLock::new(cfg.hotkey.clone()));
             app.manage(hotkey_state.clone());
 
-            // ── Launch splash — shown on every app start ───────────────────
+            // ── Launch splash — shown on every app start unless disabled ────
             // Window is pre-declared in tauri.conf.json (visible:false) so it
             // doesn't accumulate across hot-reloads; we position and show it here.
-            if let Some(splash_win) = app.get_webview_window("splash") {
-                tracing::info!("[splash] positioning and showing");
-                const SPLASH_W: f64 = 360.0;
-                const SPLASH_H: f64 = 220.0;
-                windowing::center_window_on_cursor_monitor(&splash_win, SPLASH_W, SPLASH_H);
-                let _ = splash_win.show();
+            if cfg.show_splash {
+                if let Some(splash_win) = app.get_webview_window("splash") {
+                    tracing::info!("[splash] positioning and showing");
+                    const SPLASH_W: f64 = 360.0;
+                    const SPLASH_H: f64 = 220.0;
+                    windowing::center_window_on_cursor_monitor(&splash_win, SPLASH_W, SPLASH_H);
+                    let _ = splash_win.show();
+                }
             }
 
             // ── Main window — hidden until tray click unless onboarding ───

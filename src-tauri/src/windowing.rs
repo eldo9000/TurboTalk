@@ -373,7 +373,7 @@ pub fn reposition_overlay_to_cursor_monitor(app: &AppHandle) {
 #[cfg(target_os = "macos")]
 fn appkit_position_status_on_cursor_monitor(status: &WebviewWindow) -> bool {
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSEvent, NSWindow};
+    use objc2_app_kit::{NSEvent, NSFloatingWindowLevel, NSScreen, NSWindow};
     use objc2_foundation::{NSPoint, NSRect, NSSize};
 
     let Some(mtm) = MainThreadMarker::new() else {
@@ -387,36 +387,60 @@ fn appkit_position_status_on_cursor_monitor(status: &WebviewWindow) -> bool {
     }
 
     let mouse = NSEvent::mouseLocation();
-    let screens = objc2_app_kit::NSScreen::screens(mtm);
+    let screens = NSScreen::screens(mtm);
     let mut target_frame = None;
     for i in 0..screens.count() {
         let screen = screens.objectAtIndex(i);
-        let frame = screen.visibleFrame();
-        if mouse.x >= frame.origin.x
-            && mouse.x < frame.origin.x + frame.size.width
-            && mouse.y >= frame.origin.y
-            && mouse.y < frame.origin.y + frame.size.height
-        {
+        let frame = screen.frame();
+        let in_x = mouse.x >= frame.origin.x && mouse.x < frame.origin.x + frame.size.width;
+        let in_y = mouse.y >= frame.origin.y && mouse.y < frame.origin.y + frame.size.height;
+        if in_x && in_y {
             target_frame = Some(frame);
             break;
         }
     }
-    let Some(frame) = target_frame.or_else(|| {
-        objc2_app_kit::NSScreen::mainScreen(mtm).map(|screen| screen.visibleFrame())
-    }) else {
+
+    let frame = target_frame
+        .or_else(|| NSScreen::mainScreen(mtm).map(|screen| screen.frame()))
+        .or_else(|| {
+            if screens.count() > 0 {
+                Some(screens.objectAtIndex(0).frame())
+            } else {
+                None
+            }
+        });
+    let Some(screen_frame) = frame else {
         return false;
     };
 
-    let x = frame.origin.x + ((frame.size.width - STATUS_W) / 2.0).max(0.0);
-    // AppKit coordinates originate at the lower left. Keep the tile about 200
-    // points below the usable top edge, clear of the menu bar/notch.
-    let y = frame.origin.y + (frame.size.height - STATUS_H - 200.0).max(0.0);
+    // Match the recording pill's on-screen position so the status tile
+    // lands exactly where the red recording overlay will appear. The pill
+    // is centered vertically in the overlay window (small/medium) or
+    // anchored near the bottom with padding (large).
+    let position = crate::settings::overlay_position();
+    let overlay_size = crate::settings::overlay_size();
+    let overlay_h = overlay_height_for_size(&overlay_size);
+    let pill_center_off = if overlay_size == "large" {
+        overlay_h - 100.0 - 40.0 // items-end + 100px pad + ~80px pill / 2
+    } else {
+        overlay_h / 2.0 // items-center
+    };
+    let x = (screen_frame.origin.x + (screen_frame.size.width - STATUS_W) / 2.0)
+        .max(screen_frame.origin.x);
+    let y = if position == "top" {
+        screen_frame.origin.y + screen_frame.size.height
+            - OVERLAY_PILL_TOP_OFFSET - pill_center_off - STATUS_H / 2.0
+    } else {
+        screen_frame.origin.y + OVERLAY_BOTTOM_MARGIN + pill_center_off - STATUS_H / 2.0
+    };
+
     unsafe {
         let ns_window = &*(ns_window_ptr.cast::<NSWindow>());
         ns_window.setFrame_display(
             NSRect::new(NSPoint::new(x, y), NSSize::new(STATUS_W, STATUS_H)),
             true,
         );
+        ns_window.setLevel(NSFloatingWindowLevel);
     }
     true
 }

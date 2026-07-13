@@ -180,6 +180,13 @@ export const commands = {
 	 */
 	requestInputMonitoringPermission: () => __TAURI_INVOKE<PermissionStatus>("request_input_monitoring_permission"),
 	/**
+	 *  Trigger the native macOS system-audio permission prompt by creating a
+	 *  brief CoreAudio process tap. macOS 15+ / Sequoia shows the "Audio Capture"
+	 *  TCC dialog on first call; subsequent calls either succeed or fail silently.
+	 *  Result is cached so future `check_readiness` polls pick it up.
+	 */
+	requestSystemAudioPermission: () => __TAURI_INVOKE<PermissionStatus>("request_system_audio_permission"),
+	/**
 	 *  Open a specific pane in macOS System Settings. `pane` is one of:
 	 *    "accessibility" | "microphone" | "input_monitoring"
 	 *  Anything else returns an error so the frontend sees a typed failure
@@ -357,6 +364,8 @@ export type Config = {
 	 *  `resolve_backend_variant`.
 	 */
 	backend_variant?: string,
+	// Show the version splash window at app startup. Defaults on.
+	show_splash?: boolean,
 	/**
 	 *  Pause media playback (music, podcasts) when dictation starts, then
 	 *  resume when the transcript is pasted. Defaults on.
@@ -509,6 +518,7 @@ export type Readiness = {
 	automatic_paste: PermissionStatus,
 	input_monitoring: PermissionStatus,
 	microphone: PermissionStatus,
+	system_audio: PermissionStatus,
 	model_present: boolean,
 	// Host OS id (`macos`, `windows`, `linux`, …) for platform-aware onboarding UI.
 	platform: string,

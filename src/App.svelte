@@ -328,6 +328,7 @@
   // Settings tab
   const cfgBin             = 'auto';
   let cfgLaunchLogin       = $state(false);
+  let cfgShowSplash        = $state(true);
   let cfgDevice            = $state('default');
   let audioDevices         = $state([]);
   let settingsSaveMsg      = $state('');
@@ -736,6 +737,7 @@
       backend: cfgBackend,
       backend_variant: cfgBackendVariant,
       pause_media_on_dictate: cfgPauseMediaOnDictate,
+      show_splash: cfgShowSplash,
       cleanup: {
         mode: cfgCleanupMode,
         strip_fillers: cfgStripFillers,
@@ -935,6 +937,7 @@
     cfgBackend           = cfg.backend                          ?? 'parakeet';
     cfgBackendVariant    = cfg.backend_variant                   ?? '';
     cfgPauseMediaOnDictate = cfg.pause_media_on_dictate          ?? true;
+    cfgShowSplash        = cfg.show_splash                     ?? true;
     cfgLaunchLogin       = launch;
     audioDevices         = devs;
     settingsSaveMsg      = '';
@@ -1253,6 +1256,7 @@
       cfgBackend           = initialCfg.backend                          ?? 'parakeet';
       cfgBackendVariant    = initialCfg.backend_variant                   ?? '';
       cfgPauseMediaOnDictate = initialCfg.pause_media_on_dictate          ?? true;
+      cfgShowSplash        = initialCfg.show_splash                     ?? true;
       cfgModel             = initialCfg.whisper?.model                   ?? '';
       cfgModels            = initialCfg.whisper?.models                  ?? [];
       cfgCleanupMode       = initialCfg.cleanup?.mode                    ?? 'regex';
@@ -1389,6 +1393,7 @@
         bind:cfgCancelOnHold
         bind:cfgTheme
         bind:cfgLaunchLogin
+        bind:cfgShowSplash
         bind:cfgDevice
         {audioDevices}
         bind:cfgSaveHistory

@@ -25,6 +25,7 @@ extern "C" {
     fn audio_route_capture_output_baseline() -> i32;
     fn audio_route_wait_for_output_baseline(max_wait_ms: i32) -> i32;
     fn audio_route_last_diag() -> *const c_char;
+    fn audio_probe_process_tap_available() -> i32;
 }
 
 #[cfg(target_os = "macos")]
@@ -108,6 +109,15 @@ pub fn pause() {
             }
         }
     }
+}
+
+/// Minimal probe: tries to create a process tap to check whether system-audio-
+/// capture permission is available. Returns 1 = granted, 0 = denied/unavailable,
+/// -1 = unsupported (macOS < 14.2). On first call triggers the macOS TCC dialog
+/// if permission has not yet been determined.
+#[cfg(target_os = "macos")]
+pub fn probe_system_audio_permission() -> i32 {
+    unsafe { audio_probe_process_tap_available() }
 }
 
 /// Resume media playback. Call after dictation finishes.
