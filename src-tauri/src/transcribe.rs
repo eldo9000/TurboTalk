@@ -1257,6 +1257,7 @@ pub fn kill_orphans() {
     // own whisper-server instance. Falls back to the generic name if
     // resolution fails (binaries dir missing, etc.) — in that case
     // there's nothing to kill anyway.
+    #[cfg(not(target_os = "windows"))]
     let pattern = find_whisper_server("whisper-server")
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "whisper-server".to_string());

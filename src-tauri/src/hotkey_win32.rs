@@ -5,19 +5,19 @@
 //! configured PTT hotkey and Escape cancel, and dispatches to the
 //! `Controller` layer.
 
-use super::common;
 use super::Controller;
 use crate::recorder::Recorder;
 use parking_lot::Mutex;
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{tray::TrayIcon, AppHandle};
-use winapi::shared::minwindef::{DWORD, HHOOK, HINSTANCE, LPARAM, LRESULT, UINT, WPARAM};
+use winapi::shared::minwindef::{HINSTANCE, LPARAM, LRESULT, WPARAM};
+use winapi::shared::windef::HHOOK;
 use winapi::um::winuser::{
-    CallNextHookEx, GetMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
-    KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN,
+    CallNextHookEx, GetMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
+    KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN,
     WM_SYSKEYUP,
 };
 
@@ -47,6 +47,15 @@ static PTT_KEY_HELD: AtomicBool = AtomicBool::new(false);
 
 /// Escape key dedup same as PTT_KEY_HELD.
 static ESC_KEY_HELD: AtomicBool = AtomicBool::new(false);
+
+/// Cached hotkey VK code (first match from vk_codes_for_name).
+/// 0 = no hotkey configured. Read by hook_callback on every keystroke;
+/// populated once at spawn() and updated when save_config fires.
+static HOTKEY_VK: AtomicU32 = AtomicU32::new(0);
+
+/// Cached config flags read by hook_callback without touching the RwLock.
+static CANCEL_ON_ESC: AtomicBool = AtomicBool::new(false);
+static CANCEL_ON_HOLD: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
 pub struct HotkeyProbe {
@@ -134,6 +143,22 @@ static HOOK_CTX: Mutex<Option<Arc<HookContext>>> = Mutex::new(None);
 /// `lParam` must point to a valid `KBDLLHOOKSTRUCT` when `code >= 0`.
 /// Must call `CallNextHookEx` with the original parameters.
 unsafe extern "system" fn hook_callback(code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
+    // Must always call CallNextHookEx — even on panic — so Windows keyboard
+    // processing is never blocked by a TurboTalk crash.
+    let result = std::panic::catch_unwind(|| unsafe {
+        _hook_callback_impl(code, w_param, l_param)
+    });
+    match result {
+        Ok(ret) => ret,
+        Err(_) => {
+            // Panic in hook callback: log and pass through. The panic hook
+            // already wrote the backtrace to stderr.
+            CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param)
+        }
+    }
+}
+
+unsafe fn _hook_callback_impl(code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
     if code < 0 {
         return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param);
     }
@@ -149,18 +174,23 @@ unsafe extern "system" fn hook_callback(code: i32, w_param: WPARAM, l_param: LPA
         return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param);
     }
 
+    // ── Fast path: atomics-only check before touching Mutex/RwLock ───────
+    // 99.9% of keystrokes don't match the hotkey. Acquiring the Mutex and
+    // RwLock on every one causes measurable input lag system-wide.
+    let hotkey_vk = HOTKEY_VK.load(Ordering::Relaxed);
+    let esc_enabled = CANCEL_ON_ESC.load(Ordering::Relaxed);
+    let is_escape = esc_enabled && vk == 0x1B;
+    if !is_escape && vk != hotkey_vk {
+        return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param);
+    }
+
+    // ── Slow path: hotkey actually matches — acquire context ────────────
     let ctx_guard = HOOK_CTX.lock();
     let Some(ctx) = ctx_guard.as_ref() else {
         return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param);
     };
 
-    let (config_key, cancel_on_esc, cancel_on_hold) = {
-        let hk = ctx.hotkey_state.read();
-        (hk.key.clone(), hk.cancel_on_esc, hk.cancel_on_hold)
-    };
-
-    // ── Escape cancel ───────────────────────────────────────────────────
-    if cancel_on_esc && vk == 0x1B {
+    if is_escape {
         match w_param as u32 {
             WM_KEYDOWN | WM_SYSKEYDOWN => {
                 if !ESC_KEY_HELD.swap(true, Ordering::AcqRel) {
@@ -180,12 +210,7 @@ unsafe extern "system" fn hook_callback(code: i32, w_param: WPARAM, l_param: LPA
         return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param);
     }
 
-    // ── PTT hotkey match ────────────────────────────────────────────────
-    let vks = vk_codes_for_name(&config_key);
-    if vks.is_empty() || !vks.contains(&vk) {
-        return CallNextHookEx(std::ptr::null_mut(), code, w_param, l_param);
-    }
-
+    // ── PTT hotkey ──────────────────────────────────────────────────────
     let controller = {
         let hk = ctx.hotkey_state.read();
         Controller::from_mode(&hk.mode, &ctx.recorder, &ctx.tray_icon, &ctx.app)
@@ -194,7 +219,7 @@ unsafe extern "system" fn hook_callback(code: i32, w_param: WPARAM, l_param: LPA
     match w_param as u32 {
         WM_KEYDOWN | WM_SYSKEYDOWN => {
             if !PTT_KEY_HELD.swap(true, Ordering::AcqRel) {
-                if cancel_on_hold {
+                if CANCEL_ON_HOLD.load(Ordering::Relaxed) {
                     controller.arm_hold_cancel_if_busy();
                 }
                 controller.press();
@@ -218,14 +243,17 @@ pub fn spawn(
     hotkey_state: Arc<parking_lot::RwLock<crate::settings::HotkeyConfig>>,
 ) {
     std::thread::spawn(move || {
-        {
+        let (hotkey_vk, cancel_on_esc, cancel_on_hold) = {
             let hk = hotkey_state.read();
+            let vks = vk_codes_for_name(&hk.key);
+            let vk = vks.first().copied().unwrap_or(0);
             tracing::info!(
-                "[hotkey] Win32 WH_KEYBOARD_LL hook starting — key={} mode={}",
+                "[hotkey] Win32 WH_KEYBOARD_LL hook starting — key={} mode={} vk=0x{:02X}",
                 hk.key,
                 hk.mode,
+                vk,
             );
-            if vk_codes_for_name(&hk.key).is_empty() {
+            if vks.is_empty() {
                 tracing::warn!("[hotkey] unknown hotkey key {:?} on Windows", hk.key);
             }
             if !is_keyboard_key(&hk.key) {
@@ -235,7 +263,12 @@ pub fn spawn(
                     hk.key,
                 );
             }
-        }
+            (vk, hk.cancel_on_esc, hk.cancel_on_hold)
+        };
+
+        HOTKEY_VK.store(hotkey_vk, Ordering::Relaxed);
+        CANCEL_ON_ESC.store(cancel_on_esc, Ordering::Relaxed);
+        CANCEL_ON_HOLD.store(cancel_on_hold, Ordering::Relaxed);
 
         LISTENER_STARTED_MS.store(epoch_ms(), Ordering::Relaxed);
 
@@ -272,9 +305,9 @@ pub fn spawn(
         // ── Message pump ─────────────────────────────────────────────────
         // `GetMessageW` blocks until a message arrives; the hook callback
         // fires synchronously inside this call for each keyboard event.
-        let mut msg: MSG = std::mem::zeroed();
+        let mut msg: MSG = unsafe { std::mem::zeroed() };
         loop {
-            let ret = GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0);
+            let ret = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
             match ret {
                 0 => break,                         // WM_QUIT
                 -1 => {
@@ -288,7 +321,7 @@ pub fn spawn(
         // ── Cleanup ──────────────────────────────────────────────────────
         let hook_ptr = HOOK_HANDLE.load(Ordering::Relaxed) as HHOOK;
         if !hook_ptr.is_null() {
-            UnhookWindowsHookEx(hook_ptr);
+            unsafe { UnhookWindowsHookEx(hook_ptr); }
         }
         *HOOK_CTX.lock() = None;
         LISTENER_ALIVE.store(false, Ordering::Relaxed);

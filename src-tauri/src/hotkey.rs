@@ -417,7 +417,7 @@ pub(crate) mod common {
         #[cfg(not(target_os = "macos"))]
         {
             let cfg = crate::settings::load();
-            let (enabled, sound) = match event {
+            let (enabled, _sound) = match event {
             // Sound choices are deliberate: short and "soft" by design, and
             // distinct enough that the five events are recognizable by ear.
             //   Pop    — quick percussive "go" for recording start
@@ -435,27 +435,21 @@ pub(crate) mod common {
         }
         #[cfg(target_os = "windows")]
         {
-            let alias = match event {
+            let mb_type = match event {
                 ChimeEvent::Start | ChimeEvent::Error => {
-                    "SystemHand\0".encode_utf16().collect::<Vec<u16>>()
+                    winapi::um::winuser::MB_ICONHAND
                 }
                 ChimeEvent::Finish => {
-                    "SystemAsterisk\0".encode_utf16().collect::<Vec<u16>>()
+                    winapi::um::winuser::MB_ICONASTERISK
                 }
                 ChimeEvent::Cancel => {
-                    "SystemExclamation\0".encode_utf16().collect::<Vec<u16>>()
+                    winapi::um::winuser::MB_ICONEXCLAMATION
                 }
             };
             unsafe {
-                winapi::um::mmsystem::PlaySoundW(
-                    alias.as_ptr(),
-                    std::ptr::null_mut(),
-                    winapi::um::mmsystem::SND_ALIAS
-                        | winapi::um::mmsystem::SND_ASYNC
-                        | winapi::um::mmsystem::SND_NODEFAULT,
-                );
+                winapi::um::winuser::MessageBeep(mb_type);
             }
-            tracing::info!("[chime] PlaySoundW SystemSounds ({:?})", event);
+            tracing::info!("[chime] MessageBeep ({:?})", event);
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {

@@ -115,7 +115,7 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": false,
-    "externalBin": ["binaries/whisper-cli", "binaries/whisper-server", "binaries/media-toggle"],
+    "externalBin": ["binaries/whisper-cli", "binaries/whisper-server"],
     "macOS": {
       "signingIdentity": "-",
       "hardenedRuntime": false,

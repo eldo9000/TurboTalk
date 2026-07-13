@@ -1,7 +1,8 @@
 use winapi::shared::minwindef::TRUE;
+use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::processthreadsapi::GetCurrentThreadId;
 use winapi::um::winuser::{
-    AttachThreadInput, BringWindowToTop, GetForegroundWindow, GetLastError,
+    AttachThreadInput, BringWindowToTop, GetForegroundWindow,
     GetWindowThreadProcessId, SetFocus, SetForegroundWindow,
 };
 

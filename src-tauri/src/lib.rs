@@ -880,11 +880,11 @@ async fn download_parakeet_model(
         _ => unreachable!(),
     };
 
-    // Build destination directory.
-    let mut dest_dir =
-        dirs::home_dir().ok_or_else(|| "Could not locate home directory".to_string())?;
-    dest_dir.push(".config/turbotalk/models/parakeet");
-    dest_dir.push(&variant);
+    // Build destination directory using the canonical data_dir (not a hardcoded
+    // ~/.config path, which differs on Windows — see TASK-71).
+    let models_dir = crate::transcribe_backends::parakeet::parakeet_models_dir()
+        .ok_or_else(|| "Could not locate Parakeet models directory".to_string())?;
+    let dest_dir = models_dir.join(&variant);
     tokio::fs::create_dir_all(&dest_dir)
         .await
         .map_err(|e| format!("Failed to create model directory: {}", e))?;
@@ -898,14 +898,9 @@ async fn download_parakeet_model(
         .map_err(|e| format!("Failed to canonicalize model directory: {}", e))?;
 
     // Verify destination is inside the expected parakeet models dir.
-    {
-        let mut expected_base =
-            dirs::home_dir().ok_or_else(|| "Could not locate home directory".to_string())?;
-        expected_base.push(".config/turbotalk/models/parakeet");
-        if let Ok(canon_base) = expected_base.canonicalize() {
-            if !canon_dir.starts_with(&canon_base) {
-                return Err("Download destination is outside the allowed directory".to_string());
-            }
+    if let Ok(canon_base) = models_dir.canonicalize() {
+        if !canon_dir.starts_with(&canon_base) {
+            return Err("Download destination is outside the allowed directory".to_string());
         }
     }
 

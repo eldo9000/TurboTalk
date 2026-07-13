@@ -48,7 +48,7 @@ pub fn paste(text: &str) -> anyhow::Result<bool> {
 
     // If the 'v' key fails, release Ctrl before propagating the error so the
     // modifier is never left stuck.
-    let v_result = enigo.key(Key::Layout('v'), Direction::Click);
+    let v_result = enigo.key(Key::Unicode('v'), Direction::Click);
     if let Err(e) = v_result {
         let _ = enigo.key(Key::Control, Direction::Release);
         return Err(anyhow::anyhow!("enigo 'v' failed: {e}"));

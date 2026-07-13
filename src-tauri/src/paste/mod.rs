@@ -184,11 +184,11 @@ fn accessibility_trusted() -> bool {
 }
 
 #[cfg(target_os = "windows")]
-pub fn paste(text: &str) -> anyhow::Result<bool> {
+pub fn paste(text: &str, _app: &tauri::AppHandle) -> anyhow::Result<bool> {
     win_paste::paste(text)
 }
 
 #[cfg(target_os = "linux")]
-pub fn paste(text: &str) -> anyhow::Result<bool> {
+pub fn paste(text: &str, _app: &tauri::AppHandle) -> anyhow::Result<bool> {
     legacy::paste(text)
 }
