@@ -46,8 +46,8 @@ static AUDIO_ERRORS: AtomicU64 = AtomicU64::new(0);
 /// JSON response). Incremented in `common::run_transcription_stage`.
 static TRANSCRIBE_ERRORS: AtomicU64 = AtomicU64::new(0);
 
-/// Cleanup failures (Chaperone Ollama error, regex crash). Incremented
-/// in `common::run_cleanup_stage` and `run_chaperone_cleanup`.
+/// Cleanup failures (text_formatter error, regex crash). Incremented
+/// in `common::run_cleanup_stage`.
 static CLEANUP_ERRORS: AtomicU64 = AtomicU64::new(0);
 
 /// Paste returned `Ok(true)` — text was written to clipboard and Ctrl+V

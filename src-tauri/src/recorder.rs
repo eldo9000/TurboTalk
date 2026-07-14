@@ -175,7 +175,7 @@ impl Recorder {
     }
 
     /// Advance: `Transcribing → Cleaning`. Called once Whisper returns text
-    /// and the cleanup / chaperone pass is about to run.
+    /// and the cleanup pass is about to run.
     pub fn begin_cleaning(&self) -> Result<(), RecorderError> {
         self.transition("begin_cleaning", State::Transcribing, State::Cleaning)
     }

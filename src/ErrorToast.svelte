@@ -17,8 +17,6 @@
             await commands.openSystemSettings('input_monitoring');
           } else if (err.kind === 'mic-permission') {
             await commands.openSystemSettings('microphone');
-          } else if (err.kind === 'chaperone-fallback') {
-            onOpenSettings?.('modes');
           }
           onDismiss?.(err.id);
         }}

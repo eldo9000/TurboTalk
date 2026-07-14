@@ -8,7 +8,7 @@
 //
 // Key characteristics:
 //   - English-only (CTC architecture, not seq2seq)
-//   - Output may be lowercase/unpunctuated — Chaperone cleanup handles it
+//   - Output may be lowercase/unpunctuated — cleanup handles it
 //   - No autoregressive hallucination on silence (structural fix, not a filter)
 //   - Full WAV in, transcript out — no streaming; SegmentTranscriber stays Whisper
 //
@@ -207,7 +207,7 @@ fn prepare_parakeet_samples(wav: &Path) -> anyhow::Result<Vec<f32>> {
 /// autoregressive. This means:
 ///   - No beam search — inference is O(n) in audio length, not O(n²)
 ///   - No hallucination loop — output strictly bounded to heard audio
-///   - Output may be lowercase, unpunctuated — Chaperone cleanup normalizes it
+///   - Output may be lowercase, unpunctuated — cleanup normalizes it
 ///
 /// # Thread safety
 ///

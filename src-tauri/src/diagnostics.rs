@@ -32,12 +32,11 @@ pub struct DiagnosticsResult {
     /// description if it could not be resolved.
     pub sidecar_path: String,
 
-    /// Cleanup mode from Settings: "off", "regex", or "chaperone".
+    /// Cleanup mode from Settings: "off", "regex", or "text_formatter".
     pub cleanup_mode: String,
 
-    /// Only populated when `cleanup_mode == "chaperone"`. "reachable" if
-    /// Ollama responded to an HTTP GET within 2 s; "unreachable: <reason>"
-    /// otherwise. Empty string when not checked.
+    /// Ollama reachability (legacy — Ollama is no longer used by the
+    /// TextFormatter mode). Kept for diagnostics on existing Ollama config.
     pub ollama_status: String,
 
     /// "supported" on macOS; "unsupported" on other platforms.
@@ -134,7 +133,7 @@ fn is_executable(p: &std::path::Path) -> bool {
 }
 
 fn ollama_version_endpoint(raw_url: &str) -> anyhow::Result<url::Url> {
-    crate::cleanup::validate_ollama_url(raw_url)?
+    crate::ollama::validate_ollama_url(raw_url)?
         .join("api/version")
         .map_err(|e| anyhow::anyhow!("could not build Ollama diagnostics URL: {e}"))
 }
@@ -377,15 +376,14 @@ pub async fn run_diagnostics() -> DiagnosticsResult {
     // ── Cleanup mode ─────────────────────────────────────────────────────────
     let cleanup_mode = match cfg.cleanup.mode {
         crate::settings::CleanupMode::Off => "off".to_string(),
-        crate::settings::CleanupMode::Regex => "regex".to_string(),
-        crate::settings::CleanupMode::Chaperone => "chaperone".to_string(),
+        crate::settings::CleanupMode::TextFormatter => "text_formatter".to_string(),
     };
 
-    // ── Ollama reachability (chaperone mode only) ─────────────────────────────
-    let ollama_status = if cfg.cleanup.mode == crate::settings::CleanupMode::Chaperone {
-        check_ollama_status(&cfg.cleanup.ollama_url).await
-    } else {
+    // ── Ollama reachability (legacy) ──────────────────────────────────────────
+    let ollama_status = if cfg.cleanup.ollama_url.is_empty() {
         String::new()
+    } else {
+        check_ollama_status(&cfg.cleanup.ollama_url).await
     };
 
     // ── Paste capability ─────────────────────────────────────────────────────

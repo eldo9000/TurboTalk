@@ -1,7 +1,7 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-07-08 (media pause/resume user-proven)
-**Current state:** TurboTalk's dictation path works with Input Monitoring and System Audio permission granted, and media pause/resume is now user-proven through a CoreAudio process-tap playback-energy probe.
+**Last updated:** 2026-07-14 (rule-based TextFormatter implemented)
+**Current state:** Rule-based TextFormatter implemented in `pre_format.rs` (509 lines). Three stages: spoken punctuation ("type comma" → ","), literal formatting ("slash deploy" → "/deploy", "at sign Bob" → "@Bob"), and baseline cleanup (capitalize, strip artifacts/fillers/stutters). Wired into `cleanup.rs` TextFormatter mode. The old Chaperone LLM classifier is fully stripped. `CleanupMode` simplified to `Off` / `TextFormatter`. Anti-vocabulary uses `=` syntax now. `cargo check`, `clippy`, `npm run typecheck` pass. 15 `pre_format` tests pass.
 
 ## Next action
 

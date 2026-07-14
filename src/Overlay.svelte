@@ -22,7 +22,7 @@ import { invoke } from '@tauri-apps/api/core';
   // segment transcriber fill this map keyed by segment index; we render the
   // values in index order so concurrent completions still read left-to-right.
   // This is the RAW per-segment text — it does not include the final tail
-  // (transcribed at key-release) or the Chaperone cleanup pass, so it's a
+  // (transcribed at key-release) or the cleanup pass, so it's a
   // draft, not the pasted result. Only surfaced in the 'large' overlay.
   let segPreview = $state({});
   let previewText = $derived(

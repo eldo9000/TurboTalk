@@ -17,7 +17,6 @@
   import NoModelPopup from './NoModelPopup.svelte';
   import ResetModal from './ResetModal.svelte';
   import BottomBar from './BottomBar.svelte';
-  import { PROMPT_PRESETS, DEFAULT_CLASSIFIER_PROMPT } from './lib/prompts';
   import { KNOWN_FILENAMES, altModelVariant, altModelActive } from './lib/catalog';
 
   const HOTKEY_KEY_ITEMS_MAC = [
@@ -251,7 +250,6 @@
     if (res.status === 'error') {
       console.warn('[onboarding] prewarm skipped:', res.error);
     }
-    commands.prewarmOllama(); // fire-and-forget — no await
   }
 
   // History
@@ -283,47 +281,23 @@
   // Parakeet model descriptors (loaded from backend on tab open)
   let altModels       = $state(/** @type {import('./bindings').ModelDescriptor[]} */ ([]));
 
-  // Modes tab — Chaperone classifier presets.
-  //
-  // The Chaperone is a classifier, not a rewriter (see cleanup.rs). It must
-  // return one of PROSE / CODE / COMMAND / RAW. Each preset biases the
-  // classifier toward different use cases — none of them break the
-  // four-token output contract. The four-button row above the prompt
-  // textarea highlights the matching preset when the textarea text equals
-  // its prompt verbatim, and goes grey on any user edit.
-
-  // Reset button compatibility — restores the Balanced preset.
-
-  let cfgCleanupMode          = $state('regex');
-  let cfgStripFillers         = $state(true);
-  let cfgAppendPeriod         = $state(false);
-  let cfgStripArtifacts       = $state(true);
+  let cfgCleanupMode          = $state('text_formatter');
   let cfgOllamaUrl            = $state('');
   let cfgLlmModel             = $state('');
   let cfgVocabulary           = $state('');
   let cfgAntiVocabulary       = $state('');
-  let cfgClassifierPrompt     = $state('');
-  let showPromptEditor        = $state(false);
+  let cfgFormatPunct          = $state(true);
+  let cfgFormatLiteral        = $state(true);
+  let cfgFormatStripFillers   = $state(true);
+  let cfgFormatStripArtifacts = $state(true);
+  let cfgFormatCapitalize     = $state(true);
   let modesSaveMsg            = $state('');
 
-  // Ollama setup state (Advanced panel)
-  let ollamaReachable         = $state(null);  // null = not yet probed
+  // Ollama setup state (legacy — kept for settings save/load compatibility)
+  let ollamaReachable         = $state(null);
   let ollamaModelPresent      = $state(null);
-  let ollamaModelPartial      = $state(false); // partial blobs detected
+  let ollamaModelPartial      = $state(false);
   let ollamaPullState         = $state({ inFlight: false, pct: 0, status: '', error: '' });
-
-  // Active preset = the one whose prompt exactly equals the textarea's
-  // current content. Edits of any kind drop this back to null, which the
-  // button row renders as "all grey, none active".
-  let activePresetId = $derived(
-    PROMPT_PRESETS.find(p => p.prompt === cfgClassifierPrompt)?.id ?? null
-  );
-
-  function applyPreset(id) {
-    const prompt = PROMPT_PRESETS.find(p => p.id === id)?.prompt ?? DEFAULT_CLASSIFIER_PROMPT;
-    cfgClassifierPrompt = prompt;
-    saveModes();
-  }
 
   // Settings tab
   const cfgBin             = 'auto';
@@ -740,14 +714,15 @@
       show_splash: cfgShowSplash,
       cleanup: {
         mode: cfgCleanupMode,
-        strip_fillers: cfgStripFillers,
-        append_period: cfgAppendPeriod,
-        strip_whisper_artifacts: cfgStripArtifacts,
         ollama_url: cfgOllamaUrl,
         classifier_model: cfgLlmModel,
         vocabulary: cfgVocabulary ? cfgVocabulary.split('\n').map(s => s.trim()).filter(Boolean) : [],
         antivocabulary: cfgAntiVocabulary ? cfgAntiVocabulary.split('\n').map(s => s.trim()).filter(Boolean) : [],
-        classifier_prompt: cfgClassifierPrompt,
+        format_punctuation: cfgFormatPunct,
+        format_literal: cfgFormatLiteral,
+        format_strip_fillers: cfgFormatStripFillers,
+        format_strip_artifacts: cfgFormatStripArtifacts,
+        format_capitalize: cfgFormatCapitalize,
       },
     };
   }
@@ -828,7 +803,6 @@
   async function handleModeClick(v) {
     cfgCleanupMode = v;
     saveModes();
-    if (v === 'chaperone') commands.prewarmOllama(); // fire-and-forget
   }
 
   // ── Ollama setup helpers ───────────────────────────────────────────────────
@@ -855,55 +829,7 @@
     }
   }
 
-  async function startOllamaPull() {
-    const model = cfgLlmModel || 'llama3.2:3b';
-    ollamaPullState = { inFlight: true, pct: 0, status: 'starting…', error: '' };
-    try {
-      const res = await commands.pullOllamaModel(model);
-      if (res.status === 'ok') {
-        ollamaPullState = { inFlight: false, pct: 100, status: 'success', error: '' };
-        await refreshOllamaSetup();
-        commands.prewarmOllama(); // fire-and-forget — warm immediately after download
-      } else {
-        const msg = String(res.error ?? 'unknown error');
-        console.error('[ollama-pull] error:', msg);
-        ollamaPullState = { inFlight: false, pct: 0, status: '', error: msg };
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.error('[ollama-pull] threw:', msg);
-      ollamaPullState = { inFlight: false, pct: 0, status: '', error: msg };
-    }
-  }
 
-  async function installOllama() {
-    const res = await commands.openUrl('https://ollama.com/download');
-    if (res.status === 'error') {
-      uiErrors = [...uiErrors, { kind: 'open-url-error', message: `Could not open browser: ${res.error}`, recoverable: false }];
-    }
-  }
-
-  // Polling effect: runs when Advanced panel is visible
-  $effect(() => {
-    const isAdv = activeTab === 'modes' && cfgCleanupMode === 'chaperone';
-    if (!isAdv) return;
-
-    refreshOllamaSetup();
-
-    const interval = setInterval(() => {
-      if (!ollamaPullState.inFlight) {
-        refreshOllamaSetup();
-      }
-    }, 5000);
-
-    const onWindowFocus = () => { refreshOllamaSetup(); };
-    window.addEventListener('focus', onWindowFocus);
-
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener('focus', onWindowFocus);
-    };
-  });
 
   // ── Settings ──────────────────────────────────────────────────────────────
 
@@ -997,25 +923,18 @@
       setCleanupMode: (v) => {
         cfgCleanupMode = v;
         saveModes();
-        if (v === 'chaperone') commands.prewarmOllama(); // fire-and-forget
       },
-      setStripFillers: (v) => { cfgStripFillers = v; saveModes(); },
-      setAppendPeriod: (v) => { cfgAppendPeriod = v; saveModes(); },
-      setStripArtifacts: (v) => { cfgStripArtifacts = v; saveModes(); },
+
       setVadEnabled: (v) => { cfgVadEnabled = v; saveModes(); },
       setVocabulary: (v) => { cfgVocabulary = v; saveModes(); },
       setAntiVocabulary: (v) => { cfgAntiVocabulary = v; saveModes(); },
       setOllamaUrl: (v) => { cfgOllamaUrl = v; saveModes(); },
       setLlmModel: (v) => { cfgLlmModel = v; saveModes(); },
-      setClassifierPrompt: (v) => { cfgClassifierPrompt = v; saveModes(); },
-      applyPreset,
-      resetClassifierPrompt: () => {
-        cfgClassifierPrompt = DEFAULT_CLASSIFIER_PROMPT;
-        saveModes();
-      },
-      refreshOllamaSetup,
-      startOllamaPull,
-      installOllama,
+      setFormatPunct: (v) => { cfgFormatPunct = v; saveModes(); },
+      setFormatLiteral: (v) => { cfgFormatLiteral = v; saveModes(); },
+      setFormatStripFillers: (v) => { cfgFormatStripFillers = v; saveModes(); },
+      setFormatStripArtifacts: (v) => { cfgFormatStripArtifacts = v; saveModes(); },
+      setFormatCapitalize: (v) => { cfgFormatCapitalize = v; saveModes(); },
     };
   }
 
@@ -1259,15 +1178,16 @@
       cfgShowSplash        = initialCfg.show_splash                     ?? true;
       cfgModel             = initialCfg.whisper?.model                   ?? '';
       cfgModels            = initialCfg.whisper?.models                  ?? [];
-      cfgCleanupMode       = initialCfg.cleanup?.mode                    ?? 'regex';
-      cfgStripFillers      = initialCfg.cleanup?.strip_fillers            ?? true;
-      cfgAppendPeriod      = initialCfg.cleanup?.append_period            ?? false;
-      cfgStripArtifacts    = initialCfg.cleanup?.strip_whisper_artifacts  ?? true;
-      cfgOllamaUrl         = initialCfg.cleanup?.ollama_url               ?? '';
-      cfgLlmModel          = initialCfg.cleanup?.classifier_model         ?? '';
-      cfgVocabulary        = (initialCfg.cleanup?.vocabulary ?? []).join('\n');
-      cfgAntiVocabulary    = (initialCfg.cleanup?.antivocabulary ?? []).join('\n');
-      cfgClassifierPrompt  = initialCfg.cleanup?.classifier_prompt        ?? DEFAULT_CLASSIFIER_PROMPT;
+      cfgCleanupMode          = initialCfg.cleanup?.mode                    ?? 'text_formatter';
+      cfgOllamaUrl            = initialCfg.cleanup?.ollama_url               ?? '';
+      cfgLlmModel             = initialCfg.cleanup?.classifier_model         ?? '';
+      cfgVocabulary           = (initialCfg.cleanup?.vocabulary ?? []).join('\n');
+      cfgAntiVocabulary       = (initialCfg.cleanup?.antivocabulary ?? []).join('\n');
+      cfgFormatPunct          = initialCfg.cleanup?.format_punctuation        ?? true;
+      cfgFormatLiteral        = initialCfg.cleanup?.format_literal            ?? true;
+      cfgFormatStripFillers   = initialCfg.cleanup?.format_strip_fillers      ?? true;
+      cfgFormatStripArtifacts = initialCfg.cleanup?.format_strip_artifacts    ?? true;
+      cfgFormatCapitalize     = initialCfg.cleanup?.format_capitalize         ?? true;
       if (savedHistory.length) history = savedHistory;
 
       // Detect Logitech mouse — fast ioreg call, fire-and-forget
@@ -1324,7 +1244,7 @@
         logUi('app-ready', platform);
         if (!showOnboarding) {
           await applyWindowSizeLimits();
-          commands.prewarmOllama(); // fire-and-forget — loads LLM before first dictation
+          // prewarmOllama removed — legacy LLM classifier no longer used
         }
       });
       syncAppStateFromBackend();
@@ -1382,7 +1302,7 @@
   {/if}
 
   {#if activeTab === 'modes'}
-    <ModesTab {cfgBackend} {cfgCleanupMode} {cfgStripFillers} {cfgAppendPeriod} {cfgStripArtifacts} {cfgOllamaUrl} {cfgLlmModel} {cfgVocabulary} {cfgAntiVocabulary} {cfgClassifierPrompt} {activePresetId} {cfgVadEnabled} {ollamaReachable} {ollamaModelPresent} {ollamaModelPartial} {ollamaPullState} actions={modesActions()} />
+    <ModesTab {cfgBackend} {cfgCleanupMode} {cfgVocabulary} {cfgAntiVocabulary} {cfgVadEnabled} {cfgFormatPunct} {cfgFormatLiteral} {cfgFormatStripFillers} {cfgFormatStripArtifacts} {cfgFormatCapitalize} actions={modesActions()} />
   {/if}
 
   {#if activeTab === 'settings'}

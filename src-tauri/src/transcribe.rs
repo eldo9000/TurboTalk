@@ -611,7 +611,7 @@ pub trait TranscriptionBackend: Send + Sync {
 /// Note on VAD and hallucination filter:
 ///   The Silero VAD pre-filter is whisper-server-specific; Parakeet has its own
 ///   silence handling. The post-hoc hallucination filter runs on all backends
-///   (no harm, family-agnostic). The Chaperone cleanup (cleanup.rs) runs on the
+///   (no harm, family-agnostic). The cleanup post-processor (cleanup.rs) runs on the
 ///   output of all backends — also family-agnostic.
 fn build_backend(
     cfg: &crate::settings::Config,
@@ -1557,7 +1557,7 @@ fn seg_transcriber_worker(
         let index = seg.index;
         let text = transcribe_one_segment(&seg);
         // Live draft preview (prototype): surface each segment's text to the
-        // overlay the moment it lands, before assembly + Chaperone cleanup.
+        // overlay the moment it lands, before assembly + cleanup.
         // Goes only to the overlay webview — same trust boundary as paste.
         // Empty / rejected segments are skipped so the draft doesn't flicker.
         if let Some(app) = app.as_ref() {

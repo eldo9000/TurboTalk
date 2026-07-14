@@ -7,12 +7,13 @@
 //   transcribe  whisper.cpp sidecar wrapper
 //   paste       active-app text injection
 //   hotkey      global push-to-talk binding (CGEventTap — Right Alt)
-//   cleanup     LLM postprocessor (Chaperone Layer)
+// cleanup     Text post-processor (formatting, anti-vocabulary)
 //   settings    config persistence
 
 pub mod audio;
 pub mod audio_finalizer;
 pub mod cleanup;
+pub mod pre_format;
 pub mod diagnostic_log;
 pub mod diagnostics;
 pub mod hotkey;

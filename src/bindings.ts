@@ -125,11 +125,8 @@ export const commands = {
 	 */
 	pingOllama: () => typedError<Reachable, string>(__TAURI_INVOKE("ping_ollama")),
 	/**
-	 *  Fire-and-forget: loads the configured classifier model into Ollama's memory
-	 *  so the first real dictation doesn't cold-start. Returns immediately — the
-	 *  generate runs on a background thread and its result is discarded.
-	 * 
-	 *  Only does anything when cleanup mode is Chaperone; safe to call at any time.
+	 *  Legacy — no-op. The old Ollama classifier has been removed; TextFormatter
+	 *  mode does not use Ollama for cleanup.
 	 */
 	prewarmOllama: () => __TAURI_INVOKE<void>("prewarm_ollama"),
 	/**
@@ -273,38 +270,40 @@ export type BugReportResult = {
 
 export type CleanupConfig = {
 	mode: CleanupMode,
+	// Ollama URL for IPC commands (ping, check, pull models).
 	ollama_url: string,
 	classifier_model: string,
-	// Domain-specific words/phrases injected into the classifier context.
-	vocabulary?: string[],
 	/**
-	 *  Classifier prompt template. Use `{text}` as the transcript placeholder;
-	 *  it is wrapped in `<transcript>` delimiters by the cleanup module so the
-	 *  user's spoken text cannot be misread as classifier instructions.
+	 *  Domain vocabulary for ASR prompt bias — words/phrases whisper tends to
+	 *  mishear, passed as `--prompt` during transcription.
 	 */
-	classifier_prompt?: string,
-	// Simple mode: strip common filler words (um, uh, er, hmm).
-	strip_fillers?: boolean,
+	vocabulary?: string[],
 	/**
 	 *  Anti-vocabulary: word-to-word replacement or word removal applied after
 	 *  all other cleanup. Each entry is either a bare word (removed entirely)
-	 *  or a "from→to" pair (replaced). Intended for persistent spelling errors
-	 *  from the transcriber (e.g. "groq→grok").
+	 *  or a "from=to" pair (replaced). Intended for persistent spelling errors
+	 *  from the transcriber (e.g. "groq=grok").
 	 */
 	antivocabulary?: string[],
-	// Simple mode: append a period if the transcript ends without punctuation.
-	append_period?: boolean,
-	// Simple mode: remove trailing Whisper artifacts like " ." and " ...".
-	strip_whisper_artifacts?: boolean,
+	// TextFormatter: convert spoken punctuation ("type comma" → ",")
+	format_punctuation?: boolean,
+	// TextFormatter: convert slash commands and @mentions
+	format_literal?: boolean,
+	// TextFormatter: strip filler words (um, uh, er, hmm, hm)
+	format_strip_fillers?: boolean,
+	// TextFormatter: strip trailing whisper artifacts ( "...", " .")
+	format_strip_artifacts?: boolean,
+	// TextFormatter: capitalize the first letter
+	format_capitalize?: boolean,
 };
 
 /**
- *  Cleanup mode. Persisted as lowercase ("off" / "regex" / "chaperone").
+ *  Cleanup mode. Persisted as lowercase ("off" / "text_formatter").
  * 
  *  Typed so a typo in config.toml fails to deserialize rather than silently
  *  degrading to a default behavior.
  */
-export type CleanupMode = "off" | "regex" | "chaperone";
+export type CleanupMode = "off" | "text_formatter";
 
 export type Config = {
 	whisper?: WhisperConfig,
@@ -403,12 +402,11 @@ export type DiagnosticsResult = {
 	 *  description if it could not be resolved.
 	 */
 	sidecar_path: string,
-	// Cleanup mode from Settings: "off", "regex", or "chaperone".
+	// Cleanup mode from Settings: "off", "regex", or "text_formatter".
 	cleanup_mode: string,
 	/**
-	 *  Only populated when `cleanup_mode == "chaperone"`. "reachable" if
-	 *  Ollama responded to an HTTP GET within 2 s; "unreachable: <reason>"
-	 *  otherwise. Empty string when not checked.
+	 *  Ollama reachability (legacy — Ollama is no longer used by the
+	 *  TextFormatter mode). Kept for diagnostics on existing Ollama config.
 	 */
 	ollama_status: string,
 	// "supported" on macOS; "unsupported" on other platforms.

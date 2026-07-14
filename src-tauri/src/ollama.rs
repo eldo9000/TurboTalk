@@ -14,6 +14,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::io::BufRead;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 // ── Response structs ──────────────────────────────────────────────────────────
 
@@ -71,6 +73,50 @@ const OLLAMA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 const PULL_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+// ── HTTP client (moved from cleanup.rs when the LLM classifier was removed) ──
+
+static OLLAMA_CLIENT: OnceLock<anyhow::Result<reqwest::blocking::Client>> = OnceLock::new();
+
+fn ollama_client() -> Option<&'static reqwest::blocking::Client> {
+    let result = OLLAMA_CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(2))
+            .build()
+            .map_err(|e| anyhow::anyhow!("failed to build shared HTTP client: {e}"))
+    });
+    match result {
+        Ok(client) => Some(client),
+        Err(e) => {
+            tracing::error!("[ollama] {e}");
+            None
+        }
+    }
+}
+
+/// Reject any URL that does not point at a loopback address. Allowlist: only
+/// `localhost`, `127.0.0.1`, and `::1` are permitted hosts.
+pub(crate) fn validate_ollama_url(raw: &str) -> anyhow::Result<url::Url> {
+    let parsed = url::Url::parse(raw.trim())
+        .map_err(|e| anyhow::anyhow!("invalid Ollama URL {raw:?}: {e}"))?;
+
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        anyhow::bail!("Ollama URL must use http or https, got {scheme:?}");
+    }
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| anyhow::anyhow!("Ollama URL has no host: {raw:?}"))?;
+
+    match host {
+        "localhost" | "127.0.0.1" | "::1" | "[::1]" => Ok(parsed),
+        other => anyhow::bail!(
+            "Ollama URL host {other:?} is not on the loopback allowlist \
+             (only localhost / 127.0.0.1 / ::1 are accepted)"
+        ),
+    }
+}
+
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 /// Ping the configured Ollama instance by hitting GET {ollama_url}/api/version.
@@ -80,7 +126,7 @@ const PULL_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[specta::specta]
 pub fn ping_ollama() -> Result<Reachable, String> {
     let cfg = crate::settings::load();
-    let base = match crate::cleanup::validate_ollama_url(&cfg.cleanup.ollama_url) {
+    let base = match validate_ollama_url(&cfg.cleanup.ollama_url) {
         Ok(u) => u,
         Err(_) => {
             return Ok(Reachable {
@@ -100,7 +146,7 @@ pub fn ping_ollama() -> Result<Reachable, String> {
         }
     };
 
-    let Some(client) = crate::cleanup::ollama_client() else {
+    let Some(client) = ollama_client() else {
         return Ok(Reachable {
             reachable: false,
             version: None,
@@ -144,7 +190,7 @@ pub fn ping_ollama() -> Result<Reachable, String> {
 #[specta::specta]
 pub fn check_ollama_model(model_name: String) -> Result<bool, String> {
     let cfg = crate::settings::load();
-    let base = match crate::cleanup::validate_ollama_url(&cfg.cleanup.ollama_url) {
+    let base = match validate_ollama_url(&cfg.cleanup.ollama_url) {
         Ok(u) => u,
         Err(_) => return Ok(false),
     };
@@ -154,7 +200,7 @@ pub fn check_ollama_model(model_name: String) -> Result<bool, String> {
         Err(_) => return Ok(false),
     };
 
-    let Some(client) = crate::cleanup::ollama_client() else {
+    let Some(client) = ollama_client() else {
         return Ok(false);
     };
 
@@ -202,7 +248,7 @@ fn pull_ollama_model_blocking(app: tauri::AppHandle, model_name: String) -> Resu
     tracing::info!("[ollama-pull] starting pull for model={model_name}");
 
     let cfg = crate::settings::load();
-    let base = crate::cleanup::validate_ollama_url(&cfg.cleanup.ollama_url)
+    let base = validate_ollama_url(&cfg.cleanup.ollama_url)
         .map_err(|e| format!("invalid Ollama URL: {e}"))?;
 
     let endpoint = base
@@ -315,45 +361,11 @@ fn pull_ollama_model_blocking(app: tauri::AppHandle, model_name: String) -> Resu
     Err(msg.into())
 }
 
-/// Fire-and-forget: loads the configured classifier model into Ollama's memory
-/// so the first real dictation doesn't cold-start. Returns immediately — the
-/// generate runs on a background thread and its result is discarded.
-///
-/// Only does anything when cleanup mode is Chaperone; safe to call at any time.
+/// Legacy — no-op. The old Ollama classifier has been removed; TextFormatter
+/// mode does not use Ollama for cleanup.
 #[tauri::command]
 #[specta::specta]
-pub async fn prewarm_ollama() {
-    let cfg = crate::settings::load();
-    if cfg.cleanup.mode != crate::settings::CleanupMode::Chaperone {
-        return;
-    }
-    let model = cfg.cleanup.classifier_model.clone();
-    let url = cfg.cleanup.ollama_url.clone();
-
-    // Spawn on the blocking thread pool and immediately drop the handle —
-    // caller returns before the generate completes.
-    std::mem::drop(tokio::task::spawn_blocking(move || {
-        let base = match crate::cleanup::validate_ollama_url(&url) {
-            Ok(u) => u,
-            Err(_) => return,
-        };
-        let endpoint = match base.join("api/generate") {
-            Ok(u) => u,
-            Err(_) => return,
-        };
-        let Some(client) = crate::cleanup::ollama_client() else { return };
-        let body = serde_json::json!({
-            "model": model,
-            "prompt": "hi",
-            "stream": false,
-            "options": { "num_predict": 1 },
-        });
-        match client.post(endpoint).json(&body).timeout(std::time::Duration::from_secs(60)).send() {
-            Ok(_) => tracing::info!("[ollama-prewarm] model loaded"),
-            Err(e) => tracing::debug!("[ollama-prewarm] skipped: {e}"),
-        }
-    }));
-}
+pub async fn prewarm_ollama() {}
 
 /// Scan `~/.ollama/models/blobs/` for any `*-partial*` files, which are left
 /// behind when an `ollama pull` is interrupted mid-download. Returns `true` if

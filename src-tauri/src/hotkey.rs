@@ -1175,7 +1175,7 @@ pub(crate) mod common {
                             }
 
                             // Stage 2: cleanup as its own explicit call site.
-                            let final_text = crate::cleanup::process(&raw_text, &app);
+                            let final_text = crate::cleanup::process(&raw_text);
                             tracing::info!(
                                 "[cleanup   job_id={:?}] final transcript ready ({} chars)",
                                 job_id_opt,
@@ -1276,10 +1276,9 @@ pub(crate) mod common {
                             }
 
                             if !seg_text.is_empty() {
-                                let final_text = crate::cleanup::process(&seg_text, &app);
+                                let final_text = crate::cleanup::process(&seg_text);
 
-                                // Re-check: cleanup::process can block ~2s on
-                                // Ollama. If a new job started during that
+                                // Re-check: a new job may have started during process.
                                 // window, the old recovery must not emit,
                                 // paste, or touch the tray — the new job owns
                                 // the UI state now.
