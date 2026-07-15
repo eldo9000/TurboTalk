@@ -207,17 +207,6 @@ pub(crate) mod common {
     }
 
     /// Show the main TurboTalk window and switch to the History tab.
-    /// Called automatically when a transcription rejection fires so the
-    /// user can immediately inspect the problematic text.
-    pub(super) fn open_main_history(app: &AppHandle) {
-        if let Some(win) = app.get_webview_window("main") {
-            let _ = win.show();
-            let _ = win.set_focus();
-        }
-        let _ = app.emit("open-history", ());
-        tracing::info!("[hotkey] opened main window to History tab");
-    }
-
     /// Cell shared between `ptt_down` and `ptt_up` so the upstroke worker can
     /// recover the `job_id` allocated by the downstroke worker. Holds `None`
     /// when no recording is in flight. Guarded by `parking_lot::Mutex`; the
@@ -1467,6 +1456,7 @@ pub(crate) mod common {
 pub(super) enum Controller {
     Hold(HoldController),
     Toggle(ToggleController),
+    Auto(AutoController),
 }
 
 impl Controller {
@@ -1476,10 +1466,10 @@ impl Controller {
         tray_icon: &tauri::tray::TrayIcon,
         app: &tauri::AppHandle,
     ) -> Self {
-        if mode == "toggle" {
-            Self::Toggle(ToggleController::new(recorder, tray_icon, app))
-        } else {
-            Self::Hold(HoldController::new(recorder, tray_icon, app))
+        match mode {
+            "toggle" => Self::Toggle(ToggleController::new(recorder, tray_icon, app)),
+            "auto" => Self::Auto(AutoController::new(recorder, tray_icon, app)),
+            _ => Self::Hold(HoldController::new(recorder, tray_icon, app)),
         }
     }
 
@@ -1487,6 +1477,7 @@ impl Controller {
         match self {
             Self::Hold(c) => c.press(),
             Self::Toggle(c) => c.press(),
+            Self::Auto(c) => c.press(),
         }
     }
 
@@ -1494,6 +1485,7 @@ impl Controller {
         match self {
             Self::Hold(c) => c.release(),
             Self::Toggle(c) => c.release(),
+            Self::Auto(c) => c.release(),
         }
     }
 
@@ -1503,6 +1495,7 @@ impl Controller {
         match self {
             Self::Hold(c) => c.arm_hold_cancel_if_busy(),
             Self::Toggle(c) => c.arm_hold_cancel_if_busy(),
+            Self::Auto(c) => c.arm_hold_cancel_if_busy(),
         }
     }
 
@@ -1511,6 +1504,7 @@ impl Controller {
         match self {
             Self::Hold(c) => c.cancel_if_busy(),
             Self::Toggle(c) => c.cancel_if_busy(),
+            Self::Auto(c) => c.cancel_if_busy(),
         }
     }
 }
@@ -1641,6 +1635,87 @@ impl ToggleController {
     pub fn cancel_if_busy(&self) {
         if self.recorder.state().is_busy() {
             common::trigger_cancel(&self.recorder, &self.tray_icon, &self.app);
+        }
+    }
+}
+
+/// Auto-mode controller — hybrid: quick tap toggles, long hold acts as PTT.
+///
+/// Delegates to the existing Hold and Toggle controllers based on press
+/// duration:
+///
+/// | Action | State | Delegate | Effect |
+/// |---|---|---|---|
+/// | Press | Idle | `Hold::press` | Start recording |
+/// | Release < threshold | Idle→Recording | `Toggle::release` | No-op — continue hands-free |
+/// | Release ≥ threshold | Idle→Recording | `Hold::release` | Stop (PTT) |
+/// | Press | Recording | `Toggle::press` | Stop (toggle) |
+/// | Release | Any | `Hold::release` if held; else no-op | Stop or continue |
+///
+/// The threshold defaults to 400 ms and is configurable via
+/// `HotkeyConfig::auto_tap_threshold_ms`.
+pub(super) struct AutoController {
+    hold: HoldController,
+    toggle: ToggleController,
+    /// Epoch millis when the most recent press occurred (idle → recording).
+    press_time_ms: std::sync::atomic::AtomicU64,
+}
+
+impl AutoController {
+    fn new(
+        recorder: &std::sync::Arc<crate::recorder::Recorder>,
+        tray_icon: &tauri::tray::TrayIcon,
+        app: &tauri::AppHandle,
+    ) -> Self {
+        Self {
+            hold: HoldController::new(recorder, tray_icon, app),
+            toggle: ToggleController::new(recorder, tray_icon, app),
+            press_time_ms: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    pub fn press(&self) {
+        if self.hold.recorder.state().is_busy() {
+            // Already recording — delegate to Toggle to stop.
+            self.toggle.press();
+        } else {
+            // Idle — start recording.
+            self.press_time_ms
+                .store(common::now_ms(), std::sync::atomic::Ordering::Release);
+            self.hold.press();
+        }
+    }
+
+    pub fn release(&self) {
+        // Reload threshold from settings (may have been changed at runtime).
+        let cfg = crate::settings::load();
+        let threshold = cfg.hotkey.auto_tap_threshold_ms;
+        let elapsed = common::now_ms()
+            .saturating_sub(self.press_time_ms.load(std::sync::atomic::Ordering::Acquire));
+
+        if elapsed < threshold {
+            // Quick tap — recording continues hands-free (toggle-style).
+            self.toggle.release();
+        } else {
+            // Long hold — stop on release (hold-style).
+            self.hold.release();
+        }
+    }
+
+    /// Arm hold-to-cancel if busy. Auto mode can receive a key-up, so arm
+    /// ptt_up suppression like Hold mode does.
+    pub fn arm_hold_cancel_if_busy(&self) {
+        if common::should_arm_hold_cancel(&self.hold.recorder) {
+            common::arm_ptt_up_suppression();
+            common::arm_hold_cancel(&self.hold.recorder, &self.hold.tray_icon, &self.hold.app);
+        }
+    }
+
+    /// Cancel any in-flight recording. Arms ptt_up suppression like Hold.
+    pub fn cancel_if_busy(&self) {
+        if self.hold.recorder.state().is_busy() {
+            common::arm_ptt_up_suppression();
+            common::trigger_cancel(&self.hold.recorder, &self.hold.tray_icon, &self.hold.app);
         }
     }
 }
@@ -2103,26 +2178,7 @@ mod imp {
                 controller.cancel_if_busy();
             }
 
-            // DEBUG: F19 (0x50 = 80) triggers simulated error panel.
-            // Cancels any active recording first so the error accurately
-            // simulates a real rejection during dictation.
-            if keycode == 80 {
-                controller.cancel_if_busy();
-                use tauri::Emitter;
-                tracing::info!("[debug] F19 — cancel + emit simulated rejection");
-                let _ = app.emit(
-                    "transcription-rejected",
-                    serde_json::json!({
-                        "text": "[Debug] F19 triggered error",
-                        "reason": "Debug trigger via F19 key",
-                        "label": "Error detected",
-                        "pasted": true,
-                        "flaky": true,
-                    }),
-                );
-                common::play_chime(common::ChimeEvent::Error);
-                common::open_main_history(app);
-            }
+
         }
 
         if let Some(fkc) = fkey_code {

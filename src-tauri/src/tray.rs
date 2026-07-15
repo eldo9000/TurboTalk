@@ -220,8 +220,8 @@ pub fn build(app: &tauri::App) -> tauri::Result<TrayIcon> {
                 let rec = app.state::<crate::RecorderState>();
                 if matches!(rec.inner().state(), crate::recorder::State::Recording) {
                     let hk = app.state::<crate::HotkeyState>();
-                    let hold_mode = hk.read().mode == "hold";
-                    if hold_mode {
+                    let m = hk.read().mode.clone();
+                    if m == "hold" || m == "auto" {
                         crate::hotkey::arm_ptt_up_suppression();
                     }
                     crate::hotkey::trigger_cancel(rec.inner(), tray, &app);

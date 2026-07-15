@@ -333,6 +333,7 @@
   let cfgHotkeyKey         = $state('right_option');
   let cfgHotkeyMode        = $state('hold');
   let cfgCancelOnEsc       = $state(true);
+  let cfgAutoTapThreshold  = $state(400);
   let cfgCancelOnHold      = $state(true);
 
   let hotkeySide           = $state('right');  // 'left' | 'right'
@@ -695,7 +696,7 @@
     return {
       whisper: { bin: cfgBin, model: cfgModel, models: cfgModels, vad_enabled: cfgVadEnabled },
       audio: { device: cfgDevice, idle_timeout_secs: cfgIdleTimeout },
-      hotkey: { key: cfgHotkeyKey, mode: cfgHotkeyMode, cancel_on_esc: cfgCancelOnEsc, cancel_on_hold: cfgCancelOnHold },
+      hotkey: { key: cfgHotkeyKey, mode: cfgHotkeyMode, cancel_on_esc: cfgCancelOnEsc, cancel_on_hold: cfgCancelOnHold, auto_tap_threshold_ms: cfgAutoTapThreshold },
       theme: cfgTheme,
       history_auto_delete: cfgHistoryAutoDelete,
       save_history: cfgSaveHistory,
@@ -844,6 +845,7 @@
     cfgHotkeyKey         = cfg.hotkey?.key                     ?? defaultHotkeyKey();
     cfgHotkeyMode        = cfg.hotkey?.mode                    ?? defaultHotkeyMode();
     cfgCancelOnEsc       = cfg.hotkey?.cancel_on_esc            ?? true;
+    cfgAutoTapThreshold  = cfg.hotkey?.auto_tap_threshold_ms    ?? 400;
     cfgCancelOnHold      = cfg.hotkey?.cancel_on_hold           ?? true;
     const parsed         = parseHotkeyKey(cfgHotkeyKey);
     hotkeySide           = parsed.side;
@@ -1158,6 +1160,7 @@
       cfgHotkeyKey         = initialCfg.hotkey?.key                     ?? defaultHotkeyKey();
       cfgHotkeyMode        = initialCfg.hotkey?.mode                    ?? defaultHotkeyMode();
       cfgCancelOnEsc       = initialCfg.hotkey?.cancel_on_esc            ?? true;
+      cfgAutoTapThreshold  = initialCfg.hotkey?.auto_tap_threshold_ms    ?? 400;
       cfgCancelOnHold      = initialCfg.hotkey?.cancel_on_hold           ?? true;
       cfgTheme             = initialCfg.theme                            ?? 'auto';
       cfgHistoryAutoDelete = initialCfg.history_auto_delete             ?? '10d';
@@ -1311,6 +1314,7 @@
         bind:cfgHotkeyMode
         bind:cfgCancelOnEsc
         bind:cfgCancelOnHold
+        bind:cfgAutoTapThreshold
         bind:cfgTheme
         bind:cfgLaunchLogin
         bind:cfgShowSplash

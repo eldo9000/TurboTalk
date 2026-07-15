@@ -286,7 +286,7 @@ impl Default for AudioConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct HotkeyConfig {
     pub key: String, // "right_option" | "right_control" | "f13"–"f19" (mac) / "f13"–"f24" (win) | etc.
-    pub mode: String, // "hold" | "toggle"
+    pub mode: String, // "hold" | "toggle" | "auto"
     /// Cancel an in-flight recording when the user presses Escape. Read on
     /// every keystroke from the global hotkey listener — only acts while the
     /// recorder is busy, so Escape passes through to the focused app
@@ -298,6 +298,15 @@ pub struct HotkeyConfig {
     /// Transcribing. Lets the user abort without reaching for Escape.
     #[serde(default = "default_true")]
     pub cancel_on_hold: bool,
+    /// Auto mode only: tap threshold in ms. A press-release shorter than
+    /// this is treated as a toggle tap (start → hands-free); longer is
+    /// treated as push-to-talk (start on press, stop on release).
+    #[serde(default = "default_auto_threshold")]
+    pub auto_tap_threshold_ms: u64,
+}
+
+fn default_auto_threshold() -> u64 {
+    400
 }
 
 impl Default for HotkeyConfig {
@@ -317,6 +326,7 @@ impl Default for HotkeyConfig {
             mode: mode.into(),
             cancel_on_esc: true,
             cancel_on_hold: true,
+            auto_tap_threshold_ms: 400,
         }
     }
 }

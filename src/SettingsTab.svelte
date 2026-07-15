@@ -7,6 +7,7 @@
     cfgHotkeyMode = $bindable(),
     cfgCancelOnEsc = $bindable(),
     cfgCancelOnHold = $bindable(),
+    cfgAutoTapThreshold = $bindable(),
     cfgTheme = $bindable(),
     cfgLaunchLogin = $bindable(),
     cfgShowSplash = $bindable(),
@@ -96,10 +97,10 @@
   <!-- Recording -->
   <div class="tt-section">
     <div class="subsection-hd"><span class="subsection-hd-title">Recording</span></div>
-    <div class="tt-row tt-row-field" data-tip="Hold: record while key is held. Toggle: press once to start, again to stop">
+    <div class="tt-row tt-row-field" data-tip="Hold: record while key is held. Toggle: press once to start, again to stop. Auto: tap to start/tap to stop, or hold to talk">
       <div class="tt-seg">
-        {#each [['hold','Hold'],['toggle','Toggle']] as [v, lbl], i}
-          <button onclick={() => { cfgHotkeyMode = v; onSaveSettings(); }} class={seg(cfgHotkeyMode === v, i, 2)}>{lbl}</button>
+        {#each [['hold','Hold'],['toggle','Toggle'],['auto','Auto']] as [v, lbl], i}
+          <button onclick={() => { cfgHotkeyMode = v; onSaveSettings(); }} class={seg(cfgHotkeyMode === v, i, 3)}>{lbl}</button>
         {/each}
       </div>
       <div class="tt-key-sel" data-tip="Microphone to record from">
@@ -115,6 +116,26 @@
         />
       </div>
     </div>
+    {#if cfgHotkeyMode === 'auto'}
+      <div class="tt-row tt-row-col" style="margin-top:6px">
+        <label for="auto-threshold" class="tt-lbl tt-lbl-fixed" style="width:auto">
+          Tap threshold: {cfgAutoTapThreshold} ms
+        </label>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input
+            id="auto-threshold"
+            type="range"
+            min="150"
+            max="1000"
+            step="50"
+            value={cfgAutoTapThreshold}
+            oninput={(e) => { cfgAutoTapThreshold = Number(e.currentTarget.value); onSaveSettings(); }}
+            style="flex:1;height:4px;accent-color:var(--accent,#0066cc)"
+          />
+        </div>
+        <p class="tt-desc">Shorter = more responsive to taps; longer = more tolerant of slow presses</p>
+      </div>
+    {/if}
   </div>
 
   <!-- Cancel shortcuts -->

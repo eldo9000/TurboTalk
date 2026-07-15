@@ -472,6 +472,12 @@ export type HotkeyConfig = {
 	 *  Transcribing. Lets the user abort without reaching for Escape.
 	 */
 	cancel_on_hold?: boolean,
+	/**
+	 *  Auto mode only: tap threshold in ms. A press-release shorter than
+	 *  this is treated as a toggle tap (start → hands-free); longer is
+	 *  treated as push-to-talk (start on press, stop on release).
+	 */
+	auto_tap_threshold_ms?: number,
 };
 
 /**

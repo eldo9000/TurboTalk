@@ -4,6 +4,16 @@
     filteredEntry, recording, transcribing, hotkeyLabel, cfgHotkeyMode,
     actions,
   } = $props();
+
+  function fadeIfOverflow(node) {
+    function check() {
+      node.classList.toggle('tt-history-text-fade', node.scrollHeight > node.clientHeight);
+    }
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(node);
+    return { destroy() { ro.disconnect(); } };
+  }
 </script>
 
 <div class="tt-history flex-1 min-h-0 flex flex-col">
@@ -32,7 +42,9 @@
       {:else}
         <kbd class="tt-kbd">{hotkeyLabel}</kbd>
         <p class="tt-history-empty-hint">
-          {cfgHotkeyMode === 'toggle' ? 'Press to start · press again to stop' : 'Hold to record'}
+          {cfgHotkeyMode === 'toggle' ? 'Press to start · press again to stop'
+            : cfgHotkeyMode === 'auto' ? 'Tap to start · tap again to stop · hold to talk'
+            : 'Hold to record'}
         </p>
       {/if}
     </div>
@@ -45,7 +57,7 @@
           class="tt-history-item"
           class:tt-history-item-flaky={item.flaky}
         >
-          <span class="tt-history-text" class:tt-history-text-hidden={copiedTs === item.ts}>
+          <span use:fadeIfOverflow class="tt-history-text" class:tt-history-text-hidden={copiedTs === item.ts}>
             {item.text}
           </span>
           {#if copiedTs === item.ts}

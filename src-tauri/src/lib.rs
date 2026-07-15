@@ -1258,8 +1258,8 @@ fn cancel_recording(
     // Hold mode + Recording: a matching key-release will dispatch ptt_up.
     // Arm one suppression slot so it no-ops instead of cascading into
     // CANCEL_PENDING. Toggle mode releases are already no-ops, so skip.
-    let hold_mode = hotkey_state.read().mode == "hold";
-    if hold_mode && matches!(state, recorder::State::Recording) {
+    let hotkey_mode = hotkey_state.read().mode.clone();
+    if (hotkey_mode == "hold" || hotkey_mode == "auto") && matches!(state, recorder::State::Recording) {
         hotkey::arm_ptt_up_suppression();
     }
     hotkey::trigger_cancel(rec, tray, &app);
@@ -1590,7 +1590,10 @@ pub fn run() {
                         // `trigger_cancel` callers in `cancel_recording` and the tray
                         // click handler. Toggle-mode releases are already no-ops.
                         if matches!(level_rec.state(), recorder::State::Recording)
-                            && level_app.state::<HotkeyState>().read().mode == "hold"
+                            && {
+                                let hkm = level_app.state::<HotkeyState>().read().mode.clone();
+                                hkm == "hold" || hkm == "auto"
+                            }
                         {
                             hotkey::arm_ptt_up_suppression();
                         }
