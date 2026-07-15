@@ -1206,6 +1206,15 @@
       window.addEventListener('keydown', handleKeydown);
       addCleanup(() => window.removeEventListener('keydown', handleKeydown));
 
+      function handleContextMenu(e) {
+        const tag = e.target?.tagName;
+        if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+          e.preventDefault();
+        }
+      }
+      window.addEventListener('contextmenu', handleContextMenu);
+      addCleanup(() => window.removeEventListener('contextmenu', handleContextMenu));
+
       listenTracked('ptt-down',                () => applyBackendEvent('ptt-down'));
       listenTracked('ptt-up',                  () => applyBackendEvent('ptt-up'));
       listenTracked('download-progress',        (e) => applyBackendEvent('download-progress', e.payload));

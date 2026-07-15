@@ -378,6 +378,32 @@ re-enabling the tap through a statically stored raw Mach port pointer.
 
 **Proof:** `npm run typecheck` passes. `npm run build` passes.
 
+## This session (2026-07-15) — Disable right-click and text selection globally
+
+**Added two protections to prevent accidental right-click menus and text highlighting on non-input areas:**
+
+- `src/app.css`: Added `user-select: none` to `html, body, #app` to disable text highlighting everywhere
+- `src/app.css`: Added `input, textarea { user-select: text }` to preserve normal text selection in text fields
+- `src/App.svelte`: Added `contextmenu` event listener on `window` that prevents default unless the target is an `INPUT` or `TEXTAREA` element
+
+**Exceptions preserved:** The two textareas in ModesTab (custom vocabulary, anti-vocabulary) and the bug-note textarea in ResetModal continue to support right-click, text selection, copy/paste, and all standard text field interactions.
+
+**Proof:** `npm run tauri build` succeeds. Release bundle built at `target/release/bundle/macos/Turbo Talk.app`.
+
+## This session (2026-07-15) — Reflow Recording & Hotkey controls
+
+Reworked the Settings page's Recording & Hotkey section so the four controls are independent rows: the side and recording-mode button selectors remain at the top, while the hotkey and microphone dropdowns are stacked at the bottom. All four controls are right-aligned.
+
+Follow-up: added left-side labels for all four rows and constrained the three-option recording-mode selector to the available width so `Auto` remains visible.
+
+Additional follow-up: allowed the recording-mode buttons to shrink within the row and constrained individual buttons against overflow; added the `Startup` label to the Launch at Login / Show Splash row.
+
+Final follow-up: removed the truncation/ellipsis behavior from the recording-mode buttons so `Hold`, `Toggle`, and `Auto` render at full width.
+
+Root cause follow-up: the generic 120px segmented-control rule was overriding the recording-mode selector. Excluded `.tt-seg-recording` from that rule so its 220px width is preserved.
+
+**Proof:** `npm run typecheck` and `git diff --check` pass.
+
 ## Outstanding
 - Tray icon may still not be visible on user's display — needs user confirmation. Check both monitors and any Bartender/Ice/Hidden Bar software.
 - Tray icon pixel size for macOS should be 22×22 (not 44×44) — low priority now that title text is visible.

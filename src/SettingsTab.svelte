@@ -64,20 +64,12 @@
   <!-- Recording & Hotkey -->
   <div class="tt-section">
     <div class="subsection-hd"><span class="subsection-hd-title">Recording &amp; Hotkey</span></div>
-    <div class="tt-row tt-row-field" data-tip="Which key triggers push-to-talk. Using a foot pedal or macro key? Map it to F13–F19 in your device software, then pick it here.">
+    <div class="tt-row tt-row-field tt-recording-button-row" data-tip="Which key triggers push-to-talk. Using a foot pedal or macro key? Map it to F13–F19 in your device software, then pick it here.">
+      <span class="tt-lbl">Hotkey side</span>
       <div class="tt-seg" class:tt-seg-dim={isUnsidedKey(hotkeyKeyPart)}>
         {#each [['left','Left'],['right','Right']] as [v, lbl], i}
           <button onclick={() => { hotkeySide = v; onApplyHotkey(); }} class={seg(hotkeySide === v, i, 2)}>{lbl}</button>
         {/each}
-      </div>
-      <div class="tt-key-sel">
-        <Select
-          items={hotkeyKeyItems}
-          bind:value={hotkeyKeyPart}
-          onchange={onApplyHotkey}
-          variant="flat"
-          size="sm"
-        />
       </div>
     </div>
     {#if hotkeyKeyPart.startsWith('mouse_')}
@@ -92,23 +84,12 @@
         </div>
       {/if}
     {/if}
-    <div class="tt-row tt-row-field" data-tip="Hold: record while key is held. Toggle: press once to start, again to stop. Auto: tap to start/tap to stop, or hold to talk">
+    <div class="tt-row tt-row-field tt-recording-button-row" data-tip="Hold: record while key is held. Toggle: press once to start, again to stop. Auto: tap to start/tap to stop, or hold to talk">
+      <span class="tt-lbl">Recording mode</span>
       <div class="tt-seg tt-seg-recording">
         {#each [['hold','Hold'],['toggle','Toggle'],['auto','Auto']] as [v, lbl], i}
           <button onclick={() => { cfgHotkeyMode = v; onSaveSettings(); }} class={seg(cfgHotkeyMode === v, i, 3)}>{lbl}</button>
         {/each}
-      </div>
-      <div class="tt-key-sel" data-tip="Microphone to record from">
-        <Select
-          items={[
-            { value: 'default', label: 'System default' },
-            ...audioDevices.map(d => ({ value: d, label: d })),
-          ]}
-          bind:value={cfgDevice}
-          onchange={() => onSaveSettings()}
-          variant="flat"
-          size="sm"
-        />
       </div>
     </div>
     {#if cfgHotkeyMode === 'auto'}
@@ -142,6 +123,33 @@
           onclick={() => { cfgCancelOnHold = !cfgCancelOnHold; onSaveSettings(); }}
           class="tt-multi-btn" class:tt-multi-on={cfgCancelOnHold}
           data-tip="Hold the hotkey for ~1 second during recording to cancel">Hold key</button>
+      </div>
+    </div>
+    <div class="tt-row tt-row-field tt-recording-select-row" data-tip="Which key triggers push-to-talk">
+      <span class="tt-lbl">Hotkey</span>
+      <div class="tt-key-sel">
+        <Select
+          items={hotkeyKeyItems}
+          bind:value={hotkeyKeyPart}
+          onchange={onApplyHotkey}
+          variant="flat"
+          size="sm"
+        />
+      </div>
+    </div>
+    <div class="tt-row tt-row-field tt-recording-select-row" data-tip="Microphone to record from">
+      <span class="tt-lbl">Microphone</span>
+      <div class="tt-key-sel">
+        <Select
+          items={[
+            { value: 'default', label: 'System default' },
+            ...audioDevices.map(d => ({ value: d, label: d })),
+          ]}
+          bind:value={cfgDevice}
+          onchange={() => onSaveSettings()}
+          variant="flat"
+          size="sm"
+        />
       </div>
     </div>
   </div>
@@ -277,7 +285,8 @@
       </div>
     </div>
     <div class="tt-row tt-row-field" data-tip="Start TurboTalk automatically when you log in to macOS">
-      <div class="tt-multi tt-system-actions">
+      <span class="tt-lbl">Startup</span>
+      <div class="tt-multi tt-system-actions tt-startup-actions">
         <button
           onclick={() => { cfgLaunchLogin = !cfgLaunchLogin; onSaveSettings(); }}
           class="tt-multi-btn" class:tt-multi-on={cfgLaunchLogin}>Launch at Login</button>
