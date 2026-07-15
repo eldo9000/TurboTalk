@@ -401,9 +401,8 @@ import { invoke } from '@tauri-apps/api/core';
     }).then(u => uns.push(u));
 
     listen('recording-discarded', (e) => {
-      const guarded = skipUnlessTranscribingOrError();
-      logOverlay('event_arrived', { event: 'recording-discarded', mode, job_id: currentJobId, guarded, reason: e.payload });
-      if (guarded) return;
+      logOverlay('event_arrived', { event: 'recording-discarded', mode, job_id: currentJobId, reason: e.payload });
+      if (mode === 'idle') return;
       // empty-final-text means transcription ran but cleanup produced nothing
       // (e.g. all non-speech annotations stripped). Show feedback so the user
       // knows the system tried. Other discards (too-short, error-path) are
@@ -418,9 +417,8 @@ import { invoke } from '@tauri-apps/api/core';
     }).then(u => uns.push(u));
 
     listen('recording-cancelled', () => {
-      const guarded = skipUnlessTranscribingOrError();
-      logOverlay('event_arrived', { event: 'recording-cancelled', mode, job_id: currentJobId, guarded });
-      if (guarded) return;
+      logOverlay('event_arrived', { event: 'recording-cancelled', mode, job_id: currentJobId });
+      if (mode === 'idle') return;
       stopTranscribing('idle');
     }).then(u => uns.push(u));
 
@@ -439,9 +437,8 @@ import { invoke } from '@tauri-apps/api/core';
     }).then(u => uns.push(u));
 
     listen('device-lost', () => {
-      const guarded = skipUnlessTranscribingOrError();
-      logOverlay('event_arrived', { event: 'device-lost', mode, job_id: currentJobId, guarded });
-      if (guarded) return;
+      logOverlay('event_arrived', { event: 'device-lost', mode, job_id: currentJobId });
+      if (mode === 'idle') return;
       stopTranscribing('idle');
     }).then(u => uns.push(u));
 

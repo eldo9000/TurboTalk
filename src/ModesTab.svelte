@@ -33,64 +33,14 @@
       </div>
     </div>
 
-    <div class="tt-section tt-section-last" class:tt-muted={cfgBackend !== 'whisper'}>
-      <div class="subsection-hd"><span class="subsection-hd-title">Whisper</span></div>
-      <div class="tt-row tt-row-field" data-tip="Skip silent regions before transcription — prevents hallucination on silence and speeds up long recordings">
-        <span class="tt-lbl">Silence Filter</span>
-        <div class="tt-multi">
-          <button
-            onclick={() => actions.setVadEnabled(!cfgVadEnabled)}
-            class="tt-multi-btn" class:tt-multi-on={cfgVadEnabled}
-            disabled={cfgBackend !== 'whisper'}
-            data-tip="Silero VAD pre-filter — when on, whisper-server skips silent regions before transcribing">Skip silent regions (VAD)</button>
-        </div>
-      </div>
-      <div class="tt-row tt-row-col">
-        <label for="custom-vocabulary" class="tt-lbl tt-lbl-fixed">Custom vocabulary</label>
-        <textarea
-          id="custom-vocabulary"
-          value={cfgVocabulary}
-          onchange={(e) => actions.setVocabulary(e.currentTarget.value)}
-          rows="4"
-          placeholder={"One word or phrase per line…\nTurbo Talk\nOllama\ggml-base"}
-          class="tt-input tt-mono"
-          disabled={cfgBackend !== 'whisper'}
-          spellcheck="false"
-        ></textarea>
-        <p class="tt-desc">Domain terms Whisper tends to mishear. Applied as <code class="tt-code">--prompt</code> bias every transcription.</p>
-      </div>
-      {#if cfgBackend !== 'whisper'}
-        <p class="tt-yellow">Silence Filter and Custom vocabulary require the Whisper backend. Switch to Whisper in Models → Transcription Engine.</p>
-      {/if}
-    </div>
-
-    <div class="tt-section tt-section-last">
-      <div class="subsection-hd"><span class="subsection-hd-title">Replacements</span></div>
-      <div class="tt-row tt-row-col">
-        <label for="anti-vocabulary" class="tt-lbl tt-lbl-fixed">Word list</label>
-        <textarea
-          id="anti-vocabulary"
-          value={cfgAntiVocabulary}
-          onchange={(e) => actions.setAntiVocabulary(e.currentTarget.value)}
-          rows="3"
-          placeholder={"groq = grok\nfluant = fluent\naptible"}
-          class="tt-input tt-mono"
-          spellcheck="false"
-        ></textarea>
-        <p class="tt-desc">Persistent ASR misspellings. One per line: <code class="tt-code">from = to</code> replaces a word, bare <code class="tt-code">word</code> removes it. Spaces around <code class="tt-code">=</code> optional. Case-insensitive, whole-word only.</p>
-      </div>
-    </div>
-  </div>
-
-  <div class="tt-set" style="min-height:auto">
     <div class="tt-section tt-section-last">
       <div class="subsection-hd">
         <span class="subsection-hd-title">Formatting Rules</span>
       </div>
-      <p class="tt-desc" style="padding: 4px 0 10px">
+      <p class="tt-desc tt-format-desc">
         Each stage can be toggled independently. All stages run in sequence:
       </p>
-      <div class="tt-row tt-row-col tt-check-stack-list">
+      <div class="tt-row tt-row-col tt-check-stack-list tt-format-list">
         {#each [
           ['punct',   cfgFormatPunct,   actions.setFormatPunct,   'Spoken punctuation',   '"type period" → "."  ·  "type comma" → ","'],
           ['literal', cfgFormatLiteral, actions.setFormatLiteral, 'Slash & mentions',     '"slash deploy" → "/deploy"  ·  "at sign Bob" → "@Bob"'],
@@ -112,6 +62,56 @@
           </label>
         {/each}
       </div>
+    </div>
+
+    <div class="tt-section tt-section-last">
+      <div class="subsection-hd"><span class="subsection-hd-title">Replacements</span></div>
+      <div class="tt-row tt-row-col">
+        <label for="anti-vocabulary" class="tt-lbl tt-lbl-fixed">Word list</label>
+        <textarea
+          id="anti-vocabulary"
+          value={cfgAntiVocabulary}
+          onchange={(e) => actions.setAntiVocabulary(e.currentTarget.value)}
+          rows="9"
+          placeholder={"groq = grok\nfluant = fluent\naptible"}
+          class="tt-input tt-mono"
+          spellcheck="false"
+        ></textarea>
+        <p class="tt-desc">Persistent ASR misspellings. One per line: <code class="tt-code">from = to</code> replaces a word, bare <code class="tt-code">word</code> removes it. Spaces around <code class="tt-code">=</code> optional. Case-insensitive, whole-word only.</p>
+      </div>
+    </div>
+
+    <div class="tt-section tt-section-last">
+      <div class="subsection-hd">
+        <span class="subsection-hd-title">Whisper</span>
+      </div>
+      {#if cfgBackend !== 'whisper'}
+        <p class="tt-disabled-label">Disabled when using the Parakeet model.</p>
+      {/if}
+      {#if cfgBackend === 'whisper'}
+        <div class="tt-row tt-row-field" data-tip="Skip silent regions before transcription — prevents hallucination on silence and speeds up long recordings">
+          <span class="tt-lbl">Silence Filter</span>
+          <div class="tt-multi">
+            <button
+              onclick={() => actions.setVadEnabled(!cfgVadEnabled)}
+              class="tt-multi-btn" class:tt-multi-on={cfgVadEnabled}
+              data-tip="Silero VAD pre-filter — when on, whisper-server skips silent regions before transcribing">Skip silent regions (VAD)</button>
+          </div>
+        </div>
+        <div class="tt-row tt-row-col">
+          <label for="custom-vocabulary" class="tt-lbl tt-lbl-fixed">Custom vocabulary</label>
+          <textarea
+            id="custom-vocabulary"
+            value={cfgVocabulary}
+            onchange={(e) => actions.setVocabulary(e.currentTarget.value)}
+            rows="4"
+            placeholder={"One word or phrase per line…\nTurbo Talk\nOllama\ggml-base"}
+            class="tt-input tt-mono"
+            spellcheck="false"
+          ></textarea>
+          <p class="tt-desc">Domain terms Whisper tends to mishear. Applied as <code class="tt-code">--prompt</code> bias every transcription.</p>
+        </div>
+      {/if}
     </div>
   </div>
 </div>

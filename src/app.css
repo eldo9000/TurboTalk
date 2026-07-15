@@ -301,6 +301,14 @@ input, textarea {
   letter-spacing: 0.04em;
   color: var(--text-primary);
 }
+.tt-disabled-label {
+  font-size: 10.5px;
+  font-style: italic;
+  color: #888;
+  margin: 0;
+  padding-top: 0 !important;
+  padding-bottom: 4px !important;
+}
 .tt-section > :not(.subsection-hd) {
   box-sizing: border-box;
   padding-left: 28px;
@@ -484,6 +492,13 @@ html:not(.dark) .tt-multi-on { color: var(--text-primary); }
   font-size: 11px;
   line-height: 1.5;
   color: var(--text-muted);
+}
+.tt-format-desc {
+  padding: 4px 0 10px 48px !important;
+}
+.tt-format-list {
+  padding-left: 48px !important;
+  padding-right: 28px !important;
 }
 .tt-code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
