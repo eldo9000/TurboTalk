@@ -33,6 +33,11 @@ input, textarea {
   outline-offset: 2px;
   border-radius: 2px;
 }
+.tt-tab:focus,
+.tt-tab:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
 
 /* ── TurboTalk button family ──────────────────────────────────────────────
    Global because UpdateManager (separate component) needs the same look.

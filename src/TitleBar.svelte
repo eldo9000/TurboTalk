@@ -25,7 +25,7 @@
     {#each ['history', 'models', 'modes', 'settings'] as tab}
       <button
         onclick={() => onTabSwitch(tab)}
-        class="relative px-3 h-full text-[12px] font-medium capitalize transition-[color,opacity] pointer-events-auto
+        class="tt-tab relative px-3 h-full text-[12px] font-medium capitalize transition-[color,opacity] pointer-events-auto focus:outline-none focus-visible:outline-none
                {activeTab === tab
                  ? 'text-[var(--text-primary)]'
                  : 'text-[var(--text-secondary)] opacity-40 hover:opacity-90'}"

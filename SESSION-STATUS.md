@@ -420,6 +420,12 @@ Auto-mode diagnostics follow-up: added runtime logs for Auto press timestamps an
 
 Threshold range follow-up: raised the Auto tap-threshold minimum from 150ms to 200ms and adjusted the slider fill calculation to the new 200–1000ms range.
 
+Tray-open focus follow-up: removed the global focus-visible outline from the TitleBar tab buttons. Opening the main window from the tray can focus History, but it now shows only the intended active underline rather than an extra rounded outline.
+
+**Proof:** `npm run typecheck` and `git diff --check` pass.
+
+Follow-up: added an explicit `.tt-tab` focus override with `outline` and `box-shadow` suppression because the utility-only override did not remove the rendered focus ring.
+
 Auto cancel follow-up: a second press while Auto mode is recording now waits for the tap/hold decision instead of immediately toggling off. A quick second tap stops normally; a held second press reaches hold-to-cancel; a key-up after cancellation is ignored safely. The threshold label now greys out together with its disabled slider outside Auto mode.
 
 **Proof:** `cargo check --manifest-path src-tauri/Cargo.toml`, `npm run typecheck`, and `git diff --check` pass.
