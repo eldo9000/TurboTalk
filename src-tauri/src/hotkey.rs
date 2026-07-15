@@ -1657,9 +1657,14 @@ impl ToggleController {
 pub(super) struct AutoController {
     hold: HoldController,
     toggle: ToggleController,
-    /// Epoch millis when the most recent press occurred (idle → recording).
-    press_time_ms: std::sync::atomic::AtomicU64,
 }
+
+/// The controller is rebuilt for each platform input event, so the press time
+/// must live outside the short-lived controller to survive key-down → key-up.
+static AUTO_PRESS_TIME_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+static AUTO_PRESS_WAS_BUSY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 impl AutoController {
     fn new(
@@ -1670,18 +1675,22 @@ impl AutoController {
         Self {
             hold: HoldController::new(recorder, tray_icon, app),
             toggle: ToggleController::new(recorder, tray_icon, app),
-            press_time_ms: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
     pub fn press(&self) {
-        if self.hold.recorder.state().is_busy() {
-            // Already recording — delegate to Toggle to stop.
-            self.toggle.press();
+        let was_busy = self.hold.recorder.state().is_busy();
+        AUTO_PRESS_WAS_BUSY.store(was_busy, std::sync::atomic::Ordering::Release);
+        let now = common::now_ms();
+        AUTO_PRESS_TIME_MS.store(now, std::sync::atomic::Ordering::Release);
+
+        if was_busy {
+            // A second press needs to remain held long enough to distinguish a
+            // toggle-stop tap from the configured hold-to-cancel gesture.
+            tracing::info!("[auto] press while busy -> waiting for tap/cancel decision timestamp_ms={now}");
         } else {
             // Idle — start recording.
-            self.press_time_ms
-                .store(common::now_ms(), std::sync::atomic::Ordering::Release);
+            tracing::info!("[auto] press idle timestamp_ms={now}");
             self.hold.press();
         }
     }
@@ -1691,13 +1700,40 @@ impl AutoController {
         let cfg = crate::settings::load();
         let threshold = cfg.hotkey.auto_tap_threshold_ms;
         let elapsed = common::now_ms()
-            .saturating_sub(self.press_time_ms.load(std::sync::atomic::Ordering::Acquire));
+            .saturating_sub(AUTO_PRESS_TIME_MS.load(std::sync::atomic::Ordering::Acquire));
+        let was_busy = AUTO_PRESS_WAS_BUSY.swap(false, std::sync::atomic::Ordering::AcqRel);
+
+        if was_busy {
+            if elapsed < threshold {
+                tracing::info!(
+                    "[auto] busy release elapsed_ms={elapsed} threshold_ms={threshold} -> toggle stop"
+                );
+                common::disarm_hold_cancel();
+                self.toggle.press();
+            } else if self.hold.recorder.state().is_busy() {
+                tracing::info!(
+                    "[auto] busy release elapsed_ms={elapsed} threshold_ms={threshold} -> stop/cancel"
+                );
+                self.hold.release();
+            } else {
+                // Hold-cancel already moved the recorder out of its busy state.
+                common::disarm_hold_cancel();
+                tracing::info!("[auto] busy release after hold-cancel -> ignored");
+            }
+            return;
+        }
 
         if elapsed < threshold {
             // Quick tap — recording continues hands-free (toggle-style).
+            tracing::info!(
+                "[auto] release elapsed_ms={elapsed} threshold_ms={threshold} -> keep recording"
+            );
             self.toggle.release();
         } else {
             // Long hold — stop on release (hold-style).
+            tracing::info!(
+                "[auto] release elapsed_ms={elapsed} threshold_ms={threshold} -> stop recording"
+            );
             self.hold.release();
         }
     }
@@ -1706,7 +1742,6 @@ impl AutoController {
     /// ptt_up suppression like Hold mode does.
     pub fn arm_hold_cancel_if_busy(&self) {
         if common::should_arm_hold_cancel(&self.hold.recorder) {
-            common::arm_ptt_up_suppression();
             common::arm_hold_cancel(&self.hold.recorder, &self.hold.tray_icon, &self.hold.app);
         }
     }

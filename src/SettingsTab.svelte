@@ -92,26 +92,23 @@
         {/each}
       </div>
     </div>
-    {#if cfgHotkeyMode === 'auto'}
-      <div class="tt-row tt-row-col" style="margin-top:6px">
-        <label for="auto-threshold" class="tt-lbl tt-lbl-fixed" style="width:auto">
-          Tap threshold: {cfgAutoTapThreshold} ms
-        </label>
-        <div style="display:flex;align-items:center;gap:8px">
-          <input
-            id="auto-threshold"
-            type="range"
-            min="150"
-            max="1000"
-            step="50"
-            value={cfgAutoTapThreshold}
-            oninput={(e) => { cfgAutoTapThreshold = Number(e.currentTarget.value); onSaveSettings(); }}
-            style="flex:1;height:4px;accent-color:var(--accent,#0066cc)"
-          />
-        </div>
-        <p class="tt-desc">Shorter = more responsive to taps; longer = more tolerant of slow presses</p>
-      </div>
-    {/if}
+    <div class="tt-row tt-row-field tt-recording-threshold-row" data-tip="Shorter is more responsive to taps; longer is more tolerant of slow presses">
+      <label for="auto-threshold" class="tt-lbl tt-lbl-fixed" class:tt-threshold-disabled={cfgHotkeyMode !== 'auto'}>
+        Tap threshold: {cfgAutoTapThreshold} ms
+      </label>
+      <input
+        id="auto-threshold"
+        type="range"
+        min="200"
+        max="1000"
+        step="50"
+        value={cfgAutoTapThreshold}
+        disabled={cfgHotkeyMode !== 'auto'}
+        oninput={(e) => { cfgAutoTapThreshold = Number(e.currentTarget.value); onSaveSettings(); }}
+        class="tt-range"
+        style="--pct:{((cfgAutoTapThreshold - 200) / 800) * 100}%"
+      />
+    </div>
     <div class="tt-row tt-row-field" data-tip="How to abort a recording in progress">
       <span class="tt-lbl">Cancel on</span>
       <div class="tt-multi">

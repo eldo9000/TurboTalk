@@ -340,6 +340,9 @@ input, textarea {
   white-space: nowrap;
 }
 .tt-recording-select-row .tt-key-sel { margin-left: 0; }
+.tt-recording-threshold-row .tt-lbl { width: 190px; }
+.tt-recording-threshold-row .tt-threshold-disabled { opacity: 0.35; }
+.tt-recording-threshold-row .tt-range { flex: 1; width: auto; }
 .tt-startup-actions { width: auto; flex-shrink: 0; }
 
 .tt-lbl        { flex: 1; font-size: 12px; color: var(--text-secondary); }
@@ -444,6 +447,13 @@ html:not(.dark) .tt-multi-on { color: var(--text-primary); }
   border: 2px solid var(--surface);
   box-shadow: 0 0 0 1px var(--accent);
   cursor: pointer;
+}
+.tt-range:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.tt-range:disabled::-webkit-slider-thumb {
+  cursor: default;
 }
 
 .tt-footer-tip {

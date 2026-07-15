@@ -944,7 +944,12 @@
     activeTab = tab;
     if (tab === 'models')   openModels();
     if (tab === 'modes')    openModes();
-    if (tab === 'settings') openSettings();
+    if (tab === 'settings') {
+      openSettings();
+      // Measure the settings content after the tab has rendered. Measuring
+      // during the tab switch can leave the window with stale empty space.
+      tick().then(() => applyWindowSizeLimits());
+    }
   }
 
   /**

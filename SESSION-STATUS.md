@@ -404,6 +404,26 @@ Root cause follow-up: the generic 120px segmented-control rule was overriding th
 
 **Proof:** `npm run typecheck` and `git diff --check` pass.
 
+Sizing follow-up: Settings now re-measures window constraints after the tab renders via `tick()`, preventing stale empty space below the System section on first open.
+
+**Proof:** `npm run typecheck` and `git diff --check` pass.
+
+Tap-threshold follow-up: the Auto-mode delay slider is now permanently rendered beneath Recording mode using the shared volume-slider styling. It remains in the layout to prevent UI reflow and is disabled when a non-Auto mode is selected.
+
+Auto-mode follow-up: fixed quick taps always behaving as long holds. `AutoController` instances are rebuilt per input event, so the press timestamp now lives in shared atomic state and survives key-down to key-up.
+
+**Proof:** `cargo check --manifest-path src-tauri/Cargo.toml` and `git diff --check` pass.
+
+Auto-mode diagnostics follow-up: added runtime logs for Auto press timestamps and release decisions (`elapsed_ms`, `threshold_ms`, keep-recording vs stop) because the existing logs confirmed UI persistence but did not expose controller routing. Added visible disabled styling for the non-Auto threshold slider.
+
+**Proof:** `cargo check --manifest-path src-tauri/Cargo.toml`, `npm run typecheck`, and `git diff --check` pass.
+
+Threshold range follow-up: raised the Auto tap-threshold minimum from 150ms to 200ms and adjusted the slider fill calculation to the new 200–1000ms range.
+
+Auto cancel follow-up: a second press while Auto mode is recording now waits for the tap/hold decision instead of immediately toggling off. A quick second tap stops normally; a held second press reaches hold-to-cancel; a key-up after cancellation is ignored safely. The threshold label now greys out together with its disabled slider outside Auto mode.
+
+**Proof:** `cargo check --manifest-path src-tauri/Cargo.toml`, `npm run typecheck`, and `git diff --check` pass.
+
 ## Outstanding
 - Tray icon may still not be visible on user's display — needs user confirmation. Check both monitors and any Bartender/Ice/Hidden Bar software.
 - Tray icon pixel size for macOS should be 22×22 (not 44×44) — low priority now that title text is visible.
