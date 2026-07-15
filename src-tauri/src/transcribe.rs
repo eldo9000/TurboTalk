@@ -582,6 +582,16 @@ pub trait TranscriptionBackend: Send + Sync {
         result
     }
 
+    /// Transcribe bytes without the configured vocabulary prompt. Streaming
+    /// preview callers use this to keep decoder work lightweight and isolated
+    /// from user vocabulary boosting.
+    fn transcribe_bytes_unboosted(
+        &self,
+        wav_bytes: &[u8],
+    ) -> anyhow::Result<TranscriptOutcome> {
+        self.transcribe_bytes(wav_bytes)
+    }
+
     /// Cancel any in-flight work the backend can safely interrupt.
     fn abort(&self);
 
@@ -1006,6 +1016,14 @@ impl WhisperBackend {
     /// Computes audio_ctx from the byte length instead of opening a file.
     /// Shares response handling with `transcribe`.
     pub fn transcribe_bytes(&self, wav_bytes: &[u8]) -> anyhow::Result<TranscriptOutcome> {
+        self.transcribe_bytes_with_vocabulary(wav_bytes, true)
+    }
+
+    fn transcribe_bytes_with_vocabulary(
+        &self,
+        wav_bytes: &[u8],
+        use_vocabulary: bool,
+    ) -> anyhow::Result<TranscriptOutcome> {
         let _guard = self.spawn_lock.lock().unwrap_or_else(|e| e.into_inner());
 
         let t_whisper_start = Instant::now();
@@ -1032,7 +1050,7 @@ impl WhisperBackend {
         if effective_audio_ctx > 0 {
             form = form.text("audio_ctx", effective_audio_ctx.to_string());
         }
-        if !self.vocabulary.is_empty() {
+        if use_vocabulary && !self.vocabulary.is_empty() {
             form = form.text("prompt", self.vocabulary.join(", "));
         }
         let response = self
@@ -1079,6 +1097,13 @@ impl TranscriptionBackend for WhisperBackend {
 
     fn transcribe_bytes(&self, wav_bytes: &[u8]) -> anyhow::Result<TranscriptOutcome> {
         WhisperBackend::transcribe_bytes(self, wav_bytes)
+    }
+
+    fn transcribe_bytes_unboosted(
+        &self,
+        wav_bytes: &[u8],
+    ) -> anyhow::Result<TranscriptOutcome> {
+        WhisperBackend::transcribe_bytes_with_vocabulary(self, wav_bytes, false)
     }
 
     fn abort(&self) {
@@ -1435,6 +1460,28 @@ pub fn run_raw_bytes(wav_bytes: &[u8]) -> anyhow::Result<TranscriptOutcome> {
     }
 }
 
+/// Run a live-preview transcription without the configured vocabulary prompt.
+/// Final transcription continues through `run_raw_bytes`, which retains the
+/// vocabulary prompt for accuracy.
+pub fn run_raw_bytes_unboosted(wav_bytes: &[u8]) -> anyhow::Result<TranscriptOutcome> {
+    let cfg = crate::settings::load();
+    let worker = worker_for(&cfg)?;
+    match worker.transcribe_bytes_unboosted(wav_bytes) {
+        Ok(outcome) => Ok(outcome),
+        Err(e) => {
+            if is_connection_error(&e) {
+                tracing::warn!(
+                    "[transcribe] whisper-server connection lost during live preview, retrying"
+                );
+                let worker = worker_for(&cfg)?;
+                worker.transcribe_bytes_unboosted(wav_bytes)
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
 // ── Segment transcription queue ───────────────────────────────────────────────
 
 /// Build 16-bit PCM WAV bytes from 16 kHz mono f32 samples in memory.
@@ -1497,7 +1544,7 @@ fn transcribe_one_segment(seg: &crate::audio_finalizer::SegmentEmit) -> String {
         }
     };
 
-    let result = run_raw_bytes(&wav_bytes).or_else(|e| {
+    let result = run_raw_bytes_unboosted(&wav_bytes).or_else(|e| {
         tracing::warn!(
             "[seg-transcriber] segment {} first attempt failed: {} — retrying once",
             seg.index,
