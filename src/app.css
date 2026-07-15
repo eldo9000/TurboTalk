@@ -260,7 +260,7 @@ html, body, #app {
 .adv-panel-in { animation: adv-panel-in 0.2s cubic-bezier(0.16,1,0.3,1) forwards; }
 
 /* ── Settings panel — conventions ───
-   Compact ruled sections with custom segmented and multi-toggle controls.
+   Grouped sections with custom segmented and multi-toggle controls.
    Shared classes (.subsection-hd, .cb-native) live in @libre/ui tokens. */
 .tt-set {
   display: flex;
@@ -271,29 +271,58 @@ html, body, #app {
   font-size: 13px;
 }
 .tt-section {
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 10px;
+  padding-bottom: 9px;
 }
-.tt-section-last { border-bottom: none; padding-bottom: 0; }
+.tt-section + .tt-section { padding-top: 2px; }
+.tt-section-last { padding-bottom: 0; }
 .tt-section-last .tt-row:last-child { padding-bottom: 0; }
 .tt-section-last .tt-row-field:last-child { padding-bottom: 4px; }
+
+/* Headings are labels, not full-width bars. The inset makes the rows below
+   read as the contents of the category rather than peer-level items. */
+.tt-section > .subsection-hd {
+  margin: 0;
+  padding: 10px 12px 4px;
+  background: transparent !important;
+}
+.tt-section > .subsection-hd .subsection-hd-title {
+  font-size: 13.5px;
+  letter-spacing: 0.04em;
+  color: var(--text-primary);
+}
+.tt-section > :not(.subsection-hd) {
+  box-sizing: border-box;
+  padding-left: 28px;
+  padding-right: 28px;
+}
 
 .tt-row {
   display: flex;
   align-items: center;
   padding: 4px 12px;
   gap: 6px;
+  border-radius: 10px;
   transition: background 0.1s;
+}
+.tt-row:hover {
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
 }
 .tt-row:hover .tt-lbl { color: var(--text-primary); }
 .tt-row-field  { padding-top: 5px; padding-bottom: 5px; }
 .tt-row-col    { flex-direction: column; align-items: flex-start; gap: 5px; }
 
-.tt-key-sel    { flex: 1; min-width: 0; margin-left: 12px; }
+.tt-key-sel    { flex: 0 0 50%; width: 50%; min-width: 0; margin-left: auto; }
 .tt-key-sel button { padding-top: 5px; padding-bottom: 5px; font-size: 13px; }
 .tt-key-sel button span { font-size: 12px; }
 /* Fixed-width seg slot so paired-row dropdowns left-align cleanly. */
 .tt-row .tt-seg:not(.tt-seg-wide) { width: 120px; }
+.tt-row .tt-seg-recording { width: 220px; }
+.tt-zoom-label { width: 56px; }
+.tt-zoom-seg { flex: 1; width: auto; }
+.tt-appearance-label { width: 56px; }
+.tt-appearance-seg { flex: 1; width: auto; }
+.tt-system-actions { width: 100%; justify-content: flex-end; }
+.tt-multi-btn { white-space: nowrap; }
 
 .tt-lbl        { flex: 1; font-size: 12px; color: var(--text-secondary); }
 .tt-lbl-fixed  { flex: unset; }

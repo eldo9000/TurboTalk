@@ -61,9 +61,9 @@
   onmouseover={onIndicatorOver}
   onmouseleave={onIndicatorLeave}>
 
-  <!-- Hotkey -->
+  <!-- Recording & Hotkey -->
   <div class="tt-section">
-    <div class="subsection-hd"><span class="subsection-hd-title">Hotkey</span></div>
+    <div class="subsection-hd"><span class="subsection-hd-title">Recording &amp; Hotkey</span></div>
     <div class="tt-row tt-row-field" data-tip="Which key triggers push-to-talk. Using a foot pedal or macro key? Map it to F13–F19 in your device software, then pick it here.">
       <div class="tt-seg" class:tt-seg-dim={isUnsidedKey(hotkeyKeyPart)}>
         {#each [['left','Left'],['right','Right']] as [v, lbl], i}
@@ -92,13 +92,8 @@
         </div>
       {/if}
     {/if}
-  </div>
-
-  <!-- Recording -->
-  <div class="tt-section">
-    <div class="subsection-hd"><span class="subsection-hd-title">Recording</span></div>
     <div class="tt-row tt-row-field" data-tip="Hold: record while key is held. Toggle: press once to start, again to stop. Auto: tap to start/tap to stop, or hold to talk">
-      <div class="tt-seg">
+      <div class="tt-seg tt-seg-recording">
         {#each [['hold','Hold'],['toggle','Toggle'],['auto','Auto']] as [v, lbl], i}
           <button onclick={() => { cfgHotkeyMode = v; onSaveSettings(); }} class={seg(cfgHotkeyMode === v, i, 3)}>{lbl}</button>
         {/each}
@@ -136,11 +131,6 @@
         <p class="tt-desc">Shorter = more responsive to taps; longer = more tolerant of slow presses</p>
       </div>
     {/if}
-  </div>
-
-  <!-- Cancel shortcuts -->
-  <div class="tt-section">
-    <div class="subsection-hd"><span class="subsection-hd-title">Cancel shortcuts</span></div>
     <div class="tt-row tt-row-field" data-tip="How to abort a recording in progress">
       <span class="tt-lbl">Cancel on</span>
       <div class="tt-multi">
@@ -158,45 +148,21 @@
 
   <!-- Theme -->
   <div class="tt-section">
-    <div class="subsection-hd"><span class="subsection-hd-title">Theme</span></div>
+    <div class="subsection-hd"><span class="subsection-hd-title">Appearance</span></div>
     <div class="tt-row tt-row-field" data-tip="App color scheme — Auto follows your macOS appearance">
-      <div class="tt-seg tt-seg-wide">
+      <span class="tt-lbl tt-lbl-fixed tt-appearance-label">Theme</span>
+      <div class="tt-seg tt-seg-wide tt-appearance-seg">
         {#each [['auto','Auto'],['light','Light'],['dark','Dark']] as [v, lbl], i}
           <button onclick={() => { cfgTheme = v; onSaveSettings(); }} class={seg(cfgTheme === v, i, 3)}>{lbl}</button>
         {/each}
       </div>
     </div>
-  </div>
-
-  <!-- UI Zoom -->
-  <div class="tt-section">
-    <div class="subsection-hd"><span class="subsection-hd-title">UI Zoom</span></div>
     <div class="tt-row tt-row-field" data-tip="Scale the app interface — also adjustable with − / + in the footer">
-      <div class="tt-seg tt-seg-wide">
+      <span class="tt-lbl tt-lbl-fixed tt-zoom-label">Zoom</span>
+      <div class="tt-seg tt-seg-wide tt-zoom-seg">
         {#each ZOOM_LEVELS as level, i}
           <button onclick={() => { zoomIdx = i; }} class={seg(zoomIdx === i, i, ZOOM_LEVELS.length)}>{level}%</button>
         {/each}
-      </div>
-    </div>
-  </div>
-
-  <!-- History -->
-  <div class="tt-section">
-    <div class="subsection-hd"><span class="subsection-hd-title">History</span></div>
-    <div class="tt-row tt-row-field" data-tip="Save transcripts to disk and auto-delete after a set period">
-      <button
-        onclick={() => { cfgSaveHistory = !cfgSaveHistory; onSaveSettings(); }}
-        class="tt-multi-btn" class:tt-multi-on={cfgSaveHistory}
-        data-tip="Save transcripts to disk between sessions">Save</button>
-      <div class="tt-key-sel" data-tip="Automatically delete saved transcripts older than this">
-        <Select
-          items={HISTORY_AUTO_DELETE_ITEMS}
-          bind:value={cfgHistoryAutoDelete}
-          onchange={() => onSaveSettings()}
-          disabled={!cfgSaveHistory}
-          variant="flat"
-          size="sm"
-        />
       </div>
     </div>
   </div>
@@ -294,8 +260,24 @@
   <!-- System -->
   <div class="tt-section tt-section-last">
     <div class="subsection-hd"><span class="subsection-hd-title">System</span></div>
+    <div class="tt-row tt-row-field" data-tip="Save transcripts to disk and auto-delete after a set period">
+      <button
+        onclick={() => { cfgSaveHistory = !cfgSaveHistory; onSaveSettings(); }}
+        class="tt-multi-btn" class:tt-multi-on={cfgSaveHistory}
+        data-tip="Save transcripts to disk between sessions">Save History</button>
+      <div class="tt-key-sel tt-history-sel" data-tip="Automatically delete saved transcripts older than this">
+        <Select
+          items={HISTORY_AUTO_DELETE_ITEMS}
+          bind:value={cfgHistoryAutoDelete}
+          onchange={() => onSaveSettings()}
+          disabled={!cfgSaveHistory}
+          variant="flat"
+          size="sm"
+        />
+      </div>
+    </div>
     <div class="tt-row tt-row-field" data-tip="Start TurboTalk automatically when you log in to macOS">
-      <div class="tt-multi">
+      <div class="tt-multi tt-system-actions">
         <button
           onclick={() => { cfgLaunchLogin = !cfgLaunchLogin; onSaveSettings(); }}
           class="tt-multi-btn" class:tt-multi-on={cfgLaunchLogin}>Launch at Login</button>

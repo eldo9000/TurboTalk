@@ -1,7 +1,7 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-07-14 (Auto hotkey mode implemented)
-**Current state:** Auto hotkey mode implemented. `AutoController` delegates to existing Hold (long press) and Toggle (quick tap) controllers based on configurable 400ms threshold. Settings UI updated with 3-button mode selector + threshold slider. All three `mode == "hold"` cancel-suppression checks also cover `"auto"`. `cargo check`, `clippy`, `npm run typecheck` pass clean.
+**Last updated:** 2026-07-14 (Remove automatic update check)
+**Current state:** The Check for updates control is now a static disabled button; the Settings page no longer imports the updater or runs an automatic check on mount, so opening Settings produces no transient checking state. Dropdown containers remain aligned from the panel midpoint to the right edge. Other settings groups remain consolidated and button labels stay on one line. Auto hotkey mode remains implemented. Previous proof: `cargo check`, `clippy`, `npm run typecheck` pass clean.
 
 ## Next action
 
