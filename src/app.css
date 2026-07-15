@@ -286,7 +286,7 @@ html, body, #app {
   background: transparent !important;
 }
 .tt-section > .subsection-hd .subsection-hd-title {
-  font-size: 13.5px;
+  font-size: 10.5px;
   letter-spacing: 0.04em;
   color: var(--text-primary);
 }

@@ -12,7 +12,7 @@
 </script>
 
 <div class="flex-1 min-h-0 overflow-y-auto pb-4 bg-[var(--surface)]">
-  <div class="tt-set">
+  <div class="tt-set" style="min-height:auto">
     <div class="tt-section">
       <div class="subsection-hd"><span class="subsection-hd-title">Post-processing</span></div>
       <div class="tt-row tt-row-field">
@@ -82,38 +82,36 @@
     </div>
   </div>
 
-  {#if cfgCleanupMode === 'text_formatter'}
-    <div class="tt-set adv-panel-in" style="min-height:auto">
-      <div class="tt-section tt-section-last">
-        <div class="subsection-hd">
-          <span class="subsection-hd-title">Formatting Rules</span>
-        </div>
-        <p class="tt-desc" style="padding: 4px 0 10px">
-          Each stage can be toggled independently. All stages run in sequence:
-        </p>
-        <div class="tt-row tt-row-col tt-check-stack-list">
-          {#each [
-            ['punct',   cfgFormatPunct,   actions.setFormatPunct,   'Spoken punctuation',   '"type period" → "."  ·  "type comma" → ","'],
-            ['literal', cfgFormatLiteral, actions.setFormatLiteral, 'Slash & mentions',     '"slash deploy" → "/deploy"  ·  "at sign Bob" → "@Bob"'],
-            ['fillers', cfgFormatStripFillers, actions.setFormatStripFillers, 'Strip fillers', 'Removes um, uh, er, hmm'],
-            ['artifacts', cfgFormatStripArtifacts, actions.setFormatStripArtifacts, 'Strip artifacts', 'Removes trailing " ." and "..." from silence segments'],
-            ['caps',    cfgFormatCapitalize, actions.setFormatCapitalize, 'Capitalize',         'First letter of each utterance'],
-          ] as [key, val, setter, label, desc]}
-            <label class="tt-check-row tt-check-row-stacked">
-              <input
-                type="checkbox"
-                class="cb-native"
-                checked={val}
-                onchange={() => setter(!val)}
-              />
-              <div class="tt-check-stack">
-                <span class="tt-check-lbl tt-check-lbl-strong">{label}</span>
-                <p class="tt-check-desc">{desc}</p>
-              </div>
-            </label>
-          {/each}
-        </div>
+  <div class="tt-set" style="min-height:auto">
+    <div class="tt-section tt-section-last">
+      <div class="subsection-hd">
+        <span class="subsection-hd-title">Formatting Rules</span>
+      </div>
+      <p class="tt-desc" style="padding: 4px 0 10px">
+        Each stage can be toggled independently. All stages run in sequence:
+      </p>
+      <div class="tt-row tt-row-col tt-check-stack-list">
+        {#each [
+          ['punct',   cfgFormatPunct,   actions.setFormatPunct,   'Spoken punctuation',   '"type period" → "."  ·  "type comma" → ","'],
+          ['literal', cfgFormatLiteral, actions.setFormatLiteral, 'Slash & mentions',     '"slash deploy" → "/deploy"  ·  "at sign Bob" → "@Bob"'],
+          ['fillers', cfgFormatStripFillers, actions.setFormatStripFillers, 'Strip fillers', 'Removes um, uh, er, hmm'],
+          ['artifacts', cfgFormatStripArtifacts, actions.setFormatStripArtifacts, 'Strip artifacts', 'Removes trailing " ." and "..." from silence segments'],
+          ['caps',    cfgFormatCapitalize, actions.setFormatCapitalize, 'Capitalize',         'First letter of each utterance'],
+        ] as [key, val, setter, label, desc]}
+          <label class="tt-check-row tt-check-row-stacked">
+            <input
+              type="checkbox"
+              class="cb-native"
+              checked={val}
+              onchange={() => setter(!val)}
+            />
+            <div class="tt-check-stack">
+              <span class="tt-check-lbl tt-check-lbl-strong">{label}</span>
+              <p class="tt-check-desc">{desc}</p>
+            </div>
+          </label>
+        {/each}
       </div>
     </div>
-  {/if}
+  </div>
 </div>

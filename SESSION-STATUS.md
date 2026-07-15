@@ -1,11 +1,11 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-07-14 (Remove automatic update check)
+**Last updated:** 2026-07-14 (Text Formatter dev UI investigation)
 **Current state:** The Check for updates control is now a static disabled button; the Settings page no longer imports the updater or runs an automatic check on mount, so opening Settings produces no transient checking state. Dropdown containers remain aligned from the panel midpoint to the right edge. Other settings groups remain consolidated and button labels stay on one line. Auto hotkey mode remains implemented. Previous proof: `cargo check`, `clippy`, `npm run typecheck` pass clean.
 
 ## Next action
 
-Next cleanup: trim or gate the verbose process-tap diagnostic payload once confidence is high; ad-hoc rebuilds churn macOS TCC permission identity, so avoid unnecessary rebuilds during follow-up.
+Next cleanup: trim or gate the verbose process-tap diagnostic payload once confidence is high; ad-hoc rebuilds churn macOS TCC permission identity, so avoid unnecessary rebuilds during follow-up. Text Formatter controls now render reliably in the dev Modes page without the broken conditional wrapper, and the settings groups no longer leave a large blank gap.
 
 ## Latest overlay proof
 
