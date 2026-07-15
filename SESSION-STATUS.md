@@ -426,6 +426,18 @@ Tray-open focus follow-up: removed the global focus-visible outline from the Tit
 
 Follow-up: added an explicit `.tt-tab` focus override with `outline` and `box-shadow` suppression because the utility-only override did not remove the rendered focus ring.
 
+Slider layout follow-up: Volume now uses the same one-row label-and-slider layout and slider width as Tap threshold, with the percentage included in its left label.
+
+**Proof:** `npm run typecheck` and `git diff --check` pass.
+
+Appearance layout follow-up: Theme and Zoom now use right-aligned natural-width toggle groups with the same button spacing as Audio Notify instead of stretching across the full row.
+
+**Proof:** `npm run typecheck` and `git diff --check` pass.
+
+Connected-selector follow-up: Theme, Zoom, Visual Overlay, and Overlay Position now use the connected segmented-button treatment from Recording mode, while remaining right-aligned with natural widths.
+
+**Proof:** `npm run typecheck` and `git diff --check` pass.
+
 Auto cancel follow-up: a second press while Auto mode is recording now waits for the tap/hold decision instead of immediately toggling off. A quick second tap stops normally; a held second press reaches hold-to-cancel; a key-up after cancellation is ignored safely. The threshold label now greys out together with its disabled slider outside Auto mode.
 
 **Proof:** `cargo check --manifest-path src-tauri/Cargo.toml`, `npm run typecheck`, and `git diff --check` pass.

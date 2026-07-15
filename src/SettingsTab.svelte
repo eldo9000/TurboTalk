@@ -156,7 +156,7 @@
     <div class="subsection-hd"><span class="subsection-hd-title">Appearance</span></div>
     <div class="tt-row tt-row-field" data-tip="App color scheme — Auto follows your macOS appearance">
       <span class="tt-lbl tt-lbl-fixed tt-appearance-label">Theme</span>
-      <div class="tt-seg tt-seg-wide tt-appearance-seg">
+      <div class="tt-seg tt-setting-seg">
         {#each [['auto','Auto'],['light','Light'],['dark','Dark']] as [v, lbl], i}
           <button onclick={() => { cfgTheme = v; onSaveSettings(); }} class={seg(cfgTheme === v, i, 3)}>{lbl}</button>
         {/each}
@@ -164,7 +164,7 @@
     </div>
     <div class="tt-row tt-row-field" data-tip="Scale the app interface — also adjustable with − / + in the footer">
       <span class="tt-lbl tt-lbl-fixed tt-zoom-label">Zoom</span>
-      <div class="tt-seg tt-seg-wide tt-zoom-seg">
+      <div class="tt-seg tt-setting-seg">
         {#each ZOOM_LEVELS as level, i}
           <button onclick={() => { zoomIdx = i; }} class={seg(zoomIdx === i, i, ZOOM_LEVELS.length)}>{level}%</button>
         {/each}
@@ -177,32 +177,32 @@
     <div class="subsection-hd"><span class="subsection-hd-title">Indicators</span></div>
     <div class="tt-row tt-row-field" data-tip="Choose how much visual feedback the recording overlay shows">
       <span class="tt-lbl">Visual Overlay</span>
-      <div class="tt-multi">
+      <div class="tt-seg tt-setting-seg">
         <button
           onclick={() => { cfgShowOverlay = true; cfgOverlaySize = 'small'; onSaveSettings(); }}
-          class="tt-multi-btn" class:tt-multi-on={cfgShowOverlay && cfgOverlaySize === 'small'}
+          class={seg(cfgShowOverlay && cfgOverlaySize === 'small', 0, 3)}
           data-tip="Bare recording dot with timer">Small</button>
         <button
           onclick={() => { cfgShowOverlay = true; cfgOverlaySize = 'medium'; onSaveSettings(); }}
-          class="tt-multi-btn" class:tt-multi-on={cfgShowOverlay && cfgOverlaySize === 'medium'}
+          class={seg(cfgShowOverlay && cfgOverlaySize === 'medium', 1, 3)}
           data-tip="Current compact waveform overlay">Medium</button>
         <button
           onclick={() => { cfgShowOverlay = true; cfgOverlaySize = 'large'; onSaveSettings(); }}
-          class="tt-multi-btn" class:tt-multi-on={cfgShowOverlay && cfgOverlaySize === 'large'}
+          class={seg(cfgShowOverlay && cfgOverlaySize === 'large', 2, 3)}
           data-tip="Expanded waveform overlay with stronger status text">Large</button>
       </div>
     </div>
     <div class="tt-row tt-row-field" data-tip="Where the recording overlay anchors on screen">
       <span class="tt-lbl">Overlay Position</span>
-      <div class="tt-multi">
+      <div class="tt-seg tt-setting-seg">
         <button
           onclick={() => { if (cfgShowOverlay) { cfgOverlayPosition = 'bottom'; onSaveSettings(); } }}
-          class="tt-multi-btn" class:tt-multi-on={cfgOverlayPosition === 'bottom'}
+          class={seg(cfgOverlayPosition === 'bottom', 0, 2)}
           disabled={!cfgShowOverlay}
           data-tip="Pin the overlay near the bottom of the screen">Bottom</button>
         <button
           onclick={() => { if (cfgShowOverlay) { cfgOverlayPosition = 'top'; onSaveSettings(); } }}
-          class="tt-multi-btn" class:tt-multi-on={cfgOverlayPosition === 'top'}
+          class={seg(cfgOverlayPosition === 'top', 1, 2)}
           disabled={!cfgShowOverlay}
           data-tip="Pin the overlay near the top of the screen">Top</button>
       </div>
@@ -246,11 +246,8 @@
           data-tip="Pause playback during dictation, resume after">Pause on Dictate</button>
       </div>
     </div>
-    <div class="tt-row tt-row-field tt-row-col" data-tip="Volume for audio notification chimes">
-      <div class="tt-vol-hd">
-        <span class="tt-lbl tt-lbl-fixed">Volume</span>
-        <span class="tt-vol-val">{Math.round(cfgSoundVolume * 100)}%</span>
-      </div>
+    <div class="tt-row tt-row-field tt-recording-threshold-row" data-tip="Volume for audio notification chimes">
+      <span class="tt-lbl tt-lbl-fixed">Volume: {Math.round(cfgSoundVolume * 100)}%</span>
       <input
         type="range"
         min="0" max="1" step="0.05"
