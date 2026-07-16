@@ -165,6 +165,16 @@ pub struct FinalizeResult {
     /// that no silence-boundary or MAX-cap cuts fired — `trimmed` contains
     /// the whole VAD-trimmed output, same as the legacy batch path.
     pub segments_emitted: usize,
+    /// The WHOLE recording (VAD-trimmed at both ends, peak-normalized),
+    /// including audio already emitted as segments. `Some` only when
+    /// segments were cut — otherwise `trimmed` already covers the full
+    /// recording and this stays `None` to avoid a redundant copy.
+    ///
+    /// Used by backends fast enough to re-transcribe the entire recording
+    /// in one pass at key-up (Parakeet), which restores whole-utterance
+    /// punctuation/capitalization context that per-segment transcription
+    /// destroys. Segments remain preview-only in that mode.
+    pub full_trimmed: Option<Vec<f32>>,
 }
 
 /// Streaming-VAD smoothing state. Mirror of `vad::SmoothedVad` but the
@@ -617,26 +627,29 @@ fn run_worker(
                     }
                 }
 
-                // Resolve the kept slice indices for the final tail — the
-                // audio from seg_start_sample to the VAD-trimmed end.
-                // Clamp start to seg_start_sample so previously-emitted
-                // segment audio is never re-included in trimmed.
-                let (start_sample, end_sample, speech_detected) =
+                // Resolve the kept slice for the WHOLE recording first
+                // (VAD window unclamped by segment cuts), then derive the
+                // tail slice — the audio from seg_start_sample to the
+                // VAD-trimmed end. The tail start is clamped to
+                // seg_start_sample so previously-emitted segment audio is
+                // never re-included in trimmed.
+                let (full_start, full_end, speech_detected) =
                     if vad_state.vad_failed || vad_state.vad_cell.is_none() {
-                        (seg_start_sample, resampled_buf.len(), false)
+                        (0, resampled_buf.len(), false)
                     } else if let (Some(s), Some(e)) = (
                         vad_state.smoothing.speech_start_frame,
                         vad_state.smoothing.speech_end_frame,
                     ) {
                         let prefill_start = s.saturating_sub(PREFILL_FRAMES);
-                        // Clamp so we never back up into an already-emitted segment.
-                        let start = (prefill_start * VAD_FRAME_SAMPLES).max(seg_start_sample);
+                        let start = prefill_start * VAD_FRAME_SAMPLES;
                         let end = ((e + 1) * VAD_FRAME_SAMPLES).min(resampled_buf.len());
                         (start, end, true)
                     } else {
-                        // No speech detected in tail — return tail range as-is.
-                        (seg_start_sample, resampled_buf.len(), false)
+                        // No speech detected — return full range as-is.
+                        (0, resampled_buf.len(), false)
                     };
+                let start_sample = full_start.max(seg_start_sample);
+                let end_sample = full_end;
 
                 let mut trimmed = if end_sample > start_sample {
                     resampled_buf[start_sample..end_sample].to_vec()
@@ -644,6 +657,17 @@ fn run_worker(
                     Vec::new()
                 };
                 peak_normalize(&mut trimmed, normalize_peak);
+
+                // Whole-recording buffer for full-capture backends. Only
+                // materialized when segments were cut — otherwise `trimmed`
+                // already contains the entire VAD-trimmed recording.
+                let full_trimmed = if seg_index > 0 && full_end > full_start {
+                    let mut full = resampled_buf[full_start..full_end].to_vec();
+                    peak_normalize(&mut full, normalize_peak);
+                    Some(full)
+                } else {
+                    None
+                };
 
                 let finalize_flush_ms = t_flush.elapsed().as_secs_f32() * 1000.0;
 
@@ -657,6 +681,7 @@ fn run_worker(
                     finalize_flush_ms,
                     speech_detected,
                     segments_emitted: seg_index,
+                    full_trimmed,
                 });
                 return;
             }
@@ -679,6 +704,7 @@ fn drain_until_finish_and_signal_failure(rx: Receiver<WorkerMsg>) {
                 finalize_flush_ms: 0.0,
                 speech_detected: false,
                 segments_emitted: 0,
+                full_trimmed: None,
             });
             return;
         }

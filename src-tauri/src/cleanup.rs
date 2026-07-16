@@ -41,11 +41,14 @@ pub fn process(raw: &str) -> String {
     }
 
     let cfg = crate::settings::load();
+    let is_whisper = cfg.backend == crate::settings::BackendFamily::Whisper;
 
     // Apply mode-specific cleanup.
+    // TextFormatter rules are Whisper-only — Parakeet full-capture produces
+    // well-formed punctuation and capitalization directly; running deterministic
+    // rules on top strips correctly-placed periods and fights the model's output.
     let result = match cfg.cleanup.mode {
-        crate::settings::CleanupMode::Off => handle_raw(trimmed),
-        crate::settings::CleanupMode::TextFormatter => {
+        crate::settings::CleanupMode::TextFormatter if is_whisper => {
             let opts = crate::pre_format::FormatOptions {
                 punctuation: cfg.cleanup.format_punctuation,
                 literal: cfg.cleanup.format_literal,
@@ -55,10 +58,13 @@ pub fn process(raw: &str) -> String {
             };
             crate::pre_format::format_with(trimmed, &opts)
         }
+        _ => handle_raw(trimmed),
     };
 
-    // Anti-vocabulary only applies in TextFormatter mode (Off means raw).
-    if cfg.cleanup.mode != crate::settings::CleanupMode::Off {
+    // Anti-vocabulary applies in TextFormatter mode, or unconditionally for
+    // Parakeet (where every mode is effectively Off and replacements are still
+    // useful for correcting persistent ASR misspellings).
+    if cfg.cleanup.mode != crate::settings::CleanupMode::Off || !is_whisper {
         apply_antivocabulary(&result, &cfg.cleanup.antivocabulary)
     } else {
         result

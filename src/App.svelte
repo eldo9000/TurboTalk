@@ -8,7 +8,7 @@
   import { initTheme } from '@libre/ui/src/theme.js';
   import HistoryTab from './HistoryTab.svelte';
   import ModelsTab from './ModelsTab.svelte';
-  import ModesTab from './ModesTab.svelte';
+  import EditsTab from './EditsTab.svelte';
   import Onboarding from './Onboarding.svelte';
   import ErrorToast from './ErrorToast.svelte';
   import TitleBar from './TitleBar.svelte';
@@ -281,7 +281,7 @@
   // Parakeet model descriptors (loaded from backend on tab open)
   let altModels       = $state(/** @type {import('./bindings').ModelDescriptor[]} */ ([]));
 
-  let cfgCleanupMode          = $state('text_formatter');
+  let cfgCleanupMode          = $state('off');
   let cfgOllamaUrl            = $state('');
   let cfgLlmModel             = $state('');
   let cfgVocabulary           = $state('');
@@ -291,7 +291,7 @@
   let cfgFormatStripFillers   = $state(true);
   let cfgFormatStripArtifacts = $state(true);
   let cfgFormatCapitalize     = $state(true);
-  let modesSaveMsg            = $state('');
+  let editsSaveMsg            = $state('');
 
   // Ollama setup state (legacy — kept for settings save/load compatibility)
   let ollamaReachable         = $state(null);
@@ -790,20 +790,20 @@
     await saveModels();
   }
 
-  // ── Modes ─────────────────────────────────────────────────────────────────
+  // ── Edits ─────────────────────────────────────────────────────────────────
 
-  async function openModes() {
-    modesSaveMsg = '';
+  async function openEdits() {
+    editsSaveMsg = '';
   }
 
-  async function saveModes() {
+  async function saveEdits() {
     const res = await commands.saveConfig(buildFullConfig());
-    modesSaveMsg = res.status === 'ok' ? 'Saved.' : 'Error: ' + res.error;
+    editsSaveMsg = res.status === 'ok' ? 'Saved.' : 'Error: ' + res.error;
   }
 
   async function handleModeClick(v) {
     cfgCleanupMode = v;
-    saveModes();
+    saveEdits();
   }
 
   // ── Ollama setup helpers ───────────────────────────────────────────────────
@@ -920,30 +920,30 @@
     };
   }
 
-  function modesActions() {
+  function editsActions() {
     return {
       setCleanupMode: (v) => {
         cfgCleanupMode = v;
-        saveModes();
+        saveEdits();
       },
 
-      setVadEnabled: (v) => { cfgVadEnabled = v; saveModes(); },
-      setVocabulary: (v) => { cfgVocabulary = v; saveModes(); },
-      setAntiVocabulary: (v) => { cfgAntiVocabulary = v; saveModes(); },
-      setOllamaUrl: (v) => { cfgOllamaUrl = v; saveModes(); },
-      setLlmModel: (v) => { cfgLlmModel = v; saveModes(); },
-      setFormatPunct: (v) => { cfgFormatPunct = v; saveModes(); },
-      setFormatLiteral: (v) => { cfgFormatLiteral = v; saveModes(); },
-      setFormatStripFillers: (v) => { cfgFormatStripFillers = v; saveModes(); },
-      setFormatStripArtifacts: (v) => { cfgFormatStripArtifacts = v; saveModes(); },
-      setFormatCapitalize: (v) => { cfgFormatCapitalize = v; saveModes(); },
+      setVadEnabled: (v) => { cfgVadEnabled = v; saveEdits(); },
+      setVocabulary: (v) => { cfgVocabulary = v; saveEdits(); },
+      setAntiVocabulary: (v) => { cfgAntiVocabulary = v; saveEdits(); },
+      setOllamaUrl: (v) => { cfgOllamaUrl = v; saveEdits(); },
+      setLlmModel: (v) => { cfgLlmModel = v; saveEdits(); },
+      setFormatPunct: (v) => { cfgFormatPunct = v; saveEdits(); },
+      setFormatLiteral: (v) => { cfgFormatLiteral = v; saveEdits(); },
+      setFormatStripFillers: (v) => { cfgFormatStripFillers = v; saveEdits(); },
+      setFormatStripArtifacts: (v) => { cfgFormatStripArtifacts = v; saveEdits(); },
+      setFormatCapitalize: (v) => { cfgFormatCapitalize = v; saveEdits(); },
     };
   }
 
   function switchTab(tab) {
     activeTab = tab;
     if (tab === 'models')   openModels();
-    if (tab === 'modes')    openModes();
+    if (tab === 'edits')    openEdits();
     if (tab === 'settings') {
       openSettings();
       // Measure the settings content after the tab has rendered. Measuring
@@ -1186,7 +1186,9 @@
       cfgShowSplash        = initialCfg.show_splash                     ?? true;
       cfgModel             = initialCfg.whisper?.model                   ?? '';
       cfgModels            = initialCfg.whisper?.models                  ?? [];
-      cfgCleanupMode          = initialCfg.cleanup?.mode                    ?? 'text_formatter';
+      cfgCleanupMode          = initialCfg.cleanup?.mode                    ?? 'off';
+      // TextFormatter is Whisper-only — force Off for other backends.
+      if (cfgBackend !== 'whisper') cfgCleanupMode = 'off';
       cfgOllamaUrl            = initialCfg.cleanup?.ollama_url               ?? '';
       cfgLlmModel             = initialCfg.cleanup?.classifier_model         ?? '';
       cfgVocabulary           = (initialCfg.cleanup?.vocabulary ?? []).join('\n');
@@ -1318,8 +1320,8 @@
     <ModelsTab {cfgBackend} {cfgModels} {cfgModel} {downloadProgress} {deletingModels} {altModels} {newModelPath} {modelConfigured} {cfgBackendVariant} actions={modelsActions()} />
   {/if}
 
-  {#if activeTab === 'modes'}
-    <ModesTab {cfgBackend} {cfgCleanupMode} {cfgVocabulary} {cfgAntiVocabulary} {cfgVadEnabled} {cfgFormatPunct} {cfgFormatLiteral} {cfgFormatStripFillers} {cfgFormatStripArtifacts} {cfgFormatCapitalize} actions={modesActions()} />
+  {#if activeTab === 'edits'}
+    <EditsTab {cfgBackend} {cfgCleanupMode} {cfgVocabulary} {cfgAntiVocabulary} {cfgVadEnabled} {cfgFormatPunct} {cfgFormatLiteral} {cfgFormatStripFillers} {cfgFormatStripArtifacts} {cfgFormatCapitalize} actions={editsActions()} />
   {/if}
 
   {#if activeTab === 'settings'}

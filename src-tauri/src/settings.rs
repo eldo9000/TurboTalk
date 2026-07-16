@@ -182,9 +182,9 @@ pub fn resolve_backend_variant(cfg: &Config) -> String {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum CleanupMode {
+    #[default]
     Off,
     #[serde(rename = "text_formatter")]
-    #[default]
     TextFormatter,
 }
 

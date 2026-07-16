@@ -200,6 +200,11 @@ pub enum StopOutcome {
     Wav {
         path: TempPath,
         speech_detected: bool,
+        /// True when the WAV contains the ENTIRE recording (not just the
+        /// tail after the last segment cut). The caller must then ignore
+        /// segment transcriptions for final assembly — they are preview-only
+        /// — or segment text would be duplicated.
+        full_capture: bool,
     },
     Discard(DiscardReason),
 }
@@ -1209,6 +1214,10 @@ impl AudioCapture {
         Ok(StopOutcome::Wav {
             path: temp_path,
             speech_detected: true,
+            // Batch fallback reconstructs the entire recording from the raw
+            // sample ring — any segments emitted before the streaming worker
+            // degraded must not be prepended or their text would duplicate.
+            full_capture: true,
         })
     }
 
@@ -1218,12 +1227,45 @@ impl AudioCapture {
     /// `total=` stage time.
     fn write_wav_from_streaming_result(
         &self,
-        result: FinalizeResult,
+        mut result: FinalizeResult,
         capture_clone_ms: f32,
         streaming_finish_ms: f32,
         t_total_start: Instant,
     ) -> anyhow::Result<StopOutcome> {
-        let trimmed = result.trimmed;
+        // Full-capture mode: when the backend is fast enough to re-transcribe
+        // the whole recording in one pass (Parakeet), prefer the whole-
+        // recording buffer over the tail. One pass over the full utterance
+        // restores sentence-level punctuation/capitalization context that
+        // per-segment transcription destroys (mid-sentence "?" at thinking
+        // pauses, stray capitals at segment starts). Segments stay preview-
+        // only in this mode. Capped so a marathon dictation doesn't hand the
+        // ONNX session an unbounded buffer — beyond the cap we fall back to
+        // the segments+tail assembly.
+        const FULL_CAPTURE_MAX_SECS: usize = 120;
+        let full_capture_wanted = matches!(
+            crate::settings::load().backend,
+            crate::settings::BackendFamily::Parakeet
+        );
+        let (trimmed, full_capture) = match result.full_trimmed.take() {
+            Some(full)
+                if full_capture_wanted
+                    && full.len() <= FULL_CAPTURE_MAX_SECS * TARGET_SAMPLE_RATE as usize =>
+            {
+                tracing::info!(
+                    "[audio] full-capture mode: transcribing whole recording \
+                     ({:.2}s) in one pass — {} segment(s) become preview-only",
+                    full.len() as f32 / TARGET_SAMPLE_RATE as f32,
+                    result.segments_emitted,
+                );
+                (full, true)
+            }
+            _ => {
+                // Tail-only WAV. When no segments were emitted the tail IS
+                // the whole recording, so flag it full_capture for accuracy.
+                let is_full = result.segments_emitted == 0;
+                (std::mem::take(&mut result.trimmed), is_full)
+            }
+        };
 
         let min_samples = (TARGET_SAMPLE_RATE as u64 * MIN_RECORDING_MS as u64 / 1000) as usize;
         if trimmed.len() < min_samples {
@@ -1281,6 +1323,7 @@ impl AudioCapture {
         Ok(StopOutcome::Wav {
             path: temp_path,
             speech_detected: result.speech_detected,
+            full_capture,
         })
     }
 

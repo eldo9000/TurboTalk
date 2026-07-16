@@ -963,6 +963,7 @@ pub(crate) mod common {
                 Ok(StopOutcome::Wav {
                     path,
                     speech_detected,
+                    full_capture,
                 }) => {
                     // Only now, after rec.stop() succeeded, take the statics
                     // that ptt_down wrote. The Err arm's loser takes nothing.
@@ -971,7 +972,7 @@ pub(crate) mod common {
                     // we still call `rec.stop()` defensively but skip stage emissions.
                     let job_id_opt = CURRENT_JOB_ID.lock().take();
                     crate::diagnostic_log::emergency_trace(format!(
-                        "[ptt_up] stop=Wav job_id={job_id_opt:?} speech_detected={speech_detected}"
+                        "[ptt_up] stop=Wav job_id={job_id_opt:?} speech_detected={speech_detected} full_capture={full_capture}"
                     ));
                     // Recover the focus identity captured at recording start. Outer
                     // `Option` = "was a recording in flight"; inner `Option<String>` =
@@ -1020,10 +1021,13 @@ pub(crate) mod common {
                         emit_stage(&app, job_id, "transcribing");
                     }
 
-                    // Stage 1: transcribe the tail WAV (audio after the last
-                    // segment cut, or the whole recording if no segments were
-                    // emitted — identical to the batch path behavior).
-                    // Always transcribe the tail when we have a WAV. The streaming
+                    // Stage 1: transcribe the WAV. In full-capture mode
+                    // (Parakeet) this is the ENTIRE recording in one pass —
+                    // whole-utterance context yields coherent punctuation and
+                    // capitalization. Otherwise it's the tail (audio after the
+                    // last segment cut, or the whole recording if no segments
+                    // were emitted — identical to the batch path behavior).
+                    // Always transcribe when we have a WAV. The streaming
                     // finalizer already trimmed silence and enforced MIN_RECORDING_MS;
                     // gating on `speech_detected` caused VAD false-negatives to drop
                     // real speech (5+ s of audio written with speech_detected=false).
@@ -1039,10 +1043,26 @@ pub(crate) mod common {
                     // Stage 2: wait for any in-flight concurrent segment
                     // transcriptions (started at key-down) to finish, then
                     // assemble them in emission order. Segments precede the
-                    // tail chronologically.
-                    let seg_text = seg_transcriber_opt
+                    // tail chronologically. In full-capture mode the WAV
+                    // already contains the segments' audio, so their text is
+                    // preview-only — join the worker to reap it, discard the
+                    // text.
+                    let seg_text_all = seg_transcriber_opt
                         .map(|st| st.join_segments())
                         .unwrap_or_default();
+                    let seg_text = if full_capture {
+                        if !seg_text_all.is_empty() {
+                            tracing::info!(
+                                "[hotkey job_id={:?}] full-capture: dropping {} chars of \
+                                 preview-only segment text",
+                                job_id_opt,
+                                seg_text_all.chars().count()
+                            );
+                        }
+                        String::new()
+                    } else {
+                        seg_text_all.clone()
+                    };
 
                     // Run garbage detection on the fully assembled
                     // transcript (segments + tail), not just the tail outcome.
@@ -1072,15 +1092,19 @@ pub(crate) mod common {
                             Ok((assembled, rejection, seg_text, tail_text))
                         }
                         Err(e) => {
-                            if !seg_text.is_empty() {
+                            // Salvage: even in full-capture mode, if the
+                            // one-pass transcription fails outright, the
+                            // preview segment text is better than losing the
+                            // dictation entirely.
+                            if !seg_text_all.is_empty() {
                                 tracing::warn!(
                                     "[transcribe job_id={:?}] tail failed, \
                                      using {} chars from segments: {}",
                                     job_id_opt,
-                                    seg_text.chars().count(),
+                                    seg_text_all.chars().count(),
                                     e
                                 );
-                                Ok((seg_text, None, String::new(), String::new()))
+                                Ok((seg_text_all, None, String::new(), String::new()))
                             } else {
                                 session_metrics::record_transcribe_error();
                                 Err(e)

@@ -22,7 +22,7 @@
 
   <!-- All tabs — centered in the titlebar -->
   <div class="absolute inset-y-0 left-0 right-0 flex items-end justify-center pointer-events-none">
-    {#each ['history', 'models', 'modes', 'settings'] as tab}
+    {#each ['history', 'models', 'edits', 'settings'] as tab}
       <button
         onclick={() => onTabSwitch(tab)}
         class="tt-tab relative px-3 h-full text-[12px] font-medium capitalize transition-[color,opacity] pointer-events-auto focus:outline-none focus-visible:outline-none

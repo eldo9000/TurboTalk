@@ -13,56 +13,30 @@
 
 <div class="flex-1 min-h-0 overflow-y-auto pb-4 bg-[var(--surface)]">
   <div class="tt-set" style="min-height:auto">
+    {#if cfgBackend === 'whisper'}
     <div class="tt-section">
       <div class="subsection-hd"><span class="subsection-hd-title">Post-processing</span></div>
       <div class="tt-row tt-row-field">
         <div class="tt-seg tt-seg-wide">
           {#each [['off','Off'],['text_formatter','Text Formatter']] as [v, lbl], i}
-            <button onclick={() => actions.setCleanupMode(v)} class={seg(cfgCleanupMode === v, i, 2)}>{lbl}</button>
+            <button
+              onclick={() => actions.setCleanupMode(v)}
+              class={seg(cfgCleanupMode === v, i, 2)}
+            >{lbl}</button>
           {/each}
         </div>
       </div>
       <div class="tt-row tt-row-col">
-        <p class="tt-desc">
-          {#if cfgCleanupMode === 'off'}
-            Paste raw Whisper output — no formatting, no changes.
-          {:else}
-            Deterministic rule-based formatting: spoken punctuation, slash commands, @mentions, and smart capitalization. No network, no model — works offline instantly.
-          {/if}
-        </p>
-      </div>
-    </div>
-
-    <div class="tt-section tt-section-last">
-      <div class="subsection-hd">
-        <span class="subsection-hd-title">Formatting Rules</span>
-      </div>
-      <p class="tt-desc tt-format-desc">
-        Each stage can be toggled independently. All stages run in sequence:
+      <p class="tt-desc">
+        {#if cfgCleanupMode === 'off'}
+          Paste raw transcript — no post-processing.
+        {:else}
+          Deterministic rule-based formatting: spoken punctuation, slash commands, @mentions, and smart capitalization.
+        {/if}
       </p>
-      <div class="tt-row tt-row-col tt-check-stack-list tt-format-list">
-        {#each [
-          ['punct',   cfgFormatPunct,   actions.setFormatPunct,   'Spoken punctuation',   '"type period" → "."  ·  "type comma" → ","'],
-          ['literal', cfgFormatLiteral, actions.setFormatLiteral, 'Slash & mentions',     '"slash deploy" → "/deploy"  ·  "at sign Bob" → "@Bob"'],
-          ['fillers', cfgFormatStripFillers, actions.setFormatStripFillers, 'Strip fillers', 'Removes um, uh, er, hmm'],
-          ['artifacts', cfgFormatStripArtifacts, actions.setFormatStripArtifacts, 'Strip artifacts', 'Removes trailing " ." and "..." from silence segments'],
-          ['caps',    cfgFormatCapitalize, actions.setFormatCapitalize, 'Capitalize',         'First letter of each utterance'],
-        ] as [key, val, setter, label, desc]}
-          <label class="tt-check-row tt-check-row-stacked">
-            <input
-              type="checkbox"
-              class="cb-native"
-              checked={val}
-              onchange={() => setter(!val)}
-            />
-            <div class="tt-check-stack">
-              <span class="tt-check-lbl tt-check-lbl-strong">{label}</span>
-              <p class="tt-check-desc">{desc}</p>
-            </div>
-          </label>
-        {/each}
       </div>
     </div>
+    {/if}
 
     <div class="tt-section tt-section-last">
       <div class="subsection-hd"><span class="subsection-hd-title">Replacements</span></div>
@@ -81,14 +55,11 @@
       </div>
     </div>
 
+    {#if cfgBackend === 'whisper'}
     <div class="tt-section tt-section-last">
       <div class="subsection-hd">
         <span class="subsection-hd-title">Whisper</span>
       </div>
-      {#if cfgBackend !== 'whisper'}
-        <p class="tt-disabled-label">Disabled when using the Parakeet model.</p>
-      {/if}
-      {#if cfgBackend === 'whisper'}
         <div class="tt-row tt-row-field" data-tip="Skip silent regions before transcription — prevents hallucination on silence and speeds up long recordings">
           <span class="tt-lbl">Silence Filter</span>
           <div class="tt-multi">
@@ -111,7 +82,34 @@
           ></textarea>
           <p class="tt-desc">Domain terms Whisper tends to mishear. Applied as <code class="tt-code">--prompt</code> bias every transcription.</p>
         </div>
-      {/if}
+        <div class="tt-row tt-row-col tt-check-stack-list tt-format-list">
+          <p class="tt-desc tt-format-desc">Text Formatter rules — toggle each independently:</p>
+          {#each [
+            ['punct',   cfgFormatPunct,   actions.setFormatPunct,   'Spoken punctuation',   '"type period" → "."  ·  "type comma" → ","'],
+            ['literal', cfgFormatLiteral, actions.setFormatLiteral, 'Slash & mentions',     '"slash deploy" → "/deploy"  ·  "at sign Bob" → "@Bob"'],
+            ['fillers', cfgFormatStripFillers, actions.setFormatStripFillers, 'Strip fillers', 'Removes um, uh, er, hmm'],
+            ['artifacts', cfgFormatStripArtifacts, actions.setFormatStripArtifacts, 'Strip artifacts', 'Removes trailing " ." and "..." from silence segments'],
+            ['caps',    cfgFormatCapitalize, actions.setFormatCapitalize, 'Capitalize',         'First letter of each utterance'],
+          ] as [key, val, setter, label, desc]}
+            <label class="tt-check-row tt-check-row-stacked" class:tt-check-disabled={cfgCleanupMode !== 'text_formatter'}>
+              <input
+                type="checkbox"
+                class="cb-native"
+                checked={val}
+                disabled={cfgCleanupMode !== 'text_formatter'}
+                onchange={() => setter(!val)}
+              />
+              <div class="tt-check-stack">
+                <span class="tt-check-lbl tt-check-lbl-strong">{label}</span>
+                <p class="tt-check-desc">{desc}</p>
+              </div>
+            </label>
+          {/each}
+          {#if cfgCleanupMode !== 'text_formatter'}
+            <p class="tt-desc tt-desc-muted">Switch to Text Formatter mode above to enable formatting rules.</p>
+          {/if}
+        </div>
     </div>
+    {/if}
   </div>
 </div>
