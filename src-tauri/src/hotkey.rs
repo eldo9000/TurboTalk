@@ -306,7 +306,7 @@ pub(crate) mod common {
             return;
         }
         CANCEL_EPOCH.fetch_add(1, Ordering::SeqCst);
-        play_chime(ChimeEvent::Cancel);
+        play_chime(app, ChimeEvent::Cancel);
         let rec = recorder.clone();
         let tray = tray_icon.clone();
         let app = app.clone();
@@ -346,24 +346,12 @@ pub(crate) mod common {
     /// because the overlay window has `focus: false` and ignores cursor
     /// events — WKWebView blocks `AudioContext` audio without a user
     /// gesture, so a frontend Web Audio chime would be silently dropped.
-    /// Plays a system sound via `NSSound` on macOS, `PlaySoundW` on Windows,
-    /// no-op on Linux.
-    ///
-    /// NSSound objects are preloaded at startup via a static pool so the
-    /// first chime doesn't suffer from audio-session cold-start lag.
-    pub(crate) fn play_chime(event: ChimeEvent) {
+    /// Plays a system sound via `NSSound` on macOS (dispatched to the main
+    /// thread — AppKit classes are unreliable from background threads),
+    /// `MessageBeep` on Windows, no-op on Linux.
+    pub(crate) fn play_chime(app: &AppHandle, event: ChimeEvent) {
         #[cfg(target_os = "macos")]
         {
-            use objc2_app_kit::NSSound;
-            use objc2_foundation::NSString;
-
-            let sound_name: &str = match event {
-                ChimeEvent::Start => "Pop",
-                ChimeEvent::Finish => "Bottle",
-                ChimeEvent::Cancel => "Tink",
-                ChimeEvent::Error => "Basso",
-            };
-
             let cfg = crate::settings::load();
             let enabled = match event {
                 ChimeEvent::Start => cfg.sound_on_start,
@@ -375,36 +363,40 @@ pub(crate) mod common {
                 return;
             }
 
-            let ns_name = NSString::from_str(sound_name);
-            let vol = cfg.sound_volume.clamp(0.0, 1.0) as f32;
+            let sound_name: &'static str = match event {
+                ChimeEvent::Start => "Pop",
+                ChimeEvent::Finish => "Bottle",
+                ChimeEvent::Cancel => "Tink",
+                ChimeEvent::Error => "Basso",
+            };
 
-            if let Some(ns_sound) = NSSound::soundNamed(&ns_name) {
-                ns_sound.setVolume(vol);
-                if ns_sound.play() {
-                    tracing::info!("[chime] NSSound {} (vol={:.2})", sound_name, vol);
-                    // Hold the Retained reference so the async playback survives
-                    // past this function scope.
-                    static SOUND: std::sync::atomic::AtomicPtr<NSSound> =
-                        std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
-                    let ptr = objc2::rc::Retained::into_raw(ns_sound);
-                    let old = SOUND.swap(ptr as *mut NSSound, std::sync::atomic::Ordering::Relaxed);
-                    if !old.is_null() {
-                        unsafe {
-                            let _ = objc2::rc::Retained::<NSSound>::from_raw(old);
-                        }
+            let app = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                use objc2_app_kit::NSSound;
+                use objc2_foundation::NSString;
+
+                let ns_name = NSString::from_str(sound_name);
+                if let Some(ns_sound) = NSSound::soundNamed(&ns_name) {
+                    // The system cache holds its own permanent retain on
+                    // system sounds — we don't need to keep the Retained
+                    // alive; playback completes regardless of when our
+                    // reference drops.
+                    if ns_sound.play() {
+                        tracing::info!("[chime] NSSound {}", sound_name);
+                    } else {
+                        tracing::warn!("[chime] NSSound play returned NO for '{}'", sound_name);
                     }
                 } else {
-                    tracing::warn!("[chime] NSSound play returned NO for '{}'", sound_name);
+                    tracing::warn!(
+                        "[chime] NSSound soundNamed returned null for '{}'",
+                        sound_name
+                    );
                 }
-            } else {
-                tracing::warn!(
-                    "[chime] NSSound soundNamed returned null for '{}'",
-                    sound_name
-                );
-            }
+            });
         }
         #[cfg(not(target_os = "macos"))]
         {
+            let _ = app;
             let cfg = crate::settings::load();
             let (enabled, _sound) = match event {
             // Sound choices are deliberate: short and "soft" by design, and
@@ -632,6 +624,10 @@ pub(crate) mod common {
                 crate::media_control::pause();
             }
 
+            // Play the start chime BEFORE rec.start() so CoreAudio input setup
+            // (which shares the audio session) doesn't silence the output sound.
+            play_chime(&app, ChimeEvent::Start);
+
             if let Err(e) = rec.start() {
                 crate::diagnostic_log::emergency_trace(format!(
                     "[ptt_down] rec.start failed state={} err={e}",
@@ -742,10 +738,10 @@ pub(crate) mod common {
                 }
             }
 
-            // Emit the ptt-down event and start cue *before* the frontmost-app
-            // query so the user's "recording started" audio/visual feedback
-            // lands immediately. `frontmost_app()` spawns osascript (~50-200ms);
-            // audio capture is already running, so moving it after the cue is a
+            // Emit the ptt-down events and tray icon *before* the frontmost-app
+            // query so the recording indicator lands immediately.
+            // `frontmost_app()` spawns osascript (~50-200ms);
+            // audio capture is already running, so moving it after is a
             // pure latency win with no data loss.
             tray::set_tray_icon(&tray, TrayState::Recording);
             // Position before ptt-down so the red recording overlay renders on
@@ -754,7 +750,6 @@ pub(crate) mod common {
             emit_critical(&app, "ptt-down", ());
             emit_stage(&app, job_id, "recording");
             crate::diagnostic_log::emergency_trace(format!("[ptt_down] recording job_id={job_id}"));
-            play_chime(ChimeEvent::Start);
 
             // Capture the frontmost app at recording start (best-effort; may be
             // `None` if the query fails). Stored under its own mutex so the
@@ -875,7 +870,7 @@ pub(crate) mod common {
                 ));
                 session_metrics::record_paste_success();
                 session_metrics::record_dictation_completed();
-                play_chime(ChimeEvent::Finish);
+                play_chime(app, ChimeEvent::Finish);
             }
             Ok(false) => {
                 crate::diagnostic_log::emergency_trace(format!(
@@ -1182,7 +1177,7 @@ pub(crate) mod common {
                                         "flaky": !is_partial,
                                     }),
                                 );
-                                play_chime(ChimeEvent::Error);
+                                play_chime(&app, ChimeEvent::Error);
                                 // Overlay shows the yellow toast — no need to
                                 // open the main window and steal focus.
                             }
@@ -1202,7 +1197,7 @@ pub(crate) mod common {
                                 session_metrics::record_dictation_discarded();
                                 emit_critical(&app, "recording-discarded", "empty-final-text");
                                 bail_out(&rec, &tray, &app, job_id_opt, true);
-                                play_chime(ChimeEvent::Finish);
+                                play_chime(&app, ChimeEvent::Finish);
                                 return;
                             }
                             if wait_for_hold_cancel_window(cancel_epoch_at_stop, job_id_opt) {
@@ -1306,7 +1301,7 @@ pub(crate) mod common {
 
                                 if final_text.is_empty() {
                                     emit_critical(&app, "recording-discarded", "empty-final-text");
-                                    play_chime(ChimeEvent::Finish);
+                                    play_chime(&app, ChimeEvent::Finish);
                                 } else {
                                     if wait_for_hold_cancel_window(cancel_epoch_at_stop, job_id_opt)
                                     {
@@ -1373,7 +1368,7 @@ pub(crate) mod common {
                                             ));
                                             session_metrics::record_paste_success();
                                             session_metrics::record_dictation_completed();
-                                            play_chime(ChimeEvent::Finish);
+                                 play_chime(&app, ChimeEvent::Finish);
                                         }
                                         Ok(false) => {
                                             crate::diagnostic_log::emergency_trace(format!(

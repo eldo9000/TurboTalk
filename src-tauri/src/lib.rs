@@ -161,7 +161,7 @@ fn simulate_rejection(app: tauri::AppHandle) {
             "flaky": true,
         }),
     );
-    crate::hotkey::common::play_chime(crate::hotkey::common::ChimeEvent::Error);
+    crate::hotkey::common::play_chime(&app, crate::hotkey::common::ChimeEvent::Error);
     show_main_and_open_history(app.clone());
     tracing::info!("[debug] simulate_rejection emitted transcription-rejected event");
 }
@@ -1495,29 +1495,14 @@ pub fn run() {
             // ── Main window — hidden until tray click unless onboarding ───
             if let Some(win) = app.get_webview_window("main") {
                 use tauri::LogicalSize;
-                // Compact floor keeps resize handles reachable on small displays;
-                // the frontend still restores the preferred 550×560 when it fits.
-                let _ = win.set_min_size(Some(LogicalSize::new(
-                    windowing::MAIN_WINDOW_MIN_W,
-                    windowing::MAIN_WINDOW_MIN_H,
-                )));
                 windowing::ensure_main_webview_window_visible(&win);
-                // Keep the main window visible while tray/status-item
-                // visibility is unreliable on this macOS setup. The close
-                // handler still hides instead of quitting, and the Dock icon
-                // is now the reliable way back in.
-                let readiness = crate::permissions::check_readiness();
-                let height = if readiness.ready {
-                    windowing::MAIN_WINDOW_DEFAULT_H
-                } else {
-                    windowing::MAIN_WINDOW_MIN_H
-                };
-                let _ = win.set_size(tauri::LogicalSize::new(
-                    windowing::MAIN_WINDOW_DEFAULT_W,
-                    height,
-                ));
+                // Max horizontal = 1.4× min width (reduced 30% from 2×).
+                // Max vertical is set dynamically from the frontend when the
+                // user opens the Settings tab (content-height measured there).
+                // Fixed values, not monitor-dependent — no snapping on display-
+                // scale transitions.
+                let _ = win.set_max_size(Some(LogicalSize::new(588.0, 2000.0)));
                 let _ = win.center();
-                windowing::ensure_main_webview_window_visible(&win);
                 let _ = win.show();
                 let _ = win.set_focus();
             }

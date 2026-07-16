@@ -5,9 +5,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { commands } from './bindings.ts';
 import { invoke } from '@tauri-apps/api/core';
 
-  // 'recording' | 'transcribing' | 'error' | 'idle'
   // Arming (warm-up) is now handled by the separate Status window.
-  let mode      = $state('idle'); // 'idle' | 'recording' | 'transcribing' | 'error'
+  let mode      = $state('idle'); // 'idle' | 'recording' | 'transcribing'
   let canvasEl  = $state(null);
   let wordCount = $state(0);
 
@@ -302,11 +301,7 @@ import { invoke } from '@tauri-apps/api/core';
       logOverlay('timer_cancel', { name: 'idleTimer', reason: 'ptt-down', had_value: idleTimer !== null });
       clearTimeout(idleTimer);
       idleTimer = null;
-      // Also cancel any lingering error-panel timer so a stale
-      // exitError() doesn't clobber the recording mode mid-dictation.
-      logOverlay('timer_cancel', { name: 'errorTimer', reason: 'ptt-down', had_value: errorTimer !== null });
-      clearTimeout(errorTimer);
-      errorTimer = null;
+
       // Fire the one-shot connect flash. Re-arm cleanly if a previous flash
       // timer is still pending (rapid re-press).
       justConnected = true;
@@ -339,39 +334,13 @@ import { invoke } from '@tauri-apps/api/core';
       logOverlay('timer_set', { name: 'idleTimer', delay: 350, reason: 'transcript_event', job_id: currentJobId });
     }).then(u => uns.push(u));
 
-    // Error panel helpers — toggle overlay cursor events so the user can
-    // click the panel to open the main window at the history tab.
-    let errorTimer = null;
-
-    function enterError() {
-      logOverlay('mode_transition', { from: mode, to: 'error', trigger: 'enterError', job_id: currentJobId });
-      stopTranscribing('error');
-    }
-
-    function exitError() {
-      logOverlay('mode_transition', { from: 'error', to: 'idle', trigger: 'exitError_timer', job_id: currentJobId });
-      clearTimeout(errorTimer);
-      errorTimer = null;
-      mode = 'idle';
-    }
-
-    // Guard: don't override the error panel with an idle transition.
-    // The error panel owns the display until its timer dismisses it.
-    function skipIfError() {
-      if (mode === 'error') {
-        logOverlay('guard_rejected', { guard: 'skipIfError', event: '(caller)', mode, job_id: currentJobId });
-        return true;
-      }
-      return false;
-    }
-
     // Guard: only allow lifecycle-completion transitions when the overlay
-    // is in a terminal display state (transcribing or error).  Ignores
-    // stale events from a previous dictation that arrive during a new
-    // recording — those would hide the overlay mid-dictation.
-    function skipUnlessTranscribingOrError() {
-      if (mode !== 'transcribing' && mode !== 'error') {
-        logOverlay('guard_rejected', { guard: 'skipUnlessTranscribingOrError', event: '(caller)', mode, job_id: currentJobId });
+    // is transcribing.  Ignores stale events from a previous dictation
+    // that arrive during a new recording — those would hide the overlay
+    // mid-dictation.
+    function skipUnlessTranscribing() {
+      if (mode !== 'transcribing') {
+        logOverlay('guard_rejected', { guard: 'skipUnlessTranscribing', event: '(caller)', mode, job_id: currentJobId });
         return true;
       }
       return false;
@@ -383,37 +352,23 @@ import { invoke } from '@tauri-apps/api/core';
     // All rejections are now advisory (text is always pasted) — the panel
     // alerts the user to review the output.
     listen('transcription-rejected', (e) => {
-      const guard = skipIfError();
-      logOverlay('event_arrived', { event: 'transcription-rejected', mode, job_id: currentJobId, guarded: guard, flaky: e.payload?.flaky, pasted: e.payload?.pasted });
-      if (guard) return;
-      enterError();
-      errorTimer = setTimeout(exitError, 3000);
-      logOverlay('timer_set', { name: 'errorTimer', delay: 3000, reason: 'transcription-rejected', job_id: currentJobId });
+      const guarded = skipUnlessTranscribing();
+      logOverlay('event_arrived', { event: 'transcription-rejected', mode, job_id: currentJobId, guarded, flaky: e.payload?.flaky, pasted: e.payload?.pasted });
+      if (guarded) return;
+      stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     listen('transcript-error', () => {
-      const guarded = skipIfError();
+      const guarded = skipUnlessTranscribing();
       logOverlay('event_arrived', { event: 'transcript-error', mode, job_id: currentJobId, guarded });
       if (guarded) return;
-      enterError();
-      errorTimer = setTimeout(exitError, 3000);
-      logOverlay('timer_set', { name: 'errorTimer', delay: 3000, reason: 'transcript-error', job_id: currentJobId });
+      stopTranscribing('idle');
     }).then(u => uns.push(u));
 
-    listen('recording-discarded', (e) => {
-      logOverlay('event_arrived', { event: 'recording-discarded', mode, job_id: currentJobId, reason: e.payload });
+    listen('recording-discarded', () => {
+      logOverlay('event_arrived', { event: 'recording-discarded', mode, job_id: currentJobId });
       if (mode === 'idle') return;
-      // empty-final-text means transcription ran but cleanup produced nothing
-      // (e.g. all non-speech annotations stripped). Show feedback so the user
-      // knows the system tried. Other discards (too-short, error-path) are
-      // quick-tap or transient — go to idle silently.
-      if (e.payload === 'empty-final-text') {
-        enterError();
-        errorTimer = setTimeout(exitError, 3000);
-        logOverlay('timer_set', { name: 'errorTimer', delay: 3000, reason: 'recording-discarded', job_id: currentJobId });
-      } else {
-        stopTranscribing('idle');
-      }
+      stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     listen('recording-cancelled', () => {
@@ -423,14 +378,14 @@ import { invoke } from '@tauri-apps/api/core';
     }).then(u => uns.push(u));
 
     listen('recording-recovered', () => {
-      const guarded = skipUnlessTranscribingOrError();
+      const guarded = skipUnlessTranscribing();
       logOverlay('event_arrived', { event: 'recording-recovered', mode, job_id: currentJobId, guarded });
       if (guarded) return;
       stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     listen('recording-too-short', () => {
-      const guarded = skipUnlessTranscribingOrError();
+      const guarded = skipUnlessTranscribing();
       logOverlay('event_arrived', { event: 'recording-too-short', mode, job_id: currentJobId, guarded });
       if (guarded) return;
       stopTranscribing('idle');
@@ -443,16 +398,14 @@ import { invoke } from '@tauri-apps/api/core';
     }).then(u => uns.push(u));
 
     listen('paste-error', () => {
-      const guarded = skipUnlessTranscribingOrError();
+      const guarded = skipUnlessTranscribing();
       logOverlay('event_arrived', { event: 'paste-error', mode, job_id: currentJobId, guarded });
       if (guarded) return;
-      enterError();
-      errorTimer = setTimeout(exitError, 3000);
-      logOverlay('timer_set', { name: 'errorTimer', delay: 3000, reason: 'paste-error', job_id: currentJobId });
+      stopTranscribing('idle');
     }).then(u => uns.push(u));
 
     listen('paste-copied', () => {
-      const guarded = skipUnlessTranscribingOrError();
+      const guarded = skipUnlessTranscribing();
       logOverlay('event_arrived', { event: 'paste-copied', mode, job_id: currentJobId, guarded });
       if (guarded) return;
       stopTranscribing('idle');
@@ -543,7 +496,6 @@ import { invoke } from '@tauri-apps/api/core';
       logOverlay('component_destroy', { mode, job_id: currentJobId });
       clearInterval(elapsedTimer);
       clearTimeout(flashTimer);
-      clearTimeout(errorTimer);
       clearTimeout(idleTimer);
       uns.forEach(u => u());
     };
@@ -652,62 +604,7 @@ import { invoke } from '@tauri-apps/api/core';
     border-radius: 20px;
   }
 
-  /* Error / rejection panel — fixed size regardless of overlay size mode.
-     Interrupts and replaces whatever recording/transcribing state was active.
-     Yellow pulsing border (same as warm-up tile), content centered, no
-     waveform or timer. Clickable — opens main window at the history tab. */
-  .pill.error {
-    width: 260px;
-    height: 80px;
-    box-sizing: border-box;
-    justify-content: center;
-    gap: 0;
-    padding: 0;
-    border-radius: 20px;
-    border-color: rgba(251, 191, 36, 0.85);
-    animation: pulse-error 1.15s ease-in-out infinite;
-    pointer-events: auto;
-    cursor: pointer;
-  }
 
-  @keyframes pulse-error {
-    0%, 100% {
-      border-color: rgba(251, 191, 36, 0.28);
-      box-shadow: 0 0 0 0 rgba(251, 191, 36, 0);
-    }
-    45%, 55% {
-      border-color: rgba(251, 191, 36, 1);
-      box-shadow:
-        0 0 0 3px rgba(251, 191, 36, 0.22),
-        0 0 22px 5px rgba(251, 191, 36, 0.34);
-    }
-  }
-
-  .error-panel {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-  }
-
-  .error-label {
-    font-size: 13px;
-    font-weight: 700;
-    line-height: 1;
-    letter-spacing: 0;
-    color: #fbbf24;
-    user-select: none;
-  }
-
-  .error-hint {
-    font-size: 9px;
-    font-weight: 500;
-    line-height: 1;
-    letter-spacing: 0.08em;
-    color: rgba(251, 191, 36, 0.55);
-    user-select: none;
-  }
   .status-dot {
     width: 11px;
     height: 11px;
@@ -843,19 +740,13 @@ import { invoke } from '@tauri-apps/api/core';
 
 </style>
 
-<!-- In 'large' mode the window is tall (see overlay_height_for_size in lib.rs).
-     Anchor the pill to the screen-edge side — bottom of the window for bottom
-     position, top for top position — with a 100 px gutter, so the pill lands
-     in the same on-screen spot as the default size while the transcript bubble
-     grows into the rest of the window. Small/medium stay centered.
-     Error mode always centers regardless of overlay size. -->
 <div
   class="w-full h-full flex justify-center"
-  class:items-center={overlaySize !== 'large' || mode === 'error'}
-  class:items-end={overlaySize === 'large' && overlayPosition !== 'top' && mode !== 'error'}
-  class:items-start={overlaySize === 'large' && overlayPosition === 'top' && mode !== 'error'}
-  style:padding-bottom={overlaySize === 'large' && overlayPosition !== 'top' && mode !== 'error' ? '100px' : '0'}
-  style:padding-top={overlaySize === 'large' && overlayPosition === 'top' && mode !== 'error' ? '100px' : '0'}
+  class:items-center={overlaySize !== 'large'}
+  class:items-end={overlaySize === 'large' && overlayPosition !== 'top'}
+  class:items-start={overlaySize === 'large' && overlayPosition === 'top'}
+  style:padding-bottom={overlaySize === 'large' && overlayPosition !== 'top' ? '100px' : '0'}
+  style:padding-top={overlaySize === 'large' && overlayPosition === 'top' ? '100px' : '0'}
 >
   <div class="relative">
   {#if showPreview}
@@ -884,9 +775,8 @@ import { invoke } from '@tauri-apps/api/core';
   <div
     class="pill flex items-center gap-3.5 px-5 py-3.5 rounded-2xl"
     class:show={mode !== 'idle'}
-    class:small={overlaySize === 'small' && mode !== 'error'}
-    class:large={overlaySize === 'large' && mode !== 'error'}
-    class:error={mode === 'error'}
+    class:small={overlaySize === 'small'}
+    class:large={overlaySize === 'large'}
     class:recording={mode === 'recording'}
     class:flash={mode === 'recording' && justConnected}
     class:transcribing={mode === 'transcribing'}
@@ -897,15 +787,7 @@ import { invoke } from '@tauri-apps/api/core';
     style:-webkit-backdrop-filter={'blur(18px) saturate(160%)'}
   >
     <div class="pill-inner">
-    {#if mode === 'error'}
-      <!-- Fixed-size error panel — same regardless of small/medium/large.
-           Auto-dismisses after 3 seconds. Only the overlay shows the toast;
-           no main window popup — the text was already pasted in full. -->
-      <div class="error-panel">
-        <span class="error-label">Error detected!</span>
-        <span class="error-hint">Check the output text for errors</span>
-      </div>
-    {:else if overlaySize === 'small'}
+    {#if overlaySize === 'small'}
       <canvas
         bind:this={canvasEl}
         aria-hidden="true"

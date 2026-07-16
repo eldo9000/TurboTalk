@@ -2,8 +2,8 @@
   import { onMount, tick } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
-  import { currentMonitor, getCurrentWindow } from '@tauri-apps/api/window';
-  import { LogicalSize, PhysicalPosition } from '@tauri-apps/api/dpi';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { LogicalSize } from '@tauri-apps/api/dpi';
   import { open as openFilePicker } from '@tauri-apps/plugin-dialog';
   import { initTheme } from '@libre/ui/src/theme.js';
   import HistoryTab from './HistoryTab.svelte';
@@ -244,7 +244,6 @@
     await commands.clearForceOnboarding();
     await syncAppStateFromBackend();
     showOnboarding = false;
-    await restoreMainWindowSize();
     cfgLaunchLogin = await commands.getLaunchAtLogin();
     const res = await commands.prewarmModel();
     if (res.status === 'error') {
@@ -404,7 +403,6 @@
   let readinessModelPresent = $state(false);
   let cfgIdleTimeout       = $state(0);
   let pendingTimeouts = new Set();
-  let resizeTimeout = null;
 
   function resolvedAltVariant() {
 
@@ -444,171 +442,12 @@
   const ZOOM_LEVELS = [100, 125, 150, 175, 200];
   let zoomIdx = $state(parseInt(localStorage.getItem('tt-zoom') ?? '0'));
 
-  // Main window: preferred utility size with compact-screen escape hatches.
-  const WINDOW_W_DEFAULT = 550;
-  const WINDOW_H_DEFAULT = 560;
-  const WINDOW_W_MIN = 420;
-  const WINDOW_H_MIN = 420;
-  const WINDOW_HEIGHT_KEY = 'tt-window-height';
-  // Chrome heights (CSS px, unzoomed): titlebar h-10 = 40, bottom bar h-7 = 28.
-  // The settings scroll container adds 2px bottom padding (pb-0.5); the last row
-  // keeps its own 4px, for a 6px gap below the last button.
-  const TITLEBAR_H = 40;
-  const BOTTOMBAR_H = 28;
-  const CONTENT_BOTTOM_GAP = 2;
-  let suppressWindowResizeTrack = false;
-
-  function savedLogicalHeight() {
-    const raw = parseInt(localStorage.getItem(WINDOW_HEIGHT_KEY) ?? String(WINDOW_H_DEFAULT), 10);
-    return Number.isFinite(raw) ? Math.max(WINDOW_H_MIN, raw) : WINDOW_H_DEFAULT;
-  }
-
-  function persistLogicalHeight(logicalH) {
-    localStorage.setItem(
-      WINDOW_HEIGHT_KEY,
-      String(Math.max(WINDOW_H_MIN, Math.round(logicalH))),
-    );
-  }
-
-  // Single authority for the main window's size. Min scales with the UI zoom;
-  // width grows to the zoom-scaled comfortable width and is capped at 2× min.
-  // Height is clipped to fit the Settings content exactly (no dead space below
-  // the last button) when that tab is open; otherwise it's capped at 2× min.
-  // All natural-content math is in CSS px and multiplied by zoom to logical px
-  // (verified: windowLogical = contentCss × zoom).
-  async function applyWindowSizing() {
-    const zoomPct = ZOOM_LEVELS[zoomIdx];
-    const zoom = zoomPct / 100;
-    const win = getCurrentWindow();
-    const scale = await win.scaleFactor().catch(() => 1);
-    const monitor = await currentMonitor().catch(() => null);
-    // Large fallback so a failed monitor read never caps sizing.
-    const workW = monitor?.workArea?.size?.width  ? monitor.workArea.size.width  / scale : 100000;
-    const workH = monitor?.workArea?.size?.height ? monitor.workArea.size.height / scale : 100000;
-
-    const minW = Math.round(WINDOW_W_MIN * zoom);
-    const minH = Math.round(WINDOW_H_MIN * zoom);
-    const defW = Math.round(WINDOW_W_DEFAULT * zoom);
-    const maxW = Math.max(minW, Math.min(2 * minW, workW));
-
-    // Height max: fit the Settings content when it's shown; else cap at 2× min.
-    let maxH = Math.max(minH, Math.min(2 * minH, workH));
-    let fitH = null;
-    if (activeTab === 'settings' && settingsContentEl) {
-      await tick();
-      const contentCss = Array.from(settingsContentEl.children).reduce((a, c) => a + c.offsetHeight, 0);
-      if (contentCss) {
-        const totalCss = TITLEBAR_H + contentCss + CONTENT_BOTTOM_GAP + BOTTOMBAR_H;
-        fitH = Math.max(minH, Math.min(Math.round(totalCss * zoom), Math.round(workH)));
-        maxH = fitH;
-      }
-    }
-
-    await win.setMinSize(new LogicalSize(minW, minH));
-    await win.setMaxSize(new LogicalSize(maxW, maxH));
-
-    const size = await win.innerSize().catch(() => null);
-    if (!size) return;
-    const curW = size.width / scale;
-    const curH = size.height / scale;
-    const newW = curW < defW - 1 ? defW : Math.min(curW, maxW);
-    const newH = fitH != null ? fitH : Math.min(curH, maxH);
-    if (Math.abs(newW - curW) > 1 || Math.abs(newH - curH) > 1) {
-      suppressWindowResizeTrack = true;
-      try {
-        await win.setSize(new LogicalSize(newW, newH));
-      } finally {
-        suppressWindowResizeTrack = false;
-      }
-      // Resizing may push the window's right/bottom edge off a small screen.
-      await nudgeWindowOnScreen();
-    }
-  }
-
-  // Standard "don't lose the window" safety: keep the window inside the current
-  // monitor's work area. Only called right after we grow the window on a zoom
-  // change — never on the user's own drags — so it's never disruptive. All math
-  // in physical pixels (outer bounds + work area are both physical).
-  async function nudgeWindowOnScreen() {
-    const win = getCurrentWindow();
-    const [pos, size, monitor] = await Promise.all([
-      win.outerPosition().catch(() => null),
-      win.outerSize().catch(() => null),
-      currentMonitor().catch(() => null),
-    ]);
-    const wa = monitor?.workArea;
-    if (!pos || !size || !wa) return;
-    const workRight  = wa.position.x + wa.size.width;
-    const workBottom = wa.position.y + wa.size.height;
-    // Furthest top-left that still fits; if the window is larger than the work
-    // area, pin to the top-left corner so the title bar stays reachable.
-    const maxX = Math.max(wa.position.x, workRight  - size.width);
-    const maxY = Math.max(wa.position.y, workBottom - size.height);
-    const x = Math.min(Math.max(pos.x, wa.position.x), maxX);
-    const y = Math.min(Math.max(pos.y, wa.position.y), maxY);
-    if (x !== pos.x || y !== pos.y) {
-      await win.setPosition(new PhysicalPosition(x, y)).catch(() => {});
-    }
-  }
-
-  async function applyWindowSizeLimits() {
-    const win = getCurrentWindow();
-    await win.setResizable(true);
-    await win.setMaximizable(false);
-    await applyWindowSizing();
-  }
-
-  async function applyWindowSizeFromPrefs() {
-    const win = getCurrentWindow();
-    const monitor = await currentMonitor().catch(() => null);
-    const scale = monitor?.scaleFactor ?? await win.scaleFactor().catch(() => 1);
-    const zoomPct = ZOOM_LEVELS[zoomIdx];
-    const scaledMinW = Math.round(WINDOW_W_MIN * zoomPct / 100);
-    const scaledMinH = Math.round(WINDOW_H_MIN * zoomPct / 100);
-    const scaledDefaultW = Math.round(WINDOW_W_DEFAULT * zoomPct / 100);
-    const maxW = monitor?.workArea?.size?.width ? monitor.workArea.size.width / scale : scaledDefaultW;
-    const maxH = monitor?.workArea?.size?.height ? monitor.workArea.size.height / scale : savedLogicalHeight();
-    const w = Math.min(scaledDefaultW, Math.max(scaledMinW, maxW));
-    const h = Math.min(savedLogicalHeight(), Math.max(scaledMinH, maxH));
-    suppressWindowResizeTrack = true;
-    try {
-      await win.setSize(new LogicalSize(w, h));
-    } finally {
-      suppressWindowResizeTrack = false;
-    }
-  }
-
-  async function restoreMainWindowSize() {
-    await applyWindowSizeLimits();
-    await applyWindowSizeFromPrefs();
-  }
-
-  // Persist the user's chosen height on resize — no clamping or snapping. The
-  // OS already prevents resizing below the min size set in applyWindowSizing.
-  async function trackWindowHeight() {
-    if (showOnboarding || suppressWindowResizeTrack) return;
-    const win = getCurrentWindow();
-    const size = await win.innerSize().catch(() => null);
-    const factor = await win.scaleFactor().catch(() => 1);
-    if (size) persistLogicalHeight(size.height / factor);
-  }
-
-  $effect(() => {
-    if (showOnboarding) return;
-    void applyWindowSizeLimits();
-  });
-
-  $effect(() => {
-    const zoomPct = ZOOM_LEVELS[zoomIdx];
-    document.documentElement.style.zoom = `${zoomPct}%`;
+  function applyZoomAndSave() {
+    document.documentElement.style.zoom = `${ZOOM_LEVELS[zoomIdx]}%`;
     localStorage.setItem('tt-zoom', String(zoomIdx));
-    void applyWindowSizing();
-  });
-
-
-
-  function zoomIn()  { if (zoomIdx < ZOOM_LEVELS.length - 1) zoomIdx++; }
-  function zoomOut() { if (zoomIdx > 0) zoomIdx--; }
+  }
+  function zoomIn()  { if (zoomIdx < ZOOM_LEVELS.length - 1) { zoomIdx++; applyZoomAndSave(); } }
+  function zoomOut() { if (zoomIdx > 0) { zoomIdx--; applyZoomAndSave(); } }
 
   let outerEl = $state(null);
   let settingsContentEl = $state(null);
@@ -946,9 +785,17 @@
     if (tab === 'edits')    openEdits();
     if (tab === 'settings') {
       openSettings();
-      // Measure the settings content after the tab has rendered. Measuring
-      // during the tab switch can leave the window with stale empty space.
-      tick().then(() => applyWindowSizeLimits());
+      tick().then(() => {
+        if (!settingsContentEl) return;
+        const contentH = Array.from(settingsContentEl.children).reduce(
+          (a, c) => a + c.offsetHeight, 0,
+        );
+        if (!contentH) return;
+        const totalCss = 40 + contentH + 2 + 28; // titlebar + content + gap + bottombar
+        const maxH = Math.round(totalCss * ZOOM_LEVELS[zoomIdx] / 100);
+        const win = getCurrentWindow();
+        win.setMaxSize(new LogicalSize(588, maxH));
+      });
     }
   }
 
@@ -1262,19 +1109,13 @@
       recheckReadiness().then(async () => {
         logUi('app-ready', platform);
         if (!showOnboarding) {
-          await applyWindowSizeLimits();
           // prewarmOllama removed — legacy LLM classifier no longer used
         }
       });
       syncAppStateFromBackend();
 
-      getCurrentWindow().onResized(() => {
-        if (resizeTimeout) clearTimeout(resizeTimeout);
-        resizeTimeout = window.setTimeout(() => {
-          trackWindowHeight();
-          resizeTimeout = null;
-        }, 150);
-      }).then(addCleanup);
+      // Apply initial CSS zoom (saved from last session).
+      document.documentElement.style.zoom = `${ZOOM_LEVELS[zoomIdx]}%`;
     };
 
     init();
@@ -1283,7 +1124,6 @@
       disposed = true;
       pendingTimeouts.forEach(id => clearTimeout(id));
       pendingTimeouts.clear();
-      if (resizeTimeout) clearTimeout(resizeTimeout);
       cleanups.splice(0).forEach(cleanup => cleanup());
     };
   });
@@ -1305,7 +1145,6 @@
         commands.clearForceOnboarding();
         unsupportedPlatformDismissed = true;
         showOnboarding = false;
-        restoreMainWindowSize();
       }}
     />
   {/if}
@@ -1325,7 +1164,7 @@
   {/if}
 
   {#if activeTab === 'settings'}
-    <div class="flex-1 min-h-0 overflow-y-auto pb-0.5 bg-[var(--surface)] text-[12px]">
+    <div class="flex-1 min-h-0 overflow-y-auto pb-0.5 bg-[var(--surface)] text-[12px]" style="scrollbar-gutter: stable;">
       <SettingsTab
         bind:cfgHotkeyMode
         bind:cfgCancelOnEsc

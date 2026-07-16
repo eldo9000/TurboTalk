@@ -1,7 +1,21 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-07-15 (Overlay-stuck-on-cancel fix)
-**Current state:** Fixed the overlay-stuck-on-cancel bug in `src/Overlay.svelte`. The `recording-cancelled`, `recording-discarded`, and `device-lost` event handlers used `skipUnlessTranscribingOrError()` guard, which rejected the event when overlay mode was `'recording'` — exactly when cancel or device-loss happens. Changed to `if (mode === 'idle') return` so these terminal events always dismiss the overlay from any active state. `recording-recovered`, `recording-too-short`, `paste-error`, and `paste-copied` retain the original guard (they only fire after ptt-up, so mode is always `'transcribing'`). Proof: `npm run typecheck` and `npm run build` pass clean.
+**Last updated:** 2026-07-16 (Remove overlay error state, fix window auto-resize)
+**Current state:** Fixed window auto-resize on monitor drag (v4 — scale factor detection). Removed overlay error state.
+
+## Window auto-resize fix v4 (2026-07-16)
+
+Root cause confirmed as known Tauri bug [#14825](https://github.com/tauri-apps/tauri/issues/14825): "Size seemingly not being respected on macOS with different monitor scalings." When the window moves between displays with different backing scale factors, Tauri/macOS resizes the window independently of our JavaScript.
+
+The `currentMonitor().name` approach failed because `currentMonitor()` can return null or stale values during an in-progress drag transition. This fix switches to `win.scaleFactor()` as the detection signal — it's always available and changes reliably between different-resolution displays.
+
+Detection in `onResized` handler (150ms debounce):
+1. Capture `prevSavedH` from `savedLogicalHeight()` before `trackWindowHeight()` overwrites it
+2. Read `win.scaleFactor()` as the current signal
+3. If scale factor changed since last event AND current height differs from `prevSavedH` by >2px, restore the saved height
+4. `suppressWindowResizeTrack` prevents cascading saves
+
+`npm run typecheck` and `npm run build` pass clean. (`mode === 'error'`) from `src/Overlay.svelte`. The yellow "Error detected!" panel no longer appears — all terminal events (`transcription-rejected`, `transcript-error`, `paste-error`, `recording-discarded`) now dismiss the overlay to `idle` immediately. Error chime, history filtered-entry badges, and main window toasts (`paste-error` in particular) are preserved — the overlay just stops being the error-signal channel. Removed `enterError()`, `exitError()`, `skipIfError()` functions, `errorTimer`, error-related CSS (`.pill.error`, `.error-panel`, `@keyframes pulse-error`), and error template block. The overlay now has three states: `idle`, `recording`, `transcribing`. Proof: `npm run typecheck` and `npm run build` pass clean. The `recording-cancelled`, `recording-discarded`, and `device-lost` event handlers used `skipUnlessTranscribingOrError()` guard, which rejected the event when overlay mode was `'recording'` — exactly when cancel or device-loss happens. Changed to `if (mode === 'idle') return` so these terminal events always dismiss the overlay from any active state. `recording-recovered`, `recording-too-short`, `paste-error`, and `paste-copied` retain the original guard (they only fire after ptt-up, so mode is always `'transcribing'`). Proof: `npm run typecheck` and `npm run build` pass clean.
 
 ## Latest overlay proof
 

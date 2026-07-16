@@ -55,7 +55,7 @@ pub fn init() -> PathBuf {
         .build(&log_dir);
 
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("turbotalk_lib=debug,warn"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("turbotalk_lib=info,warn"));
 
     match (main_result, error_result) {
         (Ok(main_appender), Ok(error_appender)) => {
