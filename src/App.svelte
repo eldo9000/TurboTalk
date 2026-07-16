@@ -1164,7 +1164,7 @@
   {/if}
 
   {#if activeTab === 'settings'}
-    <div class="settings-scroll flex-1 min-h-0 overflow-y-scroll pb-0.5 bg-[var(--surface)] text-[12px]">
+    <div class="settings-scroll flex-1 min-h-0 overflow-y-auto pb-0.5 bg-[var(--surface)] text-[12px]">
       <SettingsTab
         bind:cfgHotkeyMode
         bind:cfgCancelOnEsc
