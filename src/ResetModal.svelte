@@ -1,6 +1,4 @@
 <script>
-  import { commands } from './bindings.ts';
-
   let {
     open = false,
     closing = false,
@@ -15,6 +13,7 @@
     onResetTurboTalk,
     onClearWarmupCache,
     onCreateBugReport,
+    onRerunWelcome,
   } = $props();
 </script>
 
@@ -80,7 +79,7 @@
           <p class="reset-action-desc">Clears everything including downloaded models. You'll need to download them again.</p>
         </div>
         <div class="reset-action-row">
-          <button onclick={() => { commands.resetOnboarding(); onClose(); }} disabled={resetBusy} class="tt-btn reset-action-btn justify-center">
+          <button onclick={() => { onRerunWelcome?.(); onClose(); }} disabled={resetBusy} class="tt-btn reset-action-btn justify-center">
             Re-run Welcome Screen
           </button>
           <p class="reset-action-desc">Shows the setup wizard again without clearing any settings or models.</p>
