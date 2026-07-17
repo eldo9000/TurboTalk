@@ -4,14 +4,11 @@
     closing = false,
     resetBusy = false,
     resetError = '',
-    warmupResetBusy = false,
-    warmupResetMsg = '',
     bugNote = $bindable(''),
     diagnosticMsg = '',
     platform = 'macos',
     onClose,
     onResetTurboTalk,
-    onClearWarmupCache,
     onCreateBugReport,
     onRerunWelcome,
   } = $props();
@@ -70,13 +67,13 @@
           <button onclick={() => onResetTurboTalk(false)} disabled={resetBusy} class="tt-btn reset-action-btn justify-center">
             Reset, Keep Models
           </button>
-          <p class="reset-action-desc">Clears settings, transcript history, and warm-up. Keeps downloaded transcription models.</p>
+          <p class="reset-action-desc">Clears settings, history, and warm-up. Keeps downloaded models.</p>
         </div>
         <div class="reset-action-row">
           <button onclick={() => onResetTurboTalk(true)} disabled={resetBusy} class="tt-btn tt-btn-danger-hover reset-action-btn justify-center">
             Reset Everything
           </button>
-          <p class="reset-action-desc">Clears everything including downloaded models. You'll need to download them again.</p>
+          <p class="reset-action-desc">Clears everything including models. You'll need to download them again.</p>
         </div>
         <div class="reset-action-row">
           <button onclick={() => { onRerunWelcome?.(); onClose(); }} disabled={resetBusy} class="tt-btn reset-action-btn justify-center">
@@ -84,16 +81,7 @@
           </button>
           <p class="reset-action-desc">Shows the setup wizard again without clearing any settings or models.</p>
         </div>
-        <div class="reset-action-row">
-          <button onclick={onClearWarmupCache} disabled={resetBusy || warmupResetBusy} class="tt-btn reset-action-btn justify-center">
-            {warmupResetBusy ? 'Clearing…' : 'Clear warmup cache'}
-          </button>
-          <p class="reset-action-desc">Clears the transcription model warm-up so it reloads next time.</p>
-        </div>
 
-        {#if warmupResetMsg}
-          <p class="text-[10px] text-[var(--text-muted)] break-all leading-snug">{warmupResetMsg}</p>
-        {/if}
         {#if resetError}
           <p class="text-[10px] text-red-400 leading-snug">{resetError}</p>
         {/if}
@@ -104,7 +92,7 @@
             id="bug-note"
             bind:value={bugNote}
             rows="2"
-            placeholder={"Optional — what happened?\nThe report gathers the technical details."}
+            placeholder={"The report gathers only\ntechnical details."}
             class="tt-input reset-action-desc"
           ></textarea>
         </div>

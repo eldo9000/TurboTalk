@@ -1,5 +1,5 @@
 <script>
-  import { onMount, tick, untrack } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
   import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -193,8 +193,6 @@
   let resetClosing = $state(false);
   let resetBusy    = $state(false);
   let resetError   = $state('');
-  let warmupResetBusy = $state(false);
-  let warmupResetMsg  = $state('');
 
   function closeAbout() {
     aboutClosing = true;
@@ -223,21 +221,6 @@
     showOnboarding = true;
     unsupportedPlatformDismissed = false;
     await recheckReadiness();
-  }
-
-  async function clearWarmupCache() {
-    warmupResetBusy = true;
-    warmupResetMsg = '';
-    const res = await commands.resetWarmupCache();
-    warmupResetBusy = false;
-    if (res.status === 'error') {
-      warmupResetMsg = res.error;
-      return;
-    }
-    warmupResetMsg = 'Warmup cleared. Next dictation will show the warm-up overlay.';
-    setTimeout(() => {
-      if (warmupResetMsg.startsWith('Warmup cleared.')) warmupResetMsg = '';
-    }, 4000);
   }
 
   async function completeOnboarding() {
@@ -442,18 +425,20 @@
   const ZOOM_LEVELS = [100, 125, 150, 175, 200];
   let zoomIdx = $state(parseInt(localStorage.getItem('tt-zoom') ?? '0'));
 
-  // Single source of truth for zoom: any zoomIdx change (footer −/+ buttons,
-  // Settings tab zoom seg, Cmd+0) applies the CSS zoom, persists it, and
-  // re-clamps the window max height for the new scale. Also runs once at
-  // mount, which enforces the max-height clamp from launch — no need to
-  // visit the Settings tab first.
+  function applyZoomAndSave() {
+    document.documentElement.style.zoom = `${ZOOM_LEVELS[zoomIdx]}%`;
+    localStorage.setItem('tt-zoom', String(zoomIdx));
+    initWindowSizeLimits();
+  }
+  function zoomIn()  { if (zoomIdx < ZOOM_LEVELS.length - 1) { zoomIdx++; applyZoomAndSave(); } }
+  function zoomOut() { if (zoomIdx > 0) { zoomIdx--; applyZoomAndSave(); } }
+
+  // Zoom CSS + localStorage sync for any zoomIdx write (Settings tab buttons
+  // or any other binding). Runs on mount too, so the CSS is consistent.
   $effect(() => {
     document.documentElement.style.zoom = `${ZOOM_LEVELS[zoomIdx]}%`;
     localStorage.setItem('tt-zoom', String(zoomIdx));
-    untrack(() => initWindowSizeLimits());
   });
-  function zoomIn()  { if (zoomIdx < ZOOM_LEVELS.length - 1) zoomIdx++; }
-  function zoomOut() { if (zoomIdx > 0) zoomIdx--; }
 
   let outerEl = $state(null);
   let settingsContentEl = $state(null);
@@ -1079,7 +1064,7 @@
         if (e.metaKey || e.ctrlKey) {
           if (e.key === '=' || e.key === '+') { e.preventDefault(); zoomIn(); }
           else if (e.key === '-')             { e.preventDefault(); zoomOut(); }
-          else if (e.key === '0')             { e.preventDefault(); zoomIdx = 0; }
+          else if (e.key === '0')             { e.preventDefault(); zoomIdx = 0; applyZoomAndSave(); }
         }
       }
       window.addEventListener('keydown', handleKeydown);
@@ -1139,8 +1124,9 @@
       });
       syncAppStateFromBackend();
 
-      // Zoom CSS + window max-height clamp are owned by the zoomIdx $effect,
-      // which runs at mount — nothing to initialize here.
+      // Apply initial CSS zoom, then measure settings content and clamp
+      // max height — so the bottom-edge limit is enforced from launch.
+      applyZoomAndSave();
     };
 
     init();
@@ -1247,14 +1233,11 @@
     closing={resetClosing}
     {resetBusy}
     {resetError}
-    {warmupResetBusy}
-    {warmupResetMsg}
     bind:bugNote
     {diagnosticMsg}
     {platform}
     onClose={closeReset}
     onResetTurboTalk={(deleteModels) => resetTurboTalk(deleteModels)}
-    onClearWarmupCache={clearWarmupCache}
     onCreateBugReport={createBugReport}
     onRerunWelcome={async () => { await commands.resetOnboarding(); await recheckReadiness(); }}
   />
