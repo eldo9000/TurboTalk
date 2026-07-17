@@ -1,3 +1,13 @@
+## Skills
+
+All skills live in `../Business-OS/skills/<name>/SKILL.md`. Before any task, scan this directory for available skills. Key ones:
+
+- **`/go`** — Universal entry point. Always start here unless you know exactly what you're doing.
+- **`/clean-launch`** — Kill stale caches, reinstall deps, start dev server fresh.
+- **`/cp`** — Collect, commit, push.
+
+To load a skill: `Read` its SKILL.md and follow instructions.
+
 ## Context
 
 TurboTalk is a personal-use voice dictation utility for macOS (not a public product). Push-to-talk → record mic → local Whisper transcription → optional LLM cleanup → paste. Standalone, no product-ecosystem dependencies. Tier 1 operating model — `SESSION-STATUS.md` and `TRUTH.md` only. Don't add heavy ceremony.
