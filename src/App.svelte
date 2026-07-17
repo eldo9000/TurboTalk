@@ -1,5 +1,5 @@
 <script>
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
   import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -442,12 +442,18 @@
   const ZOOM_LEVELS = [100, 125, 150, 175, 200];
   let zoomIdx = $state(parseInt(localStorage.getItem('tt-zoom') ?? '0'));
 
-  function applyZoomAndSave() {
+  // Single source of truth for zoom: any zoomIdx change (footer −/+ buttons,
+  // Settings tab zoom seg, Cmd+0) applies the CSS zoom, persists it, and
+  // re-clamps the window max height for the new scale. Also runs once at
+  // mount, which enforces the max-height clamp from launch — no need to
+  // visit the Settings tab first.
+  $effect(() => {
     document.documentElement.style.zoom = `${ZOOM_LEVELS[zoomIdx]}%`;
     localStorage.setItem('tt-zoom', String(zoomIdx));
-  }
-  function zoomIn()  { if (zoomIdx < ZOOM_LEVELS.length - 1) { zoomIdx++; applyZoomAndSave(); } }
-  function zoomOut() { if (zoomIdx > 0) { zoomIdx--; applyZoomAndSave(); } }
+    untrack(() => initWindowSizeLimits());
+  });
+  function zoomIn()  { if (zoomIdx < ZOOM_LEVELS.length - 1) zoomIdx++; }
+  function zoomOut() { if (zoomIdx > 0) zoomIdx--; }
 
   let outerEl = $state(null);
   let settingsContentEl = $state(null);
@@ -779,23 +785,42 @@
     };
   }
 
+  // Measure the Settings tab content and clamp the window max height so the
+  // window can't stretch past where the settings content ends. Requires the
+  // settings tab to be rendered (settingsContentEl bound).
+  function applySettingsMaxHeight() {
+    if (!settingsContentEl) return;
+    const contentH = Array.from(settingsContentEl.children).reduce(
+      (a, c) => a + c.offsetHeight, 0,
+    );
+    if (!contentH) return;
+    const totalCss = 40 + contentH + 2 + 28; // titlebar + content + gap + bottombar
+    const maxH = Math.round(totalCss * ZOOM_LEVELS[zoomIdx] / 100);
+    const win = getCurrentWindow();
+    win.setMaxSize(new LogicalSize(550, maxH));
+  }
+
+  // Run the same max-height clamp at startup, before the user ever visits the
+  // Settings tab. Renders the settings tab for one microtask-batch to measure
+  // it, then restores the previous tab — all inside a single JS task, so the
+  // browser never paints the intermediate state (no flash).
+  async function initWindowSizeLimits() {
+    const prev = activeTab;
+    activeTab = 'settings';
+    await tick();
+    applySettingsMaxHeight();
+    activeTab = prev;
+    await tick();
+  }
+
   function switchTab(tab) {
     activeTab = tab;
     if (tab === 'models')   openModels();
     if (tab === 'edits')    openEdits();
     if (tab === 'settings') {
       openSettings();
-      tick().then(() => {
-        if (!settingsContentEl) return;
-        const contentH = Array.from(settingsContentEl.children).reduce(
-          (a, c) => a + c.offsetHeight, 0,
-        );
-        if (!contentH) return;
-        const totalCss = 40 + contentH + 2 + 28; // titlebar + content + gap + bottombar
-        const maxH = Math.round(totalCss * ZOOM_LEVELS[zoomIdx] / 100);
-        const win = getCurrentWindow();
-        win.setMaxSize(new LogicalSize(588, maxH));
-      });
+      // Re-measure on entry — keeps the clamp accurate after zoom changes.
+      tick().then(applySettingsMaxHeight);
     }
   }
 
@@ -1114,8 +1139,8 @@
       });
       syncAppStateFromBackend();
 
-      // Apply initial CSS zoom (saved from last session).
-      document.documentElement.style.zoom = `${ZOOM_LEVELS[zoomIdx]}%`;
+      // Zoom CSS + window max-height clamp are owned by the zoomIdx $effect,
+      // which runs at mount — nothing to initialize here.
     };
 
     init();

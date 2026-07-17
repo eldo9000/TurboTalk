@@ -1496,12 +1496,12 @@ pub fn run() {
             if let Some(win) = app.get_webview_window("main") {
                 use tauri::LogicalSize;
                 windowing::ensure_main_webview_window_visible(&win);
-                // Max horizontal = 1.4× min width (reduced 30% from 2×).
+                // Width is locked at 550 (min == max, config + here).
                 // Max vertical is set dynamically from the frontend when the
                 // user opens the Settings tab (content-height measured there).
                 // Fixed values, not monitor-dependent — no snapping on display-
                 // scale transitions.
-                let _ = win.set_max_size(Some(LogicalSize::new(588.0, 2000.0)));
+                let _ = win.set_max_size(Some(LogicalSize::new(550.0, 2000.0)));
                 let _ = win.center();
                 let _ = win.show();
                 let _ = win.set_focus();

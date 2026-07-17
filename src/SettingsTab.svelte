@@ -64,11 +64,13 @@
   <!-- Recording & Hotkey -->
   <div class="tt-section">
     <div class="subsection-hd"><span class="subsection-hd-title">Recording &amp; Hotkey</span></div>
-    <div class="tt-row tt-row-field tt-recording-button-row" data-tip="Which key triggers push-to-talk. Using a foot pedal or macro key? Map it to F13–F19 in your device software, then pick it here.">
+    <div class="tt-row tt-row-field tt-recording-button-row" data-tip="Which side modifier to pair with the hotkey key">
       <span class="tt-lbl">Hotkey side</span>
       <div class="tt-seg" class:tt-seg-dim={isUnsidedKey(hotkeyKeyPart)}>
         {#each [['left','Left'],['right','Right']] as [v, lbl], i}
-          <button onclick={() => { hotkeySide = v; onApplyHotkey(); }} class={seg(hotkeySide === v, i, 2)}>{lbl}</button>
+          <button onclick={() => { hotkeySide = v; onApplyHotkey(); }} class={seg(hotkeySide === v, i, 2)}
+            data-tip="Press the {lbl} modifier (e.g. {lbl} Alt + your hotkey key)"
+          >{lbl}</button>
         {/each}
       </div>
     </div>
@@ -84,11 +86,13 @@
         </div>
       {/if}
     {/if}
-    <div class="tt-row tt-row-field tt-recording-button-row" data-tip="Hold: record while key is held. Toggle: press once to start, again to stop. Auto: tap to start/tap to stop, or hold to talk">
+    <div class="tt-row tt-row-field tt-recording-button-row" data-tip="How the hotkey starts and stops recording">
       <span class="tt-lbl">Recording mode</span>
       <div class="tt-seg tt-seg-recording">
-        {#each [['hold','Hold'],['toggle','Toggle'],['auto','Auto']] as [v, lbl], i}
-          <button onclick={() => { cfgHotkeyMode = v; onSaveSettings(); }} class={seg(cfgHotkeyMode === v, i, 3)}>{lbl}</button>
+        {#each [['hold','Hold', 'Record while held; release to stop'], ['toggle','Toggle', 'Press to start, press again to stop'], ['auto','Auto', 'Tap to start/tap to stop, or hold for quick bursts']] as [v, lbl, btnTip], i}
+          <button onclick={() => { cfgHotkeyMode = v; onSaveSettings(); }} class={seg(cfgHotkeyMode === v, i, 3)}
+            data-tip={btnTip}
+          >{lbl}</button>
         {/each}
       </div>
     </div>
@@ -154,7 +158,7 @@
   <!-- Theme -->
   <div class="tt-section">
     <div class="subsection-hd"><span class="subsection-hd-title">Appearance</span></div>
-    <div class="tt-row tt-row-field" data-tip="App color scheme — Auto follows your macOS appearance">
+    <div class="tt-row tt-row-field" data-tip="Follows your system theme — Auto matches macOS appearance">
       <span class="tt-lbl tt-lbl-fixed tt-appearance-label">Theme</span>
       <div class="tt-seg tt-setting-seg">
         {#each [['auto','Auto'],['light','Light'],['dark','Dark']] as [v, lbl], i}
@@ -246,7 +250,7 @@
           data-tip="Pause playback during dictation, resume after">Pause on Dictate</button>
       </div>
     </div>
-    <div class="tt-row tt-row-field tt-recording-threshold-row" data-tip="Volume for audio notification chimes">
+    <div class="tt-row tt-row-field tt-recording-threshold-row" data-tip="Volume for chimes (macOS follows system Alert Volume)">
       <span class="tt-lbl tt-lbl-fixed">Volume: {Math.round(cfgSoundVolume * 100)}%</span>
       <input
         type="range"
@@ -266,7 +270,7 @@
       <button
         onclick={() => { cfgSaveHistory = !cfgSaveHistory; onSaveSettings(); }}
         class="tt-multi-btn" class:tt-multi-on={cfgSaveHistory}
-        data-tip="Save transcripts to disk between sessions">Save History</button>
+        data-tip="Persist transcript history across app restarts">Save History</button>
       <div class="tt-key-sel tt-history-sel" data-tip="Automatically delete saved transcripts older than this">
         <Select
           items={HISTORY_AUTO_DELETE_ITEMS}
