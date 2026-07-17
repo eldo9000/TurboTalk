@@ -189,18 +189,18 @@ pub(crate) fn show_main_window(
 ) {
     use std::sync::atomic::Ordering;
     if let Some(win) = app.get_webview_window("main") {
-        // Reposition on the cursor monitor every time the user opens the
-        // window from the tray. Without this, a previous dictation that moved
-        // the window to a secondary (or now-disconnected Parsec virtual)
-        // display leaves it stranded on the next tray click.
-        windowing::position_main_window_on_cursor_monitor(app);
-        // Only log the first show — subsequent shows are normal.
+        use tauri::LogicalSize;
+        // Re-apply the size constraints on every show so the frontend's
+        // applySettingsMaxHeight isn't the only path that sets them.
+        let _ = win.set_max_size(Some(LogicalSize::new(550.0, 2000.0)));
+        // Center on the primary monitor every time — guarantees the window
+        // is never stranded on a disconnected or Parsec virtual display.
+        let _ = win.center();
+        let _ = win.show();
+        let _ = win.set_focus();
         if !first_manual_show.swap(true, Ordering::AcqRel) {
             tracing::info!("[main-window] first manual show");
         }
-        windowing::ensure_main_webview_window_visible(&win);
-        let _ = win.show();
-        let _ = win.set_focus();
     }
 }
 
