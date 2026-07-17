@@ -189,9 +189,14 @@ pub(crate) fn show_main_window(
 ) {
     use std::sync::atomic::Ordering;
     if let Some(win) = app.get_webview_window("main") {
-        let visible = win.is_visible().unwrap_or(false);
-        if !visible && !first_manual_show.swap(true, Ordering::AcqRel) {
-            windowing::position_main_window_on_cursor_monitor(app);
+        // Reposition on the cursor monitor every time the user opens the
+        // window from the tray. Without this, a previous dictation that moved
+        // the window to a secondary (or now-disconnected Parsec virtual)
+        // display leaves it stranded on the next tray click.
+        windowing::position_main_window_on_cursor_monitor(app);
+        // Only log the first show — subsequent shows are normal.
+        if !first_manual_show.swap(true, Ordering::AcqRel) {
+            tracing::info!("[main-window] first manual show");
         }
         windowing::ensure_main_webview_window_visible(&win);
         let _ = win.show();

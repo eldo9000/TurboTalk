@@ -490,7 +490,7 @@ pub fn position_main_window_on_cursor_monitor(app: &AppHandle) {
     let monitors = match win.available_monitors() {
         Ok(m) if !m.is_empty() => m,
         Ok(_) => {
-            tracing::warn!("[main-window] available_monitors empty — skip first placement");
+            tracing::warn!("[main-window] available_monitors empty — skip placement");
             return;
         }
         Err(e) => {
@@ -514,6 +514,13 @@ pub fn position_main_window_on_cursor_monitor(app: &AppHandle) {
         win.primary_monitor().ok().flatten(),
     );
     let Some(monitor) = monitor else {
+        tracing::warn!(
+            "[main-window] cursor not in any monitor — cursor=({:.0},{:.0}) primary_scale={:.2} \
+             fallback to primary",
+            cursor.x / primary_scale,
+            cursor.y / primary_scale,
+            primary_scale,
+        );
         return;
     };
 
@@ -528,13 +535,13 @@ pub fn position_main_window_on_cursor_monitor(app: &AppHandle) {
     let y = my + (mh - size.1) / 2.0;
 
     tracing::info!(
-        "[main-window] first tray placement logical=({:.0},{:.0}) \
-         monitor pos=({:.0},{:.0}) scale={:.2}",
-        x,
-        y,
-        mx,
-        my,
+        "[main-window] tray placement cursor=({:.0},{:.0}) in monitor bounds=({:.0},{:.0} {}x{}) \
+         scale={:.2} → win logical=({:.0},{:.0})",
+        cursor.x / primary_scale,
+        cursor.y / primary_scale,
+        mx, my, mw, mh,
         scale,
+        x, y,
     );
     let _ = win.set_position(LogicalPosition::new(x, y));
     ensure_main_webview_window_visible(&win);
