@@ -4,9 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 
 const label = getCurrentWindow().label;
 
-if (label === 'splash' || label === 'overlay' || label === 'cursor-dot' || label === 'status') {
-  // app.css sets a solid background on html/body/#app; override it inline so
-  // transparent Tauri windows don't flash a white rectangle before Svelte mounts.
+if (label === 'overlay' || label === 'cursor-dot') {
   document.documentElement.style.background = 'transparent';
   document.body.style.background = 'transparent';
   const appEl = document.getElementById('app');
@@ -15,12 +13,8 @@ if (label === 'splash' || label === 'overlay' || label === 'cursor-dot' || label
 
 const Component = label === 'overlay'
   ? (await import('./Overlay.svelte')).default
-  : label === 'splash'
-  ? (await import('./Splash.svelte')).default
   : label === 'cursor-dot'
   ? (await import('./CursorDot.svelte')).default
-  : label === 'status'
-  ? (await import('./Status.svelte')).default
   : (await import('./App.svelte')).default;
 
 mount(Component, { target: document.getElementById('app') });

@@ -3,6 +3,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { invoke } from '@tauri-apps/api/core';
   import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { getVersion } from '@tauri-apps/api/app';
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { open as openFilePicker } from '@tauri-apps/plugin-dialog';
   import { initTheme } from '@libre/ui/src/theme.js';
@@ -289,6 +290,8 @@
   let audioDevices         = $state([]);
   let settingsSaveMsg      = $state('');
   let diagnosticMsg        = $state('');
+  let splashActive         = $state(true);
+  let version              = $state('');
 
   function logUi(event, detail = '') {
     commands.logClientEvent(event, detail || null).catch(() => {});
@@ -1041,6 +1044,13 @@
       cfgBackendVariant    = initialCfg.backend_variant                   ?? '';
       cfgPauseMediaOnDictate = initialCfg.pause_media_on_dictate          ?? true;
       cfgShowSplash        = initialCfg.show_splash                     ?? true;
+      // Splash card: show for 2 seconds on startup, then auto-dismiss.
+      if (cfgShowSplash) {
+        setTimeout(() => { splashActive = false; }, 2000);
+      } else {
+        splashActive = false;
+      }
+      getVersion().then(v => { version = v; });
       cfgModel             = initialCfg.whisper?.model                   ?? '';
       cfgModels            = initialCfg.whisper?.models                  ?? [];
       cfgCleanupMode          = initialCfg.cleanup?.mode                    ?? 'off';
@@ -1142,6 +1152,13 @@
 
 <div bind:this={outerEl} class="flex flex-col h-full overflow-hidden bg-[var(--surface)]"
 >
+
+  {#if splashActive}
+    <div class="splash-card">
+      <span class="splash-name">Turbo Talk</span>
+      <span class="splash-ver">v{version}</span>
+    </div>
+  {/if}
 
   <ErrorToast
     bind:uiErrors
@@ -1252,3 +1269,48 @@
   />
 
 </div>
+
+<style>
+  .splash-card {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 16px 16px 12px;
+    background: var(--surface-raised, #f8f8f8);
+    border: 1px solid var(--border, #e0e0e0);
+    border-radius: 14px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.08);
+    user-select: none;
+    animation: splash-in 0.22s ease both;
+  }
+  :global(.dark) .splash-card {
+    background: var(--surface-raised, #1a1a1a);
+    border-color: var(--border, #2a2a2a);
+    box-shadow: 0 24px 48px rgba(0,0,0,0.6), 0 4px 12px rgba(0,0,0,0.4);
+  }
+  .splash-name {
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+    color: var(--text-primary, #1a1a1a);
+  }
+  :global(.dark) .splash-name { color: var(--text-primary, #f0f0f0); }
+  .splash-ver {
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 10px;
+    color: var(--text-muted, #999);
+    font-variant-numeric: tabular-nums;
+  }
+  :global(.dark) .splash-ver { color: var(--text-muted, #666); }
+  @keyframes splash-in {
+    0% { opacity: 0; transform: translate(-50%, -50%) scale(0.92); }
+    100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  }
+</style>

@@ -5,8 +5,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { commands } from './bindings.ts';
 import { invoke } from '@tauri-apps/api/core';
 
-  // Arming (warm-up) is now handled by the separate Status window.
-  let mode      = $state('idle'); // 'idle' | 'recording' | 'transcribing'
+  let mode      = $state('idle'); // 'idle' | 'arming' | 'recording' | 'transcribing'
+  let armingMessage = $state('');
   let canvasEl  = $state(null);
   let wordCount = $state(0);
 
@@ -309,6 +309,20 @@ import { invoke } from '@tauri-apps/api/core';
       flashTimer = setTimeout(() => { justConnected = false; }, 560);
       draw();
 
+      }).then(u => uns.push(u));
+
+    // Warm-up arming tile (merged from the former Status window).
+    listen('ptt-armed', () => {
+      logOverlay('event_arrived', { event: 'ptt-armed', mode, job_id: currentJobId });
+      mode = 'arming';
+      armingMessage = 'Starting\u2026';
+    }).then(u => uns.push(u));
+
+    listen('ptt-arm-failed', (e) => {
+      logOverlay('event_arrived', { event: 'ptt-arm-failed', mode, job_id: currentJobId });
+      armingMessage = e?.payload ?? 'Dictation model failed to load';
+      mode = 'arming';
+      setTimeout(() => { if (mode === 'arming') { mode = 'idle'; armingMessage = ''; } }, 3000);
     }).then(u => uns.push(u));
 
     listen('ptt-up', () => {
@@ -324,10 +338,7 @@ import { invoke } from '@tauri-apps/api/core';
     listen('transcript', () => {
       const accepted = mode === 'transcribing';
       logOverlay('event_arrived', { event: 'transcript', mode, job_id: currentJobId, accepted });
-      // Guard: only transition from transcribing → idle.  If the mode is
-      // already 'recording', a new dictation started before this event
-      // arrived — ignore the stale transcript entirely so its delayed
-      // timeout doesn't make the overlay invisible mid-recording.
+      if (mode === 'arming') { mode = 'idle'; armingMessage = ''; return; }
       if (mode !== 'transcribing') return;
       clearTimeout(idleTimer);
       idleTimer = setTimeout(() => { stopTranscribing('idle'); }, 350);
@@ -352,6 +363,7 @@ import { invoke } from '@tauri-apps/api/core';
     // All rejections are now advisory (text is always pasted) — the panel
     // alerts the user to review the output.
     listen('transcription-rejected', (e) => {
+      if (mode === 'arming') { mode = 'idle'; armingMessage = ''; return; }
       const guarded = skipUnlessTranscribing();
       logOverlay('event_arrived', { event: 'transcription-rejected', mode, job_id: currentJobId, guarded, flaky: e.payload?.flaky, pasted: e.payload?.pasted });
       if (guarded) return;
@@ -365,16 +377,20 @@ import { invoke } from '@tauri-apps/api/core';
       stopTranscribing('idle');
     }).then(u => uns.push(u));
 
-    listen('recording-discarded', () => {
-      logOverlay('event_arrived', { event: 'recording-discarded', mode, job_id: currentJobId });
+    function resetToIdle(eventName) {
+      logOverlay('event_arrived', { event: eventName, mode, job_id: currentJobId });
       if (mode === 'idle') return;
+      mode = 'idle';
+      armingMessage = '';
       stopTranscribing('idle');
+    }
+
+    listen('recording-discarded', () => {
+      resetToIdle('recording-discarded');
     }).then(u => uns.push(u));
 
     listen('recording-cancelled', () => {
-      logOverlay('event_arrived', { event: 'recording-cancelled', mode, job_id: currentJobId });
-      if (mode === 'idle') return;
-      stopTranscribing('idle');
+      resetToIdle('recording-cancelled');
     }).then(u => uns.push(u));
 
     listen('recording-recovered', () => {
@@ -392,9 +408,7 @@ import { invoke } from '@tauri-apps/api/core';
     }).then(u => uns.push(u));
 
     listen('device-lost', () => {
-      logOverlay('event_arrived', { event: 'device-lost', mode, job_id: currentJobId });
-      if (mode === 'idle') return;
-      stopTranscribing('idle');
+      resetToIdle('device-lost');
     }).then(u => uns.push(u));
 
     listen('paste-error', () => {
@@ -510,6 +524,42 @@ import { invoke } from '@tauri-apps/api/core';
     box-shadow: none !important;
     width: 100%; height: 100%;
     margin: 0; padding: 0; overflow: hidden;
+  }
+
+  @keyframes pulse-arming {
+    0%, 100% {
+      border-color: rgba(251, 191, 36, 0.28);
+      box-shadow: 0 0 0 0 rgba(251, 191, 36, 0);
+    }
+    45%, 55% {
+      border-color: rgba(251, 191, 36, 1);
+      box-shadow:
+        0 0 0 3px rgba(251, 191, 36, 0.22),
+        0 0 22px 5px rgba(251, 191, 36, 0.34);
+    }
+  }
+
+  .arming-card {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px 22px;
+    border-radius: 20px;
+    background: rgba(16, 16, 16, 0.87);
+    backdrop-filter: blur(18px) saturate(160%);
+    -webkit-backdrop-filter: blur(18px) saturate(160%);
+    border: 1px solid rgba(251, 191, 36, 0.85);
+    animation: pulse-arming 1.15s ease-in-out infinite;
+    min-width: 220px;
+    user-select: none;
+  }
+
+  .arming-message {
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0;
+    color: #fbbf24;
   }
 
   @keyframes pulse-red {
@@ -742,14 +792,18 @@ import { invoke } from '@tauri-apps/api/core';
 
 <div
   class="w-full h-full flex justify-center"
-  class:items-center={overlaySize !== 'large'}
+  class:items-center={overlaySize !== 'large' && mode !== 'arming'}
   class:items-end={overlaySize === 'large' && overlayPosition !== 'top'}
-  class:items-start={overlaySize === 'large' && overlayPosition === 'top'}
+  class:items-start={(overlaySize === 'large' && overlayPosition === 'top') || mode === 'arming'}
   style:padding-bottom={overlaySize === 'large' && overlayPosition !== 'top' ? '100px' : '0'}
   style:padding-top={overlaySize === 'large' && overlayPosition === 'top' ? '100px' : '0'}
 >
   <div class="relative">
-  {#if showPreview}
+  {#if mode === 'arming'}
+    <div class="arming-card">
+      <span class="arming-message">{armingMessage}</span>
+    </div>
+  {:else if showPreview}
     <div
       class="seg-preview"
       class:below={overlayPosition === 'top'}
@@ -774,7 +828,7 @@ import { invoke } from '@tauri-apps/api/core';
   {/if}
   <div
     class="pill flex items-center gap-3.5 px-5 py-3.5 rounded-2xl"
-    class:show={mode !== 'idle'}
+    class:show={mode === 'recording' || mode === 'transcribing'}
     class:small={overlaySize === 'small'}
     class:large={overlaySize === 'large'}
     class:recording={mode === 'recording'}

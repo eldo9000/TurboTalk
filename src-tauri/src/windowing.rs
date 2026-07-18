@@ -65,9 +65,6 @@ const OVERLAY_BOTTOM_MARGIN: f64 = 10.0;
 /// of window height — the window grows *downward* from this fixed top.
 const OVERLAY_PILL_TOP_OFFSET: f64 = 10.0; // TOP_GAP 110 - GUTTER 100
 
-const STATUS_W: f64 = 280.0;
-const STATUS_H: f64 = 80.0;
-
 // ── Overlay sizing helpers ─────────────────────────────────────────────────
 
 fn overlay_height_for_size(size: &str) -> f64 {
@@ -366,113 +363,6 @@ pub fn reposition_overlay_to_cursor_monitor(app: &AppHandle) {
 }
 
 // ── Status window ──────────────────────────────────────────────────────────
-
-/// Position the status window on the cursor's monitor, centred horizontally
-/// and placed near the top portion of the screen so it's visible but not
-/// obscuring content. The status window is fixed-size (280×80 from conf).
-#[cfg(target_os = "macos")]
-fn appkit_position_status_on_cursor_monitor(status: &WebviewWindow) -> bool {
-    use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSEvent, NSFloatingWindowLevel, NSScreen, NSWindow};
-    use objc2_foundation::{NSPoint, NSRect, NSSize};
-
-    let Some(mtm) = MainThreadMarker::new() else {
-        return false;
-    };
-    let Ok(ns_window_ptr) = status.ns_window() else {
-        return false;
-    };
-    if ns_window_ptr.is_null() {
-        return false;
-    }
-
-    let mouse = NSEvent::mouseLocation();
-    let screens = NSScreen::screens(mtm);
-    let mut target_frame = None;
-    for i in 0..screens.count() {
-        let screen = screens.objectAtIndex(i);
-        let frame = screen.frame();
-        let in_x = mouse.x >= frame.origin.x && mouse.x < frame.origin.x + frame.size.width;
-        let in_y = mouse.y >= frame.origin.y && mouse.y < frame.origin.y + frame.size.height;
-        if in_x && in_y {
-            target_frame = Some(frame);
-            break;
-        }
-    }
-
-    let frame = target_frame
-        .or_else(|| NSScreen::mainScreen(mtm).map(|screen| screen.frame()))
-        .or_else(|| {
-            if screens.count() > 0 {
-                Some(screens.objectAtIndex(0).frame())
-            } else {
-                None
-            }
-        });
-    let Some(screen_frame) = frame else {
-        return false;
-    };
-
-    // Match the recording pill's on-screen position so the status tile
-    // lands exactly where the red recording overlay will appear. The pill
-    // is centered vertically in the overlay window (small/medium) or
-    // anchored near the bottom with padding (large).
-    let position = crate::settings::overlay_position();
-    let overlay_size = crate::settings::overlay_size();
-    let overlay_h = overlay_height_for_size(&overlay_size);
-    let pill_center_off = if overlay_size == "large" {
-        overlay_h - 100.0 - 40.0 // items-end + 100px pad + ~80px pill / 2
-    } else {
-        overlay_h / 2.0 // items-center
-    };
-    let x = (screen_frame.origin.x + (screen_frame.size.width - STATUS_W) / 2.0)
-        .max(screen_frame.origin.x);
-    let y = if position == "top" {
-        screen_frame.origin.y + screen_frame.size.height
-            - OVERLAY_PILL_TOP_OFFSET - pill_center_off - STATUS_H / 2.0
-    } else {
-        screen_frame.origin.y + OVERLAY_BOTTOM_MARGIN + pill_center_off - STATUS_H / 2.0
-    };
-
-    unsafe {
-        let ns_window = &*(ns_window_ptr.cast::<NSWindow>());
-        ns_window.setFrame_display(
-            NSRect::new(NSPoint::new(x, y), NSSize::new(STATUS_W, STATUS_H)),
-            true,
-        );
-        ns_window.setLevel(NSFloatingWindowLevel);
-    }
-    true
-}
-
-#[cfg(target_os = "macos")]
-pub fn reposition_status_to_cursor(status: &WebviewWindow) {
-    use std::sync::mpsc;
-    use std::time::Duration;
-
-    if objc2::MainThreadMarker::new().is_some() {
-        let _ = appkit_position_status_on_cursor_monitor(status);
-        return;
-    }
-
-    let status_for_main = status.clone();
-    let (tx, rx) = mpsc::channel();
-    if let Err(e) = status.run_on_main_thread(move || {
-        let _ = tx.send(appkit_position_status_on_cursor_monitor(&status_for_main));
-    }) {
-        tracing::warn!("[status] failed to dispatch cursor placement: {e:?}");
-        return;
-    }
-    if !matches!(rx.recv_timeout(Duration::from_millis(250)), Ok(true)) {
-        tracing::warn!("[status] cursor placement did not complete");
-    }
-}
-
-/// Non-macOS stub: position is best-effort.
-#[cfg(not(target_os = "macos"))]
-pub fn reposition_status_to_cursor(_win: &WebviewWindow) {
-    // No-op — the window is already centred via tauri.conf.json.
-}
 
 // ── Main window (first tray placement) ─────────────────────────────────────
 

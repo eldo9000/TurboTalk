@@ -31,20 +31,6 @@
         "visible": false
       },
       {
-        "label": "splash",
-        "title": "",
-        "width": 360,
-        "height": 220,
-        "decorations": false,
-        "transparent": true,
-        "shadow": false,
-        "alwaysOnTop": true,
-        "visible": false,
-        "resizable": false,
-        "skipTaskbar": true,
-        "center": true
-      },
-      {
         "label": "overlay",
         "title": "",
         "width": 460,
@@ -59,8 +45,7 @@
         "closable": false,
         "minimizable": false,
         "maximizable": false,
-        "skipTaskbar": true,
-        "center": true
+        "skipTaskbar": true
       },
       {
         "label": "cursor-dot",
@@ -77,26 +62,7 @@
         "closable": false,
         "minimizable": false,
         "maximizable": false,
-        "skipTaskbar": true,
-        "center": true
-      },
-      {
-        "label": "status",
-        "title": "",
-        "width": 280,
-        "height": 80,
-        "decorations": false,
-        "transparent": true,
-        "shadow": false,
-        "alwaysOnTop": true,
-        "visible": false,
-        "focus": false,
-        "resizable": false,
-        "closable": false,
-        "minimizable": false,
-        "maximizable": false,
-        "skipTaskbar": true,
-        "center": true
+        "skipTaskbar": true
       }
     ],
     "security": {

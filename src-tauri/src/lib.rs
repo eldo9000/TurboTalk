@@ -1489,19 +1489,6 @@ pub fn run() {
             let hotkey_state: HotkeyState = Arc::new(RwLock::new(cfg.hotkey.clone()));
             app.manage(hotkey_state.clone());
 
-            // ── Launch splash — shown on every app start unless disabled ────
-            // Window is pre-declared in tauri.conf.json (visible:false) so it
-            // doesn't accumulate across hot-reloads; we position and show it here.
-            if cfg.show_splash {
-                if let Some(splash_win) = app.get_webview_window("splash") {
-                    tracing::info!("[splash] positioning and showing");
-                    const SPLASH_W: f64 = 360.0;
-                    const SPLASH_H: f64 = 220.0;
-                    windowing::center_window_on_cursor_monitor(&splash_win, SPLASH_W, SPLASH_H);
-                    let _ = splash_win.show();
-                }
-            }
-
             // ── Main window — hidden until tray click unless onboarding ───
             if let Some(win) = app.get_webview_window("main") {
                 use tauri::LogicalSize;
@@ -1527,17 +1514,8 @@ pub fn run() {
                 let _ = dot.set_ignore_cursor_events(true);
             }
 
-            // ── Status window — clickable, starts hidden ──────────────────
-            // Positioned near the cursor so the warm-up / rejection status
-            // tile appears wherever the user is focused.  Cursor events are
-            // NOT ignored — the X button on rejection messages must work.
-            if let Some(status_win) = app.get_webview_window("status") {
-                windowing::reposition_status_to_cursor(&status_win);
-            }
-
             // Pin the overlay to the cursor's monitor at startup so the very
-            // first press doesn't have to fight a stale primary-monitor
-            // placement from `center: true` in tauri.conf.json.
+            // first press doesn't have to fight a stale primary-monitor placement.
             windowing::reposition_overlay_to_cursor_monitor(app.handle());
             apply_overlay_visibility(app.handle(), cfg.show_overlay);
 

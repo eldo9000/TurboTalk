@@ -416,11 +416,11 @@ pub(crate) mod common {
         }
         #[cfg(target_os = "windows")]
         {
+            use std::f32::consts::PI;
             use std::sync::OnceLock;
 
             const SAMPLE_RATE: u32 = 44100;
 
-            // Raw FFI to winmm.dll — no winapi dependency needed for PlaySoundW.
             #[link(name = "winmm")]
             extern "system" {
                 fn PlaySoundW(
@@ -433,7 +433,14 @@ pub(crate) mod common {
             const SND_MEMORY: u32 = 0x0004;
             const SND_NODEFAULT: u32 = 0x0002;
 
-            fn make_wav(duration_secs: f32, harmonics: &[(f32, f32)]) -> Vec<u8> {
+            /// A single oscillator: fixed or sweeping frequency.
+            struct Partial {
+                freq_start: f32,
+                freq_end: f32,
+                amp: f32,
+            }
+
+            fn make_wav(duration_secs: f32, attack_secs: f32, partials: &[Partial]) -> Vec<u8> {
                 let num_samples = (SAMPLE_RATE as f32 * duration_secs) as usize;
                 let data_size = num_samples as u32 * 2;
                 let file_size = 36 + data_size;
@@ -453,17 +460,19 @@ pub(crate) mod common {
                 wav.extend(b"data");
                 wav.extend(&data_size.to_le_bytes());
 
+                let decay_start = attack_secs / duration_secs;
                 for i in 0..num_samples {
                     let t = i as f32 / SAMPLE_RATE as f32;
                     let pos = t / duration_secs;
-                    let envelope = if pos < 0.01 {
-                        pos / 0.01
+                    let envelope = if pos < decay_start {
+                        pos / decay_start
                     } else {
-                        (-3.0 * (pos - 0.01) / 0.99).exp()
+                        (-4.0 * (pos - decay_start) / (1.0 - decay_start)).exp()
                     };
                     let mut sample = 0.0;
-                    for &(freq, amp) in harmonics {
-                        sample += (2.0 * std::f32::consts::PI * freq * t).sin() * amp;
+                    for p in partials {
+                        let freq = p.freq_start + (p.freq_end - p.freq_start) * pos;
+                        sample += (2.0 * PI * freq * t).sin() * p.amp;
                     }
                     sample = (sample * envelope).clamp(-1.0, 1.0);
                     wav.extend(&((sample * i16::MAX as f32) as i16).to_le_bytes());
@@ -477,15 +486,41 @@ pub(crate) mod common {
                 static TINK: OnceLock<Vec<u8>> = OnceLock::new();
                 static BASSO: OnceLock<Vec<u8>> = OnceLock::new();
                 match event {
-                    ChimeEvent::Start => POP.get_or_init(|| make_wav(0.06, &[(1100.0, 1.0)])),
+                    // Pop — quick percussive click, mostly broad-spectrum transient.
+                    // Short sine burst at ~700Hz with fast attack and sharp decay mimics
+                    // the macOS "Pop" system sound (like a cork or finger snap).
+                    ChimeEvent::Start => POP.get_or_init(|| {
+                        make_wav(0.04, 0.001, &[
+                            Partial { freq_start: 700.0, freq_end: 700.0, amp: 1.0 },
+                            Partial { freq_start: 1400.0, freq_end: 1400.0, amp: 0.25 },
+                        ])
+                    }),
+                    // Bottle — gentle glass clink. Uses inharmonic partials with
+                    // faster high-frequency decay (higher partials have lower amp)
+                    // to mimic the macOS "Bottle" system sound.
                     ChimeEvent::Finish => BOTTLE.get_or_init(|| {
-                        make_wav(0.25, &[(900.0, 1.0), (2700.0, 0.35), (4500.0, 0.12)])
+                        make_wav(0.18, 0.002, &[
+                            Partial { freq_start: 1100.0, freq_end: 1100.0, amp: 1.0 },
+                            Partial { freq_start: 1870.0, freq_end: 1870.0, amp: 0.3 },
+                            Partial { freq_start: 3080.0, freq_end: 3080.0, amp: 0.08 },
+                        ])
                     }),
+                    // Tink — very soft, delicate high chime. The macOS "Tink" is
+                    // the quietest and most delicate of the four.
                     ChimeEvent::Cancel => TINK.get_or_init(|| {
-                        make_wav(0.10, &[(1800.0, 1.0), (3600.0, 0.25)])
+                        make_wav(0.07, 0.002, &[
+                            Partial { freq_start: 2200.0, freq_end: 2200.0, amp: 1.0 },
+                            Partial { freq_start: 4400.0, freq_end: 4400.0, amp: 0.15 },
+                        ])
                     }),
+                    // Basso — low descending bass note. Sweeps from ~200Hz down to
+                    // ~110Hz with a harmonic at 2x, mimicking the macOS "Basso"
+                    // cartoon-like descending tone.
                     ChimeEvent::Error => BASSO.get_or_init(|| {
-                        make_wav(0.35, &[(160.0, 1.0), (320.0, 0.3), (480.0, 0.1)])
+                        make_wav(0.35, 0.005, &[
+                            Partial { freq_start: 200.0, freq_end: 110.0, amp: 1.0 },
+                            Partial { freq_start: 400.0, freq_end: 220.0, amp: 0.25 },
+                        ])
                     }),
                 }
             }
@@ -580,9 +615,6 @@ pub(crate) mod common {
             if crate::transcribe::prewarm_failed() {
                 crate::diagnostic_log::emergency_trace("[ptt_down] ptt-arm-failed prewarm_failed");
                 tracing::warn!("[hotkey] start ignored — whisper prewarm failed earlier");
-                if let Some(status) = app.get_webview_window("status") {
-                    crate::windowing::reposition_status_to_cursor(&status);
-                }
                 emit_critical(
                     &app,
                     "ptt-arm-failed",
@@ -619,12 +651,9 @@ pub(crate) mod common {
                 );
                 crate::diagnostic_log::emergency_trace("[ptt_down] prewarm started; emit ptt-armed");
 
-                // Position both transient windows before their frontend events
-                // so neither can flash at its stale startup location.
+                // Position the overlay before the frontend event so it doesn't
+                // flash at a stale startup location.
                 crate::windowing::reposition_overlay_to_cursor_monitor(&app);
-                if let Some(status) = app.get_webview_window("status") {
-                    crate::windowing::reposition_status_to_cursor(&status);
-                }
                 emit_critical(&app, "ptt-armed", ());
                 overlay_armed = true;
                 tracing::info!("[hotkey] arming — waiting for whisper-server readiness");
@@ -673,9 +702,6 @@ pub(crate) mod common {
                         crate::transcribe::prewarm_failed()
                     ));
                 tracing::warn!("[hotkey] arm timed out waiting for whisper-server");
-                if let Some(status) = app.get_webview_window("status") {
-                    crate::windowing::reposition_status_to_cursor(&status);
-                }
                 emit_critical(
                         &app,
                     "ptt-arm-failed",
@@ -753,9 +779,6 @@ pub(crate) mod common {
             if !rec.audio_live() {
                 if !overlay_armed {
                     crate::windowing::reposition_overlay_to_cursor_monitor(&app);
-                    if let Some(status) = app.get_webview_window("status") {
-                        crate::windowing::reposition_status_to_cursor(&status);
-                    }
                     emit_critical(&app, "ptt-armed", ());
                 }
                 crate::diagnostic_log::emergency_trace("[ptt_down] waiting audio_live");
