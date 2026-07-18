@@ -1140,7 +1140,7 @@
   });
 </script>
 
-<div bind:this={outerEl} class="flex flex-col h-full overflow-hidden bg-[var(--surface-raised)]"
+<div bind:this={outerEl} class="flex flex-col h-full overflow-hidden bg-[var(--surface)]"
 >
 
   <ErrorToast

@@ -226,19 +226,19 @@
         <button
           onclick={() => { cfgSoundOnStart = !cfgSoundOnStart; onSaveSettings(); }}
           class="tt-multi-btn" class:tt-multi-on={cfgSoundOnStart}
-          data-tip="Play a chime when recording begins">on Start</button>
+          data-tip="Play a chime when recording begins">Start</button>
         <button
           onclick={() => { cfgSoundOnFinish = !cfgSoundOnFinish; onSaveSettings(); }}
           class="tt-multi-btn" class:tt-multi-on={cfgSoundOnFinish}
-          data-tip="Play a chime when transcription completes">on Finish</button>
+          data-tip="Play a chime when transcription completes">Finish</button>
         <button
           onclick={() => { cfgSoundOnCancel = !cfgSoundOnCancel; onSaveSettings(); }}
           class="tt-multi-btn" class:tt-multi-on={cfgSoundOnCancel}
-          data-tip="Play a chime when recording is cancelled">on Cancel</button>
+          data-tip="Play a chime when recording is cancelled">Cancel</button>
         <button
           onclick={() => { cfgSoundOnError = !cfgSoundOnError; onSaveSettings(); }}
           class="tt-multi-btn" class:tt-multi-on={cfgSoundOnError}
-          data-tip="Play a low beep when dictation has errors">on Error</button>
+          data-tip="Play a low beep when dictation has errors">Error</button>
       </div>
     </div>
     <div class="tt-row tt-row-field" data-tip="Pause music/podcasts while dictating and resume after paste">
