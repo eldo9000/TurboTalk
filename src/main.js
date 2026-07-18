@@ -4,7 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 
 const label = getCurrentWindow().label;
 
-if (label === 'overlay' || label === 'cursor-dot') {
+if (label === 'overlay') {
   document.documentElement.style.background = 'transparent';
   document.body.style.background = 'transparent';
   const appEl = document.getElementById('app');
@@ -13,8 +13,6 @@ if (label === 'overlay' || label === 'cursor-dot') {
 
 const Component = label === 'overlay'
   ? (await import('./Overlay.svelte')).default
-  : label === 'cursor-dot'
-  ? (await import('./CursorDot.svelte')).default
   : (await import('./App.svelte')).default;
 
 mount(Component, { target: document.getElementById('app') });

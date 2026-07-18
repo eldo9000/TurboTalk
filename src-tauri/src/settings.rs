@@ -49,11 +49,6 @@ pub struct Config {
     /// Anything else is treated as "bottom" by the positioning code.
     #[serde(default = "default_overlay_position")]
     pub overlay_position: String,
-    /// Whether to show a small red dot near the cursor during recording.
-    /// The dot follows the mouse pointer and appears bottom-right of the hotspot.
-    /// Defaults off.
-    #[serde(default)]
-    pub cursor_dot_indicator: bool,
     /// Play a sound cue when recording starts.
     #[serde(default)]
     pub sound_on_start: bool,
@@ -381,7 +376,6 @@ impl Default for Config {
             show_overlay: true,
             overlay_size: default_overlay_size(),
             overlay_position: default_overlay_position(),
-            cursor_dot_indicator: false,
             sound_on_start: true,
             sound_on_finish: false,
             sound_on_cancel: true,
@@ -597,18 +591,6 @@ pub fn load() -> Arc<Config> {
     let arc = Arc::new(cfg);
     *cache().write() = Some(Arc::clone(&arc));
     arc
-}
-
-/// Read `cursor_dot_indicator` from the cached config without cloning the
-/// full `Config`. Returns `false` when the cache is cold (before first load).
-/// Called at 50ms intervals from the level thread — avoids cloning the
-/// vocabulary `Vec<String>` and other fields that the thread never reads.
-pub fn cursor_dot_indicator_enabled() -> bool {
-    cache()
-        .read()
-        .as_ref()
-        .map(|c| c.cursor_dot_indicator)
-        .unwrap_or(false)
 }
 
 /// Eagerly populate the cache from disk. Idempotent — subsequent calls are

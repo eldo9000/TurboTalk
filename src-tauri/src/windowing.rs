@@ -696,28 +696,4 @@ pub fn center_window_on_cursor_monitor(win: &WebviewWindow, window_w: f64, windo
     true
 }
 
-// ── Cursor-dot position ────────────────────────────────────────────────────
 
-/// Position the cursor-dot indicator at the given offset from the cursor
-/// hotspot. Handles the macOS NSPanel quirk. Uses the provided primary scale
-/// factor (which should be refreshed when the dot becomes visible).
-pub fn position_cursor_dot(
-    dot: &WebviewWindow,
-    cursor: PhysicalPosition<f64>,
-    scale: f64,
-    offset_x: f64,
-    offset_y: f64,
-) {
-    let lx = cursor.x / scale + offset_x;
-    let ly = cursor.y / scale + offset_y;
-    #[cfg(target_os = "macos")]
-    {
-        let _ = dot.set_always_on_top(false);
-        let _ = dot.set_position(LogicalPosition::new(lx, ly));
-        let _ = dot.set_always_on_top(true);
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = dot.set_position(LogicalPosition::new(lx, ly));
-    }
-}

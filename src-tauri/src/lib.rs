@@ -1509,11 +1509,6 @@ pub fn run() {
                 let _ = overlay.set_ignore_cursor_events(true);
             }
 
-            // ── Cursor dot — cursor-transparent, always starts hidden ──
-            if let Some(dot) = app.get_webview_window("cursor-dot") {
-                let _ = dot.set_ignore_cursor_events(true);
-            }
-
             // Pin the overlay to the cursor's monitor at startup so the very
             // first press doesn't have to fight a stale primary-monitor placement.
             windowing::reposition_overlay_to_cursor_monitor(app.handle());
@@ -1544,12 +1539,6 @@ pub fn run() {
             let level_app = app.handle().clone();
             let level_tray = tray_icon.clone();
             std::thread::spawn(move || {
-                // Cursor-dot: offset from cursor hotspot in logical points.
-                const DOT_OFFSET_X: f64 = 12.0;
-                const DOT_OFFSET_Y: f64 = 16.0;
-                let mut cached_primary_scale = 1.0f64;
-                let mut dot_was_visible = false;
-
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(50));
                     if level_rec.device_lost() {
@@ -1583,39 +1572,6 @@ pub fn run() {
                         let _ = level_app.emit("audio-level", level_rec.level());
                     }
 
-                    // Cursor-dot indicator: follow mouse while recording or transcribing.
-                    let is_busy = level_rec.state().is_busy();
-                    if settings::cursor_dot_indicator_enabled() && is_busy {
-                        if let Ok(cursor) = level_app.cursor_position() {
-                            if let Some(dot) = level_app.get_webview_window("cursor-dot") {
-                                if !dot_was_visible {
-                                    // Refresh scale factor on first show.
-                                    cached_primary_scale = dot
-                                        .primary_monitor()
-                                        .ok()
-                                        .flatten()
-                                        .map(|m| m.scale_factor())
-                                        .unwrap_or(1.0);
-                                }
-                                windowing::position_cursor_dot(
-                                    &dot,
-                                    cursor,
-                                    cached_primary_scale,
-                                    DOT_OFFSET_X,
-                                    DOT_OFFSET_Y,
-                                );
-                                if !dot_was_visible {
-                                    let _ = dot.show();
-                                    dot_was_visible = true;
-                                }
-                            }
-                        }
-                    } else if dot_was_visible && !is_busy {
-                        if let Some(dot) = level_app.get_webview_window("cursor-dot") {
-                            let _ = dot.hide();
-                        }
-                        dot_was_visible = false;
-                    }
                 } // end loop
             });
 

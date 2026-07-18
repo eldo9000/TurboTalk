@@ -46,23 +46,6 @@
         "minimizable": false,
         "maximizable": false,
         "skipTaskbar": true
-      },
-      {
-        "label": "cursor-dot",
-        "title": "",
-        "width": 20,
-        "height": 20,
-        "decorations": false,
-        "transparent": true,
-        "shadow": false,
-        "alwaysOnTop": true,
-        "visible": false,
-        "focus": false,
-        "resizable": false,
-        "closable": false,
-        "minimizable": false,
-        "maximizable": false,
-        "skipTaskbar": true
       }
     ],
     "security": {

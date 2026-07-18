@@ -376,7 +376,6 @@
   let cfgShowOverlay       = $state(true);
   let cfgOverlaySize       = $state('medium');
   let cfgOverlayPosition   = $state('bottom');
-  let cfgCursorDotIndicator   = $state(false);
   let cfgSoundOnStart      = $state(false);
   let cfgSoundOnFinish     = $state(false);
   let cfgSoundOnCancel     = $state(false);
@@ -536,7 +535,6 @@
       show_overlay: cfgShowOverlay,
       overlay_size: cfgOverlaySize,
       overlay_position: cfgOverlayPosition,
-      cursor_dot_indicator: cfgCursorDotIndicator,
       sound_on_start: cfgSoundOnStart,
       sound_on_finish: cfgSoundOnFinish,
       sound_on_cancel: cfgSoundOnCancel,
@@ -688,7 +686,6 @@
     cfgShowOverlay       = cfg.show_overlay                    ?? true;
     cfgOverlaySize       = cfg.overlay_size                    ?? 'medium';
     cfgOverlayPosition   = cfg.overlay_position                ?? 'bottom';
-    cfgCursorDotIndicator   = cfg.cursor_dot_indicator         ?? false;
     cfgSoundOnStart      = cfg.sound_on_start                  ?? false;
     cfgSoundOnFinish     = cfg.sound_on_finish                  ?? false;
     cfgSoundOnCancel     = cfg.sound_on_cancel                  ?? false;
@@ -1033,7 +1030,6 @@
       cfgShowOverlay       = initialCfg.show_overlay                    ?? true;
       cfgOverlaySize       = initialCfg.overlay_size                    ?? 'medium';
       cfgOverlayPosition   = initialCfg.overlay_position                ?? 'bottom';
-      cfgCursorDotIndicator   = initialCfg.cursor_dot_indicator         ?? false;
       cfgSoundOnStart      = initialCfg.sound_on_start                  ?? false;
       cfgSoundOnFinish     = initialCfg.sound_on_finish                  ?? false;
       cfgSoundOnCancel     = initialCfg.sound_on_cancel                  ?? false;
@@ -1208,7 +1204,6 @@
         bind:cfgShowOverlay
         bind:cfgOverlaySize
         bind:cfgOverlayPosition
-        bind:cfgCursorDotIndicator
         bind:cfgSoundOnStart
         bind:cfgSoundOnFinish
         bind:cfgSoundOnCancel
