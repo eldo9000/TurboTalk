@@ -348,9 +348,7 @@ pub fn migrate_platform_defaults(cfg: &mut Config) -> bool {
             changed = true;
         }
         if cfg.hotkey.key == "right_option" {
-            tracing::info!("[settings] Windows: migrating hotkey right_option → right_control");
-            cfg.hotkey.key = "right_control".into();
-            changed = true;
+            tracing::info!("[settings] Windows: allowing right_option (right Alt) hotkey");
         }
         changed
     }

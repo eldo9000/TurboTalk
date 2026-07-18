@@ -330,6 +330,30 @@ pub fn spawn(
     });
 }
 
+/// Update the cached hotkey VK code and flags after settings change.
+/// Called from `save_config` so the running hook immediately responds to
+/// the new key without requiring an app restart.
+pub fn update_hotkey_vk(key_name: &str, cancel_on_esc: bool, cancel_on_hold: bool) {
+    let vks = vk_codes_for_name(key_name);
+    let vk = vks.first().copied().unwrap_or(0);
+    HOTKEY_VK.store(vk, Ordering::Relaxed);
+    CANCEL_ON_ESC.store(cancel_on_esc, Ordering::Relaxed);
+    CANCEL_ON_HOLD.store(cancel_on_hold, Ordering::Relaxed);
+    tracing::info!(
+        "[hotkey] updated hotkey — key={} vk=0x{:02X} cancel_on_esc={} cancel_on_hold={}",
+        key_name, vk, cancel_on_esc, cancel_on_hold,
+    );
+    if vks.is_empty() {
+        tracing::warn!("[hotkey] unknown hotkey key {:?} on Windows", key_name);
+    }
+    if !is_keyboard_key(key_name) {
+        tracing::warn!(
+            "[hotkey] mouse button key {:?} is not captured by WH_KEYBOARD_LL",
+            key_name,
+        );
+    }
+}
+
 pub fn accessibility_trusted() -> bool {
     true
 }

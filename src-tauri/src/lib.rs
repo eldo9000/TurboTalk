@@ -75,7 +75,12 @@ fn save_config(
     let old_cfg = settings::load();
     settings::save(&cfg).map_err(|e| e.to_string())?;
     settings::update_cache(&cfg);
+    let old_hotkey = hotkey_state.read().key.clone();
     *hotkey_state.write() = cfg.hotkey.clone();
+    // Propagate hotkey changes to the running hook without restart.
+    if old_hotkey != cfg.hotkey.key || old_cfg.hotkey.cancel_on_esc != cfg.hotkey.cancel_on_esc || old_cfg.hotkey.cancel_on_hold != cfg.hotkey.cancel_on_hold {
+        hotkey::update_hotkey_vk(&cfg.hotkey.key, cfg.hotkey.cancel_on_esc, cfg.hotkey.cancel_on_hold);
+    }
     // Position before showing so the overlay never renders at a stale location.
     windowing::reposition_overlay_to_cursor_monitor(&app);
     apply_overlay_visibility(&app, cfg.show_overlay);

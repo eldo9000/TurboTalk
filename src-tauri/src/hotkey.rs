@@ -2495,6 +2495,11 @@ mod imp {
             accessibility_trusted: accessibility_trusted(),
         }
     }
+
+    pub fn update_hotkey_vk(_key_name: &str, _cancel_on_esc: bool, _cancel_on_hold: bool) {
+        // macOS updates hotkey atomics inside its own event tap callback.
+        // This is a no-op stub for cross-platform API compatibility.
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -2735,6 +2740,11 @@ mod imp {
             accessibility_trusted: accessibility_trusted(),
         }
     }
+
+    pub fn update_hotkey_vk(_key_name: &str, _cancel_on_esc: bool, _cancel_on_hold: bool) {
+        // Linux/X11 updates hotkey atomics inside its own rdev listener.
+        // This is a no-op stub for cross-platform API compatibility.
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -2742,11 +2752,11 @@ mod imp {
 mod hotkey_win32;
 
 #[cfg(target_os = "windows")]
-pub use hotkey_win32::{accessibility_trusted, diagnostic_probe, iohid_listener_running, spawn, HotkeyProbe};
+pub use hotkey_win32::{accessibility_trusted, diagnostic_probe, iohid_listener_running, spawn, update_hotkey_vk, HotkeyProbe};
 #[cfg(target_os = "macos")]
-pub use imp::{accessibility_trusted, diagnostic_probe, iohid_listener_running, spawn, HotkeyProbe};
+pub use imp::{accessibility_trusted, diagnostic_probe, iohid_listener_running, spawn, update_hotkey_vk, HotkeyProbe};
 #[cfg(target_os = "linux")]
-pub use imp::{accessibility_trusted, diagnostic_probe, iohid_listener_running, spawn, HotkeyProbe};
+pub use imp::{accessibility_trusted, diagnostic_probe, iohid_listener_running, spawn, update_hotkey_vk, HotkeyProbe};
 
 #[cfg(test)]
 mod tests {

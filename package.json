@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "gen-icons": "python3 src-tauri/icons/gen_icons.py",
+    "gen-icons": "python src-tauri/icons/gen_icons.py",
     "preflight": "node scripts/preflight.mjs",
     "fetch-onnxruntime": "node scripts/fetch-onnxruntime.mjs",
     "fetch-sidecars": "node scripts/fetch-sidecars.mjs",

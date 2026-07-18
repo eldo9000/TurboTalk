@@ -445,6 +445,7 @@ fn appkit_position_status_on_cursor_monitor(status: &WebviewWindow) -> bool {
     true
 }
 
+#[cfg(target_os = "macos")]
 pub fn reposition_status_to_cursor(status: &WebviewWindow) {
     use std::sync::mpsc;
     use std::time::Duration;
