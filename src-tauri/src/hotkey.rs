@@ -416,21 +416,89 @@ pub(crate) mod common {
         }
         #[cfg(target_os = "windows")]
         {
-            let mb_type = match event {
-                ChimeEvent::Start | ChimeEvent::Error => {
-                    winapi::um::winuser::MB_ICONHAND
-                }
-                ChimeEvent::Finish => {
-                    winapi::um::winuser::MB_ICONASTERISK
-                }
-                ChimeEvent::Cancel => {
-                    winapi::um::winuser::MB_ICONEXCLAMATION
-                }
-            };
-            unsafe {
-                winapi::um::winuser::MessageBeep(mb_type);
+            use std::sync::OnceLock;
+
+            const SAMPLE_RATE: u32 = 44100;
+
+            // Raw FFI to winmm.dll — no winapi dependency needed for PlaySoundW.
+            #[link(name = "winmm")]
+            extern "system" {
+                fn PlaySoundW(
+                    pszSound: *const std::ffi::c_void,
+                    hmod: *mut std::ffi::c_void,
+                    fdwSound: u32,
+                );
             }
-            tracing::info!("[chime] MessageBeep ({:?})", event);
+            const SND_ASYNC: u32 = 0x0001;
+            const SND_MEMORY: u32 = 0x0004;
+            const SND_NODEFAULT: u32 = 0x0002;
+
+            fn make_wav(duration_secs: f32, harmonics: &[(f32, f32)]) -> Vec<u8> {
+                let num_samples = (SAMPLE_RATE as f32 * duration_secs) as usize;
+                let data_size = num_samples as u32 * 2;
+                let file_size = 36 + data_size;
+
+                let mut wav = Vec::with_capacity(44 + data_size as usize);
+                wav.extend(b"RIFF");
+                wav.extend(&file_size.to_le_bytes());
+                wav.extend(b"WAVE");
+                wav.extend(b"fmt ");
+                wav.extend(&16u32.to_le_bytes());
+                wav.extend(&1u16.to_le_bytes());
+                wav.extend(&1u16.to_le_bytes());
+                wav.extend(&SAMPLE_RATE.to_le_bytes());
+                wav.extend(&(SAMPLE_RATE * 2).to_le_bytes());
+                wav.extend(&2u16.to_le_bytes());
+                wav.extend(&16u16.to_le_bytes());
+                wav.extend(b"data");
+                wav.extend(&data_size.to_le_bytes());
+
+                for i in 0..num_samples {
+                    let t = i as f32 / SAMPLE_RATE as f32;
+                    let pos = t / duration_secs;
+                    let envelope = if pos < 0.01 {
+                        pos / 0.01
+                    } else {
+                        (-3.0 * (pos - 0.01) / 0.99).exp()
+                    };
+                    let mut sample = 0.0;
+                    for &(freq, amp) in harmonics {
+                        sample += (2.0 * std::f32::consts::PI * freq * t).sin() * amp;
+                    }
+                    sample = (sample * envelope).clamp(-1.0, 1.0);
+                    wav.extend(&((sample * i16::MAX as f32) as i16).to_le_bytes());
+                }
+                wav
+            }
+
+            fn get_wav(event: ChimeEvent) -> &'static [u8] {
+                static POP: OnceLock<Vec<u8>> = OnceLock::new();
+                static BOTTLE: OnceLock<Vec<u8>> = OnceLock::new();
+                static TINK: OnceLock<Vec<u8>> = OnceLock::new();
+                static BASSO: OnceLock<Vec<u8>> = OnceLock::new();
+                match event {
+                    ChimeEvent::Start => POP.get_or_init(|| make_wav(0.06, &[(1100.0, 1.0)])),
+                    ChimeEvent::Finish => BOTTLE.get_or_init(|| {
+                        make_wav(0.25, &[(900.0, 1.0), (2700.0, 0.35), (4500.0, 0.12)])
+                    }),
+                    ChimeEvent::Cancel => TINK.get_or_init(|| {
+                        make_wav(0.10, &[(1800.0, 1.0), (3600.0, 0.25)])
+                    }),
+                    ChimeEvent::Error => BASSO.get_or_init(|| {
+                        make_wav(0.35, &[(160.0, 1.0), (320.0, 0.3), (480.0, 0.1)])
+                    }),
+                }
+            }
+
+            let wav_data = get_wav(event);
+            unsafe {
+                PlaySoundW(
+                    wav_data.as_ptr() as *const std::ffi::c_void,
+                    std::ptr::null_mut(),
+                    SND_ASYNC | SND_MEMORY | SND_NODEFAULT,
+                );
+            }
+            tracing::info!("[chime] PlaySoundW ({:?})", event);
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
