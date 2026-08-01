@@ -85,8 +85,8 @@ fn save_config(
     windowing::reposition_overlay_to_cursor_monitor(&app);
     apply_overlay_visibility(&app, cfg.show_overlay);
     // Rebuild the transcription worker only when backend-affecting config
-    // fields change. Non-backend fields (theme, sound, overlay, cursor dot,
-    // etc.) still persist to disk and update the cache but do NOT destroy
+    // fields change. Non-backend fields (theme, sound, overlay, etc.)
+    // still persist to disk and update the cache but do NOT destroy
     // the warm worker.
     let needs_rebuild = old_cfg.backend != cfg.backend
         || old_cfg.backend_variant != cfg.backend_variant
@@ -1489,19 +1489,20 @@ pub fn run() {
             let hotkey_state: HotkeyState = Arc::new(RwLock::new(cfg.hotkey.clone()));
             app.manage(hotkey_state.clone());
 
-            // ── Main window — hidden until tray click unless onboarding ───
+            // ── Main window — hidden until tray click (or splash is on) ───
             if let Some(win) = app.get_webview_window("main") {
                 use tauri::LogicalSize;
                 windowing::ensure_main_webview_window_visible(&win);
-                // Width is locked at 550 (min == max, config + here).
-                // Max vertical is set dynamically from the frontend when the
-                // user opens the Settings tab (content-height measured there).
-                // Fixed values, not monitor-dependent — no snapping on display-
-                // scale transitions.
                 let _ = win.set_max_size(Some(LogicalSize::new(550.0, 2000.0)));
                 let _ = win.center();
-                let _ = win.show();
-                let _ = win.set_focus();
+                // Only show the window at startup when the splash card is
+                // enabled — it renders for 2 s then auto-dismisses, leaving
+                // the main UI underneath. When splash is off, launch straight
+                // to tray; the user opens the window via tray click or hotkey.
+                if cfg.show_splash {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
             }
 
             // ── Overlay — cursor-transparent so clicks always pass through ──

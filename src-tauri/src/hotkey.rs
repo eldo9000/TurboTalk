@@ -311,6 +311,9 @@ pub(crate) mod common {
         let tray = tray_icon.clone();
         let app = app.clone();
         std::thread::spawn(move || {
+            if crate::settings::pause_media_on_dictate() {
+                crate::media_control::resume();
+            }
             rec.cancel();
             // Detach the segment transcriber (JoinHandle drop = detach, not
             // join). The worker will exit on its own once the segment channel
@@ -730,6 +733,9 @@ pub(crate) mod common {
                 // Race: state moved out of Ready between our snapshot and the
                 // start() call (e.g. another press won the lock first), or audio
                 // backend failed. Do NOT emit ptt-down, do NOT change tray icon.
+                if crate::settings::pause_media_on_dictate() {
+                    crate::media_control::resume();
+                }
                 tracing::warn!("[hotkey] start ignored: {}", e);
                 emit_critical(&app, "dictation-busy", rec.state().to_string());
                 session_metrics::record_audio_error();
@@ -741,6 +747,9 @@ pub(crate) mod common {
             // mode). If so, cancel immediately — don't show the overlay.
             if CANCEL_PENDING.swap(false, Ordering::AcqRel) {
                 crate::diagnostic_log::emergency_trace("[ptt_down] cancel_pending after rec.start");
+                if crate::settings::pause_media_on_dictate() {
+                    crate::media_control::resume();
+                }
                 rec.cancel();
                 tray::set_tray_icon(&tray, TrayState::Idle);
                 emit_critical(&app, "recording-cancelled", ());
@@ -797,6 +806,9 @@ pub(crate) mod common {
                         crate::diagnostic_log::emergency_trace(
                             "[ptt_down] cancel_pending during audio_live",
                         );
+                        if crate::settings::pause_media_on_dictate() {
+                            crate::media_control::resume();
+                        }
                         rec.cancel();
                         tray::set_tray_icon(&tray, TrayState::Idle);
                         emit_critical(&app, "recording-cancelled", ());
@@ -812,6 +824,9 @@ pub(crate) mod common {
                              wait — aborting ptt-down (device-lost handled elsewhere)",
                             job_id
                         );
+                        if crate::settings::pause_media_on_dictate() {
+                            crate::media_control::resume();
+                        }
                         return;
                     }
                     if std::time::Instant::now() >= deadline {
@@ -868,6 +883,11 @@ pub(crate) mod common {
         job_id_opt: Option<u64>,
         call_finish_guarded: bool,
     ) {
+        // Restore playback while the recorder is still busy. Otherwise a new
+        // press can start between the Ready transition and the resume toggle.
+        if crate::settings::pause_media_on_dictate() {
+            crate::media_control::resume();
+        }
         if call_finish_guarded {
             rec.finish_guarded();
         }
@@ -990,11 +1010,6 @@ pub(crate) mod common {
 
         // End of lifecycle.
         bail_out(rec, tray, app, job_id_opt, true);
-
-        // Resume media playback after everything is fully done.
-        if crate::settings::pause_media_on_dictate() {
-            crate::media_control::resume();
-        }
     }
 
     pub(super) fn ptt_up(recorder: &Arc<Recorder>, tray_icon: &TrayIcon, app: &AppHandle) {
@@ -1051,6 +1066,11 @@ pub(crate) mod common {
                     speech_detected,
                     full_capture,
                 }) => {
+                    // Capture has fully stopped. Restore media now rather
+                    // than holding it paused through transcription and paste.
+                    if crate::settings::pause_media_on_dictate() {
+                        crate::media_control::resume();
+                    }
                     // Only now, after rec.stop() succeeded, take the statics
                     // that ptt_down wrote. The Err arm's loser takes nothing.
                     // Recover the job id allocated when this recording started. If the
@@ -1091,6 +1111,9 @@ pub(crate) mod common {
                             job_id_opt,
                             e
                         );
+                        if crate::settings::pause_media_on_dictate() {
+                            crate::media_control::resume();
+                        }
                         rec.finish_guarded();
                         tray::set_tray_icon(&tray, TrayState::Idle);
                         session_metrics::record_dictation_discarded();
@@ -1203,6 +1226,9 @@ pub(crate) mod common {
                     if rec.begin_cleaning().is_err() {
                         // Recorder forced out from under us (e.g. cancel).
                         // A new job may have already started (Recording state).
+                        if crate::settings::pause_media_on_dictate() {
+                            crate::media_control::resume();
+                        }
                         rec.finish_guarded();
                         tray::set_tray_icon(&tray, TrayState::Idle);
                         session_metrics::record_dictation_discarded();
@@ -1321,6 +1347,9 @@ pub(crate) mod common {
 
                     // End of lifecycle — back to Ready regardless of which arm we
                     // took (success, transcribe error, or paste error).
+                    if crate::settings::pause_media_on_dictate() {
+                        crate::media_control::resume();
+                    }
                     rec.finish_guarded();
                     tray::set_tray_icon(&tray, TrayState::Idle);
                     if let Some(job_id) = job_id_opt {
@@ -1329,6 +1358,9 @@ pub(crate) mod common {
                     // `path` drops here → WAV file deleted from /tmp.
                 }
                 Ok(StopOutcome::Discard(reason)) => {
+                    if crate::settings::pause_media_on_dictate() {
+                        crate::media_control::resume();
+                    }
                     // Take statics only after rec.stop() succeeded, matching
                     // the Wav arm's post-stop read pattern.
                     let job_id_opt = CURRENT_JOB_ID.lock().take();
@@ -1504,6 +1536,9 @@ pub(crate) mod common {
                     // Normal discard path — `recording-discarded` is the catch-all
                     // the overlay listens to; `recording-too-short` is the more
                     // specific subtype the main window uses to show a toast.
+                    if crate::settings::pause_media_on_dictate() {
+                        crate::media_control::resume();
+                    }
                     tray::set_tray_icon(&tray, TrayState::Idle);
                     session_metrics::record_dictation_discarded();
                     if let DiscardReason::TooShort { duration_ms } = reason {
@@ -1518,6 +1553,9 @@ pub(crate) mod common {
                     }
                 }
                 Err(e) => {
+                    if crate::settings::pause_media_on_dictate() {
+                        crate::media_control::resume();
+                    }
                     crate::diagnostic_log::emergency_trace(format!(
                         "[ptt_up] stop error state={} err={e}",
                         rec.state()
@@ -1547,6 +1585,9 @@ pub(crate) mod common {
                             );
                             tracing::debug!("idle key-up ignored without pending start");
                         }
+                    }
+                    if crate::settings::pause_media_on_dictate() {
+                        crate::media_control::resume();
                     }
                     tracing::warn!("stop ignored: {}", e);
                     tray::set_tray_icon(&tray, TrayState::Idle);

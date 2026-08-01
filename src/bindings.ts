@@ -336,12 +336,6 @@ export type Config = {
 	 *  Anything else is treated as "bottom" by the positioning code.
 	 */
 	overlay_position?: string,
-	/**
-	 *  Whether to show a small red dot near the cursor during recording.
-	 *  The dot follows the mouse pointer and appears bottom-right of the hotspot.
-	 *  Defaults off.
-	 */
-	cursor_dot_indicator?: boolean,
 	// Play a sound cue when recording starts.
 	sound_on_start?: boolean,
 	// Play a sound cue when transcription finishes and text is pasted.

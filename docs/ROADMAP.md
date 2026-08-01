@@ -159,7 +159,7 @@ display/copy transcript text inside TurboTalk.
 
 - [ ] Implement `hotkey_linux_x11` with a real global push-to-talk binding.
 - [ ] Implement `paste_linux_x11`: clipboard write + synthetic Ctrl+V.
-- [ ] Verify overlay/cursor-dot placement and click-through behavior under X11.
+- [ ] Verify overlay placement and click-through behavior under X11.
 - [ ] Add X11 smoke proof across a text editor, browser field, and Electron
   editor.
 

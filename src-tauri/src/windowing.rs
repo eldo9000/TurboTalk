@@ -188,7 +188,7 @@ fn monitor_logical_bounds(m: &Monitor) -> (f64, f64, f64, f64) {
 #[cfg(target_os = "macos")]
 fn position_nspanel(win: &WebviewWindow, pos: LogicalPosition<f64>) {
     // Only demote/promote the window level when necessary. The overlay now uses
-    // a native AppKit frame move, but status/cursor-dot still share this helper.
+    // a native AppKit frame move, but status still shares this helper.
     let was_top = win.is_always_on_top().unwrap_or(true);
     if was_top {
         let _ = win.set_position(pos);

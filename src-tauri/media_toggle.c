@@ -26,6 +26,12 @@ static char g_last_probe_diag[1024] = "not-run";
 static char g_route_baseline[1024] = "";
 static char g_route_last_diag[1024] = "not-run";
 
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    bool changed;
+} RouteWaitContext;
+
 void media_toggle_play_pause(void) {
     @autoreleasepool {
         int keyCode = 16;
@@ -39,7 +45,10 @@ void media_toggle_play_pause(void) {
                                               data1:((keyCode << 16) | (0xa << 8))
                                               data2:-1];
         CGEventRef cgDown = [down CGEvent];
-        if (cgDown) CGEventPost(kCGSessionEventTap, cgDown);
+        // Media keys are hardware-style system-defined events. Posting at the
+        // session tap is accepted inconsistently by the media daemon; the HID
+        // tap is the input path used for synthetic hardware events.
+        if (cgDown) CGEventPost(kCGHIDEventTap, cgDown);
         [NSThread sleepForTimeInterval:0.01];
         NSEvent *up = [NSEvent otherEventWithType:NSEventTypeSystemDefined
                                         location:NSZeroPoint
@@ -51,7 +60,7 @@ void media_toggle_play_pause(void) {
                                            data1:((keyCode << 16) | (0xb << 8))
                                            data2:-1];
         CGEventRef cgUp = [up CGEvent];
-        if (cgUp) CGEventPost(kCGSessionEventTap, cgUp);
+        if (cgUp) CGEventPost(kCGHIDEventTap, cgUp);
     }
 }
 
@@ -535,6 +544,26 @@ int audio_route_capture_output_baseline(void) {
     }
 }
 
+static OSStatus turbotalk_route_property_changed(
+    AudioObjectID object_id,
+    UInt32 number_addresses,
+    const AudioObjectPropertyAddress *addresses,
+    void *client_data
+) {
+    (void)object_id;
+    (void)number_addresses;
+    (void)addresses;
+
+    RouteWaitContext *ctx = (RouteWaitContext *)client_data;
+    if (!ctx) return noErr;
+
+    pthread_mutex_lock(&ctx->mutex);
+    ctx->changed = true;
+    pthread_cond_signal(&ctx->cond);
+    pthread_mutex_unlock(&ctx->mutex);
+    return noErr;
+}
+
 int audio_route_wait_for_output_baseline(int max_wait_ms) {
     if (g_route_baseline[0] == '\0') {
         snprintf(g_route_last_diag, sizeof(g_route_last_diag), "no-baseline");
@@ -543,7 +572,40 @@ int audio_route_wait_for_output_baseline(int max_wait_ms) {
 
     int elapsed_ms = 0;
     int stable_matches = 0;
+    int matched = 0;
     char current[sizeof(g_route_last_diag)];
+
+    RouteWaitContext ctx;
+    pthread_mutex_init(&ctx.mutex, NULL);
+    pthread_cond_init(&ctx.cond, NULL);
+    ctx.changed = false;
+
+    AudioObjectPropertyAddress running_address = {
+        kAudioDevicePropertyDeviceIsRunningSomewhere,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain,
+    };
+    AudioObjectPropertyAddress default_output_address = {
+        kAudioHardwarePropertyDefaultOutputDevice,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain,
+    };
+    AudioDeviceID output_device = turbotalk_default_output_device_id();
+    AudioObjectAddPropertyListener(
+        kAudioObjectSystemObject,
+        &default_output_address,
+        turbotalk_route_property_changed,
+        &ctx
+    );
+    if (output_device != kAudioObjectUnknown) {
+        AudioObjectAddPropertyListener(
+            output_device,
+            &running_address,
+            turbotalk_route_property_changed,
+            &ctx
+        );
+    }
+
     while (elapsed_ms <= max_wait_ms) {
         @autoreleasepool {
             turbotalk_output_route_fingerprint(current, sizeof(current));
@@ -552,20 +614,48 @@ int audio_route_wait_for_output_baseline(int max_wait_ms) {
         if (strcmp(current, g_route_baseline) == 0) {
             stable_matches++;
             if (stable_matches >= 2) {
-                snprintf(g_route_last_diag,
-                         sizeof(g_route_last_diag),
-                         "matched elapsed_ms=%d current={%s}",
-                         elapsed_ms,
-                         current);
-                fprintf(stderr, "[media_control] route wait %s\n", g_route_last_diag);
-                return 1;
+                matched = 1;
+                break;
             }
         } else {
             stable_matches = 0;
         }
 
-        usleep(50000);
+        struct timespec deadline;
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        turbotalk_add_millis_to_timespec(&deadline, 50);
+        pthread_mutex_lock(&ctx.mutex);
+        ctx.changed = false;
+        pthread_cond_timedwait(&ctx.cond, &ctx.mutex, &deadline);
+        pthread_mutex_unlock(&ctx.mutex);
         elapsed_ms += 50;
+    }
+
+    AudioObjectRemovePropertyListener(
+        kAudioObjectSystemObject,
+        &default_output_address,
+        turbotalk_route_property_changed,
+        &ctx
+    );
+    if (output_device != kAudioObjectUnknown) {
+        AudioObjectRemovePropertyListener(
+            output_device,
+            &running_address,
+            turbotalk_route_property_changed,
+            &ctx
+        );
+    }
+    pthread_cond_destroy(&ctx.cond);
+    pthread_mutex_destroy(&ctx.mutex);
+
+    if (matched) {
+        snprintf(g_route_last_diag,
+                 sizeof(g_route_last_diag),
+                 "matched elapsed_ms=%d current={%s}",
+                 elapsed_ms,
+                 current);
+        fprintf(stderr, "[media_control] route wait %s\n", g_route_last_diag);
+        return 1;
     }
 
     snprintf(g_route_last_diag,

@@ -9,9 +9,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::{ffi::CStr, os::raw::c_char};
 
 static DID_PAUSE: AtomicBool = AtomicBool::new(false);
+// A probe, media-key toggle, and route transition form one operation. Keep
+// overlapping dictation workers from probing the post-pause silence and
+// overwriting the pause state while an older worker is restoring playback.
+static MEDIA_TRANSITION: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 const POST_PAUSE_SETTLE_MS: u64 = 250;
-const ROUTE_RESTORE_TIMEOUT_MS: i32 = 2_500;
+// Route settling is only a guard against toggling during the mic teardown.
+// Waiting seconds here leaves playback paused long enough to look broken and
+// can cause the media app to lose its active playback session.
+const ROUTE_RESTORE_TIMEOUT_MS: i32 = 500;
 
 #[cfg(target_os = "macos")]
 extern "C" {
@@ -84,6 +91,7 @@ fn playback_probe() -> PlaybackProbe {
 pub fn pause() {
     #[cfg(target_os = "macos")]
     {
+        let _transition = MEDIA_TRANSITION.lock().unwrap_or_else(|e| e.into_inner());
         match playback_probe() {
             PlaybackProbe::Playing => {
                 tracing::info!("[media_control] pause — playback detected, toggling");
@@ -124,6 +132,7 @@ pub fn probe_system_audio_permission() -> i32 {
 pub fn resume() {
     #[cfg(target_os = "macos")]
     {
+        let _transition = MEDIA_TRANSITION.lock().unwrap_or_else(|e| e.into_inner());
         if !DID_PAUSE.load(Ordering::Acquire) {
             tracing::debug!("[media_control] resume — skipped (nothing was paused)");
             return;
@@ -135,6 +144,15 @@ pub fn resume() {
             route_diag()
         );
         unsafe { media_toggle_play_pause() }
+
+        // The media daemon does not acknowledge synthetic Play/Pause events.
+        // Confirm that output energy returned through the same CoreAudio tap;
+        // if the first event was dropped, retry once instead of leaving the
+        // next dictation to observe a permanently silent route.
+        if matches!(playback_probe(), PlaybackProbe::Silent) {
+            tracing::warn!("[media_control] resume — no output after toggle, retrying once");
+            unsafe { media_toggle_play_pause() }
+        }
         DID_PAUSE.store(false, Ordering::Release);
     }
 }

@@ -18,7 +18,6 @@
     cfgShowOverlay = $bindable(),
     cfgOverlaySize = $bindable(),
     cfgOverlayPosition = $bindable(),
-    cfgCursorDotIndicator = $bindable(),
     cfgSoundOnStart = $bindable(),
     cfgSoundOnFinish = $bindable(),
     cfgSoundOnCancel = $bindable(),
@@ -126,6 +125,19 @@
           data-tip="Hold the hotkey for ~1 second during recording to cancel">Hold key</button>
       </div>
     </div>
+    <div class="tt-row tt-row-field" data-tip="Pause music/podcasts while dictating and resume after paste">
+      <span class="tt-lbl">Pause on dictate</span>
+      <div class="tt-seg tt-setting-seg">
+        <button
+          onclick={() => { cfgPauseMediaOnDictate = true; onSaveSettings(); }}
+          class={seg(cfgPauseMediaOnDictate, 0, 2)}
+          data-tip="Pause playback during dictation, resume after paste">Enabled</button>
+        <button
+          onclick={() => { cfgPauseMediaOnDictate = false; onSaveSettings(); }}
+          class={seg(!cfgPauseMediaOnDictate, 1, 2)}
+          data-tip="Let media continue playing during dictation">Disabled</button>
+      </div>
+    </div>
     <div class="tt-row tt-row-field tt-recording-select-row" data-tip="Which key triggers push-to-talk">
       <span class="tt-lbl">Hotkey</span>
       <div class="tt-key-sel">
@@ -211,15 +223,6 @@
           data-tip="Pin the overlay near the top of the screen">Top</button>
       </div>
     </div>
-    <div class="tt-row tt-row-field" data-tip="Colored dot that follows the cursor while recording is active">
-      <span class="tt-lbl">Cursor Dot</span>
-      <div class="tt-multi">
-        <button
-          onclick={() => { cfgCursorDotIndicator = !cfgCursorDotIndicator; onSaveSettings(); }}
-          class="tt-multi-btn" class:tt-multi-on={cfgCursorDotIndicator}
-          data-tip="Track the cursor with a colored dot while recording">Follow Cursor</button>
-      </div>
-    </div>
     <div class="tt-row tt-row-field" data-tip="Play audio chimes for recording events">
       <span class="tt-lbl">Audio Notify</span>
       <div class="tt-multi">
@@ -239,15 +242,6 @@
           onclick={() => { cfgSoundOnError = !cfgSoundOnError; onSaveSettings(); }}
           class="tt-multi-btn" class:tt-multi-on={cfgSoundOnError}
           data-tip="Play a low beep when dictation has errors">Error</button>
-      </div>
-    </div>
-    <div class="tt-row tt-row-field" data-tip="Pause music/podcasts while dictating and resume after paste">
-      <span class="tt-lbl">Media</span>
-      <div class="tt-multi">
-        <button
-          onclick={() => { cfgPauseMediaOnDictate = !cfgPauseMediaOnDictate; onSaveSettings(); }}
-          class="tt-multi-btn" class:tt-multi-on={cfgPauseMediaOnDictate}
-          data-tip="Pause playback during dictation, resume after">Pause on Dictate</button>
       </div>
     </div>
     <div class="tt-row tt-row-field tt-recording-threshold-row" data-tip="Volume for chimes (macOS follows system Alert Volume)">

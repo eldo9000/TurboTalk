@@ -103,7 +103,7 @@ The callback receives a `KBDLLHOOKSTRUCT` with `vkCode`, `flags` (including
 `CallNextHookEx` is ignored for low-level hooks (can pass NULL).
 
 ## save-config-unconditional-worker-rebuild
-`save_config` unconditionally called `transcribe::invalidate_worker()` + `transcribe::prewarm()` on every config save, destroying the warm whisper-server/Parakeet worker even when only non-backend fields changed (theme, sound, overlay, cursor dot, etc.).
+`save_config` unconditionally called `transcribe::invalidate_worker()` + `transcribe::prewarm()` on every config save, destroying the warm whisper-server/Parakeet worker even when only non-backend fields changed (theme, sound, overlay, etc.).
 
 **Fix (TASK-73):** Capture the previous config via `settings::load()` before `settings::update_cache()`, then gate the invalidation on a before/after comparison of only the five backend-affecting fields: `backend`, `backend_variant`, `whisper.model`, `whisper.vad_enabled`, `cleanup.vocabulary`. All other fields persist to disk and update the cache normally but skip the worker rebuild.
 

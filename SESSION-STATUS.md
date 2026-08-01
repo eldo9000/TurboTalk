@@ -1,7 +1,21 @@
 # TurboTalk — Session Status
 
-**Last updated:** 2026-07-16 (Remove overlay error state, fix window auto-resize)
-**Current state:** Fixed window auto-resize on monitor drag (v4 — scale factor detection). Removed overlay error state.
+**Last updated:** 2026-07-29 (Fix intermittent media pause/resume race)
+**Current state:** Media pause/resume race fixed in source; installed-artifact playback proof is still pending.
+
+## Media pause/resume race (2026-07-29)
+
+Runtime logs isolated the inconsistency to overlapping lifecycle workers, not unreliable playback detection. At 19:06:20 job 769 detected playback and paused it. Job 770 started at 19:06:50 while job 769 was still waiting on the route-aware resume; job 770 probed silence (expected because playback was paused), then job 769 resumed at 19:06:51 while job 770 was recording. The shared `DID_PAUSE` flag could also be overwritten by the newer job. Some discard, transcription-error, and cancel exits did not resume media at all.
+
+Patched `media_control.rs` to serialize probe/toggle/route transitions and patched `hotkey.rs` to restore media before releasing the recorder or returning from failure/cancel paths. `cargo check --manifest-path src-tauri/Cargo.toml` passed; focused `cargo test --manifest-path src-tauri/Cargo.toml media_control` passed (no matching tests; 130 tests filtered). Proof still needed: installed app with active playback, rapid successive dictations, cancel, discard, and transcription failure.
+
+2026-07-29 follow-up: New logs showed the CoreAudio probe correctly reporting `result=1` and the code reaching `pause — playback detected, toggling`, but playback did not reliably resume afterward. The Objective-C media event was posted at `kCGSessionEventTap`; changed both synthetic media-key posts to `kCGHIDEventTap`, the hardware-input path. `cargo build --manifest-path src-tauri/Cargo.toml` passed. The currently running debug process predates this rebuild and must be restarted before runtime proof.
+
+2026-07-29 second follow-up: The next attempt sequence showed the first pause succeeding, then later probes correctly seeing silence because resume was delayed by route matching for 2.1 seconds and playback remained paused. Reduced the route-restore guard from 2500ms to 500ms so the resume media key is sent promptly. `cargo build --manifest-path src-tauri/Cargo.toml` passed; restart the debug process before testing.
+
+2026-07-29 event-driven follow-up: Replaced the route wait's fixed polling loop with CoreAudio property listeners for default-output-device and device-running changes, signaled through a condition variable with the 500ms timeout retained only as a fallback. Media restoration now starts immediately after `rec.stop()` completes, before transcription and paste. `cargo build --manifest-path src-tauri/Cargo.toml` passed; recorder tests passed 11/11. Restart the debug process before runtime testing.
+
+2026-07-29 confirmation follow-up: Runtime logs showed route restoration returning in 50ms while the following probe still saw silence. Resume now confirms output energy through the CoreAudio tap after the first media-key event and retries that event once if the daemon dropped it. `cargo build --manifest-path src-tauri/Cargo.toml` passed. Restart the debug process before testing.
 
 ## Window auto-resize fix v4 (2026-07-16)
 
@@ -191,8 +205,7 @@ acquire the read lock, extract one field, and drop the lock — no full Config c
 **Gate worker invalidation on backend-affecting fields only:** `save_config` now
 captures the previous config via `settings::load()` before saving, then compares
 only the backend-affecting fields (`backend`, `backend_variant`, `whisper.model`,
-`whisper.vad_enabled`, `cleanup.vocabulary`). Non-backend fields (theme, sound,
-overlay, cursor dot, etc.) still persist to disk and update the cache but no
+`whisper.vad_enabled`, `cleanup.vocabulary`). Non-backend fields (theme, sound, overlay, etc.) still persist to disk and update the cache but no
 longer destroy the warm transcription worker. First save after cold start
 defaults to invalidating (safe fallback via `Config::default()`).
 

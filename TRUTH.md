@@ -39,6 +39,16 @@ reqwest's blocking-client default 30 s timeout. Now set to an explicit 120 s.
 
 **Pause-media detection — user-proven 2026-07-08:** Pause-on-dictate no longer relies on MediaRemote/Now Playing or CoreAudio "is running" booleans. The installed app uses a CoreAudio process tap to sample actual system output energy before deciding whether to send Play/Pause, and leaves media alone if the tap is unavailable or silent. User confirmed it works. Logs prove active playback on the Bose Flex 2 output route produced `process tap result=1`, `rms=0.01482160`, `peak=0.16679211`, followed by `pause — playback detected, toggling`; after dictation completed, TurboTalk logged `resume — waiting 800ms then toggling`. Silent/no-playback probes still correctly return `result=0`.
 
+**Pause-media overlap race — patched 2026-07-29:** Logs showed an older dictation restoring playback while a newer dictation was already recording, because media transition state was global and restoration happened after the recorder became `Ready`. CoreAudio probe/toggle/route transitions are now serialized, restoration happens before releasing the recorder, and cancel/discard/error paths restore media too. Installed-artifact proof of rapid successive dictations and failure paths remains pending.
+
+**Synthetic media-key route — patched 2026-07-29:** Runtime logs showed the CoreAudio detector firing while the media toggle itself was unreliable. Synthetic system-defined media events now post through `kCGHIDEventTap` instead of `kCGSessionEventTap`, matching the hardware-input path. Runtime proof after restarting the rebuilt binary remains pending.
+
+**Resume timing — patched 2026-07-29:** Logs showed resume waiting 2.1 seconds for route matching, after which playback remained silent. The route guard is now capped at 500ms before sending the resume toggle. Runtime proof after restart remains pending.
+
+**Event-driven media restore — patched 2026-07-29:** Route restoration now waits on CoreAudio output-device property notifications via a condition variable, with a timeout fallback, and begins immediately after microphone capture stops rather than after transcription/paste. Runtime proof after restarting the rebuilt binary remains pending.
+
+**Resume confirmation — patched 2026-07-29:** Because synthetic media keys provide no acknowledgement, resume now confirms that CoreAudio output energy returned and retries the key once when the first event produces no output. Runtime proof remains pending.
+
 **Hotkey modes — both hold and toggle confirmed 2026-06-16:** terminal launch now stays up, and the current hotkey flow works in real use with both press-and-hold and toggle-style operation.
 
 **Terminal launch path — confirmed 2026-06-16:** `npm run tauri dev` now starts on `127.0.0.1:1431`, launches the Rust app, and stays alive. The earlier `::1:1428` bind failure was a localhost port conflict, not a broken app.
