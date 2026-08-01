@@ -1881,7 +1881,7 @@ mod imp {
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use tauri::{tray::TrayIcon, AppHandle};
+    use tauri::{tray::TrayIcon, AppHandle, Manager};
 
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
@@ -2316,14 +2316,22 @@ mod imp {
             )
         };
 
-        // Escape → cancel any in-flight recording. Read-only while idle so
-        // it never swallows Escape from the focused app outside dictation.
+        // Escape cancels an active recording, or hides the focused main window
+        // while idle. Other focused applications are left untouched.
         if let CGEventType::KeyDown = etype {
-            if cancel_on_esc && keycode == ESCAPE_KEYCODE {
-                controller.cancel_if_busy();
+            if keycode == ESCAPE_KEYCODE {
+                let was_busy = recorder.state().is_busy();
+                if cancel_on_esc {
+                    controller.cancel_if_busy();
+                }
+                if !was_busy {
+                    if let Some(window) = app.get_webview_window("main") {
+                        if window.is_focused().unwrap_or(false) {
+                            let _ = window.hide();
+                        }
+                    }
+                }
             }
-
-
         }
 
         if let Some(fkc) = fkey_code {

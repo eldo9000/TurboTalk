@@ -1067,6 +1067,15 @@
       commands.detectLogitechMouse().then(v => { hasLogitechMouse = v; });
 
       function handleKeydown(e) {
+        if (e.key === 'Escape' && !e.defaultPrevented) {
+          // Escape still belongs to recording cancellation and open modals.
+          // Hide only when the main window is otherwise idle and unobstructed.
+          if (!recording && !transcribing && !aboutOpen && !noModelPopupOpen && !resetOpen) {
+            e.preventDefault();
+            getCurrentWindow().hide();
+          }
+          return;
+        }
         if (e.metaKey || e.ctrlKey) {
           if (e.key === '=' || e.key === '+') { e.preventDefault(); zoomIn(); }
           else if (e.key === '-')             { e.preventDefault(); zoomOut(); }

@@ -256,7 +256,10 @@ fn apply_antivocabulary(text: &str, rules: &[String]) -> String {
     let compiled = compile_repl_rules(rules);
     let mut result = text.to_string();
     for rule in &compiled {
-        result = rule.re.replace_all(&result, rule.replacement.as_str()).to_string();
+        result = rule
+            .re
+            .replace_all(&result, rule.replacement.as_str())
+            .to_string();
     }
     result.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -271,16 +274,24 @@ fn compile_repl_rules(rules: &[String]) -> Vec<ReplRule> {
         // Syntax: "from = to" (replace) or bare "word" (remove).
         // Spaces around "=" are optional and stripped.
         let (from, to) = if let Some(pos) = rule.find('=') {
-            (rule[..pos].trim().to_string(), rule[pos + 1..].trim().to_string())
+            (
+                rule[..pos].trim().to_string(),
+                rule[pos + 1..].trim().to_string(),
+            )
         } else {
             (rule.to_string(), String::new())
         };
         if from.is_empty() {
             continue;
         }
-        let pattern = format!(r"(?i)(?<!\w){}(?!\w)", regex::escape(&from));
+        // Rust's `regex` crate does not support look-around. Word boundaries
+        // provide the same whole-word behavior for these user-entered rules.
+        let pattern = format!(r"(?i)\b{}\b", regex::escape(&from));
         if let Ok(re) = regex::Regex::new(&pattern) {
-            compiled.push(ReplRule { re, replacement: to });
+            compiled.push(ReplRule {
+                re,
+                replacement: to,
+            });
         }
     }
     compiled
@@ -310,6 +321,19 @@ mod tests {
         assert_eq!(
             strip_non_speech_annotations("(sigh) I was saying (exhales) something"),
             "I was saying something"
+        );
+    }
+
+    #[test]
+    fn antivocabulary_removes_words_and_applies_replacements() {
+        let rules = vec![
+            "uhh".to_string(),
+            "umm".to_string(),
+            "clawd = claude".to_string(),
+        ];
+        assert_eq!(
+            apply_antivocabulary("Uhh, clawd, umm. clawdless", &rules),
+            ", claude, . clawdless"
         );
     }
 
@@ -417,5 +441,4 @@ mod tests {
         let input = "hello world, this is a normal dictation.";
         assert_eq!(collapse_repeated_single_chars(input), input);
     }
-
 }
